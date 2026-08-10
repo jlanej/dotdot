@@ -7,7 +7,7 @@
  */
 import { parseFasta } from '../io/fasta.js';
 import { maybeGunzip } from '../io/compress.js';
-import { parsePaf } from '../io/paf.js';
+import { parsePaf, parsePafOnto } from '../io/paf.js';
 import { buildIndex, matchStrand, pickMaxOcc, KMER_DEFAULTS } from '../core/kmer.js';
 import { reverseComplement } from '../core/dna.js';
 import { F64Vec, F32Vec, U8Vec } from '../core/vec.js';
@@ -36,6 +36,7 @@ self.onmessage = async (ev) => {
   try {
     if (req.type === 'kmer') await handleKmer(req);
     else if (req.type === 'paf') await handlePaf(req);
+    else if (req.type === 'pafOverlay') await handlePafOverlay(req);
     else if (req.type === 'demo') handleDemo(req);
     else throw new Error(`Unknown request type: ${req?.type}`);
   } catch (err) {
@@ -241,6 +242,29 @@ function computeKmer(id, tParsed, qParsed, optsIn, t0) {
     },
   };
   postResult(id, data);
+}
+
+/**
+ * Map an aligner's PAF onto the axes of the already-loaded plot (the audit
+ * overlay). The base plot is untouched.
+ * @param {{id:number, buf:ArrayBuffer, target:import('../core/types.js').AxisCatalog, query:import('../core/types.js').AxisCatalog}} req
+ */
+async function handlePafOverlay(req) {
+  progress(req.id, 'Reading aligner file', 0);
+  const bytes = await maybeGunzip(new Uint8Array(req.buf));
+  progress(req.id, 'Mapping onto loaded axes', 0.4);
+  const r = parsePafOnto(bytes, req.target, req.query);
+  post(
+    { id: req.id, type: 'overlayResult', segments: r.segments, skipped: r.skipped, unknown: r.unknown },
+    [
+      r.segments.x.buffer,
+      r.segments.y.buffer,
+      r.segments.dx.buffer,
+      r.segments.dy.buffer,
+      r.segments.strand.buffer,
+      r.segments.identity.buffer,
+    ],
+  );
 }
 
 /** @param {{id:number, buf:ArrayBuffer}} req */

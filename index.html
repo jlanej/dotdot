@@ -32,6 +32,7 @@
         <p class="hint">Drop files anywhere. One FASTA → self plot; add a second as query. dotdot computes the plot itself — alignment-free, no aligner in the loop, chromosome scale included.</p>
         <div class="btn-row">
           <button id="btn-demo" class="btn">Demo genomes</button>
+          <button id="btn-demo-real" class="btn">chr17 × NA19240</button>
           <button id="btn-clear" class="btn subtle">Clear</button>
         </div>
         <div class="file-row" style="margin-top: 12px">
@@ -39,7 +40,10 @@
           <input type="file" id="file-paf" accept=".paf,.gz,.txt" />
           <span class="chip" id="chip-paf">—</span>
         </div>
-        <p class="hint">Optional: load an aligner's PAF (minimap2 etc., .gz ok) to inspect what it called — and compare against the raw k-mer truth.</p>
+        <p class="hint">Optional: load an aligner's PAF (minimap2 etc., .gz ok). With a plot already on screen it overlays the aligner's calls on the raw k-mer truth; on an empty app it plots standalone.</p>
+        <div class="ctl checks" id="row-overlay" hidden>
+          <label><input type="checkbox" id="chk-overlay" checked />show aligner overlay</label>
+        </div>
       </section>
 
       <section class="panel">
@@ -155,8 +159,9 @@
       <div id="empty-state">
         <div class="dots" aria-hidden="true">··</div>
         <p><strong>Drop FASTA files</strong> for an alignment-free dot plot<br />
-          (or an aligner's PAF, to audit it) — or try the
-          <button id="btn-demo2" class="linklike">demo genomes</button></p>
+          (or an aligner's PAF, to audit it) — try the
+          <button id="btn-demo2" class="linklike">demo genomes</button> or real
+          <button id="btn-demo-real2" class="linklike">chr17 × NA19240</button></p>
       </div>
       <div id="progress" hidden>
         <div id="progress-panel">

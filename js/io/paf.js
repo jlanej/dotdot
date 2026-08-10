@@ -1,15 +1,20 @@
 // @ts-check
 /**
- * PAF (minimap2 Pairwise mApping Format) parser.
+ * PAF (Pairwise mApping Format) parsing — the aligner-audit input.
  *
  * Numbers are parsed straight from the bytes (no per-line string split);
- * only sequence names are decoded. Sequences are laid out on each axis in
- * descending length order (the D-Genies convention), and every alignment
- * becomes one segment colored by nmatch/alnlen identity.
+ * only sequence names are decoded. Two consumers share one scanner:
+ *  - parsePaf(): standalone plot — sequences laid out per axis in descending
+ *    length order, every alignment one segment colored by nmatch/alnlen.
+ *  - parsePafOnto(): overlay — alignments mapped onto axes that already
+ *    exist (a loaded FASTA comparison), so an aligner's calls can be drawn
+ *    over the alignment-free k-mer truth.
  */
 import { F64Vec, F32Vec, U8Vec, U32Vec } from '../core/vec.js';
 
 /** @typedef {import('../core/types.js').PlotData} PlotData */
+/** @typedef {import('../core/types.js').AxisCatalog} AxisCatalog */
+/** @typedef {import('../core/types.js').SegmentStore} SegmentStore */
 
 const NL = 10;
 const CR = 13;
@@ -20,48 +25,32 @@ const PLUS = 43;
 const td = new TextDecoder();
 
 /**
- * @param {Uint8Array} bytes
- * @returns {PlotData}
+ * @callback PafRecordFn
+ * @param {string} qName @param {number} qlen @param {number} qs @param {number} qe
+ * @param {0|1} strand
+ * @param {string} tName @param {number} tlen @param {number} ts @param {number} te
+ * @param {number} ident
  */
-export function parsePaf(bytes) {
-  const t0 = performance.now();
+
+/**
+ * Scan PAF bytes, invoking onRecord per well-formed alignment line.
+ * @param {Uint8Array} bytes
+ * @param {PafRecordFn} onRecord
+ * @returns {number} count of malformed (skipped) lines
+ */
+function scanRecords(bytes, onRecord) {
   const n = bytes.length;
-
-  /** @type {Map<string, number>} */
-  const qIds = new Map();
-  /** @type {number[]} */
-  const qLens = [];
-  /** @type {Map<string, number>} */
-  const tIds = new Map();
-  /** @type {number[]} */
-  const tLens = [];
-
-  const recQ = new U32Vec(4096);
-  const recT = new U32Vec(4096);
-  const recQs = new F64Vec(4096);
-  const recQe = new F64Vec(4096);
-  const recTs = new F64Vec(4096);
-  const recTe = new F64Vec(4096);
-  const recStrand = new U8Vec(4096);
-  const recIdent = new F32Vec(4096);
-
-  let skipped = 0;
-  let identMin = 1;
-
-  // Reusable field boundaries for the first 12 columns.
   const fs = new Int32Array(12);
   const fe = new Int32Array(12);
-
+  let skipped = 0;
   let i = 0;
   while (i < n) {
-    // Find line end.
     let eol = i;
     while (eol < n && bytes[eol] !== NL) eol++;
     let end = eol;
     if (end > i && bytes[end - 1] === CR) end--;
 
     if (end > i && bytes[i] !== HASH) {
-      // Split first 12 fields.
       let f = 0;
       let p = i;
       let start = i;
@@ -92,28 +81,8 @@ export function parsePaf(bytes) {
         ) {
           const qName = td.decode(bytes.subarray(fs[0], fe[0]));
           const tName = td.decode(bytes.subarray(fs[5], fe[5]));
-          let qId = qIds.get(qName);
-          if (qId === undefined) {
-            qId = qLens.length;
-            qIds.set(qName, qId);
-            qLens.push(qlen);
-          }
-          let tId = tIds.get(tName);
-          if (tId === undefined) {
-            tId = tLens.length;
-            tIds.set(tName, tId);
-            tLens.push(tlen);
-          }
           const ident = alnlen > 0 ? Math.min(nmatch / alnlen, 1) : 0;
-          if (ident < identMin) identMin = ident;
-          recQ.push(qId);
-          recT.push(tId);
-          recQs.push(qs);
-          recQe.push(qe);
-          recTs.push(ts);
-          recTe.push(te);
-          recStrand.push(strandByte === PLUS ? 0 : 1);
-          recIdent.push(ident);
+          onRecord(qName, qlen, qs, qe, strandByte === PLUS ? 0 : 1, tName, tlen, ts, te, ident);
         } else {
           skipped++;
         }
@@ -123,6 +92,60 @@ export function parsePaf(bytes) {
     }
     i = eol + 1;
   }
+  return skipped;
+}
+
+/**
+ * Standalone PAF plot.
+ * @param {Uint8Array} bytes
+ * @returns {PlotData}
+ */
+export function parsePaf(bytes) {
+  const t0 = performance.now();
+
+  /** @type {Map<string, number>} */
+  const qIds = new Map();
+  /** @type {number[]} */
+  const qLens = [];
+  /** @type {Map<string, number>} */
+  const tIds = new Map();
+  /** @type {number[]} */
+  const tLens = [];
+
+  const recQ = new U32Vec(4096);
+  const recT = new U32Vec(4096);
+  const recQs = new F64Vec(4096);
+  const recTs = new F64Vec(4096);
+  const recDx = new F32Vec(4096);
+  const recDy = new F32Vec(4096);
+  const recStrand = new U8Vec(4096);
+  const recIdent = new F32Vec(4096);
+
+  let identMin = 1;
+
+  const skipped = scanRecords(bytes, (qName, qlen, qs, qe, strand, tName, tlen, ts, te, ident) => {
+    let qId = qIds.get(qName);
+    if (qId === undefined) {
+      qId = qLens.length;
+      qIds.set(qName, qId);
+      qLens.push(qlen);
+    }
+    let tId = tIds.get(tName);
+    if (tId === undefined) {
+      tId = tLens.length;
+      tIds.set(tName, tId);
+      tLens.push(tlen);
+    }
+    if (ident < identMin) identMin = ident;
+    recQ.push(qId);
+    recT.push(tId);
+    recQs.push(qs);
+    recTs.push(ts);
+    recDx.push(te - ts);
+    recDy.push(qe - qs);
+    recStrand.push(strand);
+    recIdent.push(ident);
+  });
 
   const count = recQ.n;
   if (count === 0) {
@@ -136,32 +159,101 @@ export function parsePaf(bytes) {
   const qCat = buildCatalog(qIds, qLens);
   const tCat = buildCatalog(tIds, tLens);
 
-  // Emit the segment store in global coordinates.
   const x = new Float64Array(count);
   const y = new Float64Array(count);
-  const dx = new Float32Array(count);
-  const dy = new Float32Array(count);
-  const strand = recStrand.done();
-  const identity = recIdent.done();
   for (let r = 0; r < count; r++) {
-    const tOff = tCat.offsets[recT.a[r]];
-    const qOff = qCat.offsets[recQ.a[r]];
-    x[r] = tOff + recTs.a[r];
-    y[r] = qOff + recQs.a[r];
-    dx[r] = recTe.a[r] - recTs.a[r];
-    dy[r] = recQe.a[r] - recQs.a[r];
+    x[r] = tCat.offsets[recT.a[r]] + recTs.a[r];
+    y[r] = qCat.offsets[recQ.a[r]] + recQs.a[r];
   }
 
   return {
     target: tCat.catalog,
     query: qCat.catalog,
-    segments: { count, x, y, dx, dy, strand, identity },
+    segments: {
+      count,
+      x,
+      y,
+      dx: recDx.done(),
+      dy: recDy.done(),
+      strand: recStrand.done(),
+      identity: recIdent.done(),
+    },
     source: 'paf',
     stats: {
       elapsedMs: performance.now() - t0,
       identMin,
       skippedLines: skipped,
     },
+  };
+}
+
+/**
+ * Overlay: map alignments onto existing axes by sequence name. Alignments
+ * naming sequences absent from the axes are counted in `unknown` and
+ * dropped; nothing else about the base plot changes.
+ *
+ * @param {Uint8Array} bytes
+ * @param {AxisCatalog} target
+ * @param {AxisCatalog} query
+ * @returns {{segments: SegmentStore, skipped: number, unknown: number, identMin: number}}
+ */
+export function parsePafOnto(bytes, target, query) {
+  /** @type {Map<string, number>} */
+  const tOff = new Map();
+  for (let i = 0; i < target.names.length; i++) tOff.set(target.names[i], target.starts[i]);
+  /** @type {Map<string, number>} */
+  const qOff = new Map();
+  for (let i = 0; i < query.names.length; i++) qOff.set(query.names[i], query.starts[i]);
+
+  const x = new F64Vec(4096);
+  const y = new F64Vec(4096);
+  const dx = new F32Vec(4096);
+  const dy = new F32Vec(4096);
+  const strand = new U8Vec(4096);
+  const identity = new F32Vec(4096);
+  let unknown = 0;
+  let identMin = 1;
+
+  const skipped = scanRecords(bytes, (qName, _qlen, qs, qe, str, tName, _tlen, ts, te, ident) => {
+    const to = tOff.get(tName);
+    const qo = qOff.get(qName);
+    if (to === undefined || qo === undefined) {
+      unknown++;
+      return;
+    }
+    if (ident < identMin) identMin = ident;
+    x.push(to + ts);
+    y.push(qo + qs);
+    dx.push(te - ts);
+    dy.push(qe - qs);
+    strand.push(str);
+    identity.push(ident);
+  });
+
+  const count = x.n;
+  if (count === 0) {
+    throw new Error(
+      unknown > 0
+        ? `No alignments matched the loaded sequence names (${unknown} lines name other sequences).`
+        : skipped > 0
+          ? `No usable alignments (${skipped} malformed lines) — is this a PAF file?`
+          : 'Empty PAF file.',
+    );
+  }
+
+  return {
+    segments: {
+      count,
+      x: x.done(),
+      y: y.done(),
+      dx: dx.done(),
+      dy: dy.done(),
+      strand: strand.done(),
+      identity: identity.done(),
+    },
+    skipped,
+    unknown,
+    identMin,
   };
 }
 
@@ -213,8 +305,7 @@ function parseUint(bytes, s, e) {
 }
 
 /**
- * Content sniff: 12+ tab-separated fields with numeric field 2 on the first
- * data line.
+ * Content sniff: 12+ tab-separated fields on the first data line.
  * @param {Uint8Array} bytes
  */
 export function looksLikePaf(bytes) {

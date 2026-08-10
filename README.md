@@ -33,10 +33,14 @@ the HPRC Release 2 NA19240 assembly, from minimap2 PAF. Reproduce it with
   thread — cancellable, with live progress — and fans out across CPU cores
   via SharedArrayBuffer wherever the host serves cross-origin isolation
   headers (the bundled dev server does).
-- **Aligner audit via PAF import** — load any PAF-emitting aligner's output
-  (minimap2 etc., optionally gzipped; numbers parsed straight from bytes),
-  colored by `nmatch/alnlen` identity, and compare its calls against the
-  k-mer truth. Measured: a 160 MB PAF with **2,000,000 alignments loads in
+- **Aligner audit via PAF** — load any PAF-emitting aligner's output
+  (minimap2 etc., optionally gzipped; numbers parsed straight from bytes).
+  Dropped onto an existing plot it becomes an **overlay**: the aligner's
+  calls drawn as ink lines with diamond breakpoint markers *on top of* the
+  alignment-free layer, so chained-over indels, missed copies, and breakpoint
+  placement disagree with the raw sequence structure in plain sight. On an
+  empty app a PAF plots standalone, colored by `nmatch/alnlen` identity.
+  Measured standalone: a 160 MB PAF with **2,000,000 alignments loads in
   ~13 s** and pans and zooms at **native refresh rate (120 fps)**.
 - **True genome-scale precision** — coordinates are carried as split float
   pairs into WebGL (relative-to-center, Sterbenz-exact), so the view stays
@@ -69,8 +73,10 @@ No installation. Serve the repo statically and open it:
 python3 scripts/serve.py
 ```
 
-Then visit <http://127.0.0.1:8420/> and click **Demo genomes**, or drop your
-own files. Any static file server works; GitHub Pages can host it as-is. The
+Then visit <http://127.0.0.1:8420/> and click **Demo genomes** (synthetic,
+instant) or **chr17 × NA19240** (real data: the committed minimap2 PAF of
+T2T-CHM13 chr17 vs both NA19240 haplotypes, jumped straight to a heterozygous
+inversion), or drop your own files. Any static file server works; GitHub Pages can host it as-is. The
 bundled server also sends `Cross-Origin-Opener-Policy: same-origin` and
 `Cross-Origin-Embedder-Policy: require-corp` — with those headers (Netlify and
 Cloudflare Pages can set them; GitHub Pages cannot) the k-mer engine matches
@@ -83,7 +89,7 @@ on all CPU cores; without them it runs the identical single-worker path.
 | One FASTA | self dot plot (repeats, palindromes, satellite structure) |
 | Two FASTAs | first = target (x), second = query (y) — alignment-free, the primary path |
 | PAF / PAF.gz | optional aligner audit: any PAF-emitting aligner's output on the same axes |
-| URL parameters | `?demo=1` · `?target=<url>&query=<url>` · `?paf=<url>` · plus `k=`, `gap=`, `occ=`, `region=` |
+| URL parameters | `?demo=1` · `?target=<url>&query=<url>[&overlay=<paf-url>]` · `?paf=<url>` · plus `k=`, `gap=`, `occ=`, `region=` |
 
 Practical envelope: up to ~50 Mb of combined sequence the engine runs dense
 and exact (bacteria, fungi, chromosome pairs, plasmids, viral genomes).
@@ -122,6 +128,24 @@ on an Apple-silicon laptop:
 | hap1: 250 kb inversion (aligner PAF) | same window, alignment-free (hap2) |
 |---|---|
 | ![250 kb inversion at 17p11.2 in NA19240 hap1](docs/sv_17p11.png) | ![k-mer engine view of the inverted duplication](docs/sv_17p11_kmer.png) |
+
+The one-click version of this dataset lives on the **chr17 × NA19240** demo
+button (the 574 kB PAF is committed; the FASTAs are fetched by the script).
+
+## Auditing an aligner
+
+Load FASTAs (or run a demo), then drop a PAF on top — or use
+`?target=…&query=…&overlay=aln.paf`. The aligner's calls draw as ink lines
+with diamond breakpoint markers over the alignment-free layer:
+
+![minimap2's calls overlaid on the k-mer plot: the deletion-spanning call runs straight across two offset diagonals](docs/overlay_audit.png)
+
+Even on the synthetic demo pair the overlay earns its keep: minimap2 reports
+the deletion-spanning region as *one* alignment, so its call runs straight
+from end to end while the k-mer layer shows the two offset collinear blocks
+it glued together — exactly the class of aligner summarization a dot plot
+makes visible. Toggle the overlay with **show aligner overlay**; the base
+plot's strand/identity/length filters never touch it.
 
 A note on the timings in this README: they were measured inside an embedded,
 *background-throttled* browser pane that granted the page a fraction of one

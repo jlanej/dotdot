@@ -1,6 +1,6 @@
 // @ts-check
 import { test, assert, assertEq, assertClose } from './harness.js';
-import { parsePaf, looksLikePaf } from '../js/io/paf.js';
+import { parsePaf, parsePafOnto, looksLikePaf } from '../js/io/paf.js';
 
 const enc = new TextEncoder();
 
@@ -61,4 +61,43 @@ test('paf: empty and garbage inputs throw', () => {
 test('paf: sniffing', () => {
   assert(looksLikePaf(enc.encode(PAF)));
   assert(!looksLikePaf(enc.encode('>chr1\nACGT\n')));
+});
+
+test('paf: parsePafOnto maps alignments onto provided axes', () => {
+  const target = { names: ['t1', 't2'], starts: new Float64Array([0, 2000, 2500]), total: 2500 };
+  const query = { names: ['q1', 'q2'], starts: new Float64Array([0, 1000, 4000]), total: 4000 };
+  const r = parsePafOnto(enc.encode(PAF), target, query);
+  assertEq(r.segments.count, 3);
+  assertEq(r.unknown, 0);
+  assertEq(r.skipped, 1);
+  // line 1: q1:100 on t1:500, both at offset 0 on their axes
+  assertEq(r.segments.x[0], 500);
+  assertEq(r.segments.y[0], 100);
+  assertEq(r.segments.strand[0], 0);
+  // line 2: q2 sits at query offset 1000
+  assertEq(r.segments.y[1], 1000);
+  assertEq(r.segments.strand[1], 1);
+  assertClose(r.segments.identity[1], 250 / 300, 1e-6);
+  // line 3: t2 sits at target offset 2000
+  assertEq(r.segments.x[2], 2000);
+});
+
+test('paf: parsePafOnto drops alignments naming unknown sequences', () => {
+  const target = { names: ['t1'], starts: new Float64Array([0, 2000]), total: 2000 };
+  const query = { names: ['q1'], starts: new Float64Array([0, 1000]), total: 1000 };
+  const r = parsePafOnto(enc.encode(PAF), target, query);
+  assertEq(r.segments.count, 1);
+  assertEq(r.unknown, 2);
+});
+
+test('paf: parsePafOnto throws when nothing matches', () => {
+  const target = { names: ['other'], starts: new Float64Array([0, 100]), total: 100 };
+  const query = { names: ['nope'], starts: new Float64Array([0, 100]), total: 100 };
+  let threw = false;
+  try {
+    parsePafOnto(enc.encode(PAF), target, query);
+  } catch {
+    threw = true;
+  }
+  assert(threw, 'expected a throw');
 });

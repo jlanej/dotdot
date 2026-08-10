@@ -51,6 +51,7 @@ export class GlRenderer {
       this.lost = false;
       this.init();
       if (this.store) this.setData(this.store);
+      this.setOverlay(this.overlayStore);
       this.setTheme(this.mode);
       if (this.onRestored) this.onRestored();
     });
@@ -86,6 +87,14 @@ export class GlRenderer {
 
     this.instanceBuf = gl.createBuffer();
     this.mainVao = this.makeVao(this.instanceBuf);
+
+    this.overlayBuf = gl.createBuffer();
+    this.overlayVao = this.makeVao(this.overlayBuf);
+    this.overlayEndBuf = gl.createBuffer();
+    this.overlayEndVao = this.makeVao(this.overlayEndBuf);
+    this.overlayCount = 0;
+    /** @type {SegmentStore | null} */
+    this.overlayStore = null;
 
     this.highlightBuf = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, this.highlightBuf);
@@ -143,34 +152,41 @@ export class GlRenderer {
   setData(store) {
     this.store = store;
     this.count = store.count;
-    const buf = new Float32Array(store.count * FLOATS_PER_INSTANCE);
+    const gl = this.gl;
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, buildInstanceData(store), gl.STATIC_DRAW);
+  }
+
+  /**
+   * Set (or clear) the aligner-audit overlay: one buffer of alignment lines
+   * plus one of zero-length "segments" at their endpoints, which the
+   * min-length extension renders as diamond breakpoint markers.
+   * @param {SegmentStore | null} store
+   */
+  setOverlay(store) {
+    this.overlayStore = store;
+    this.overlayCount = store ? store.count : 0;
+    if (!store) return;
+    const gl = this.gl;
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.overlayBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, buildInstanceData(store), gl.STATIC_DRAW);
+
+    const endBuf = new Float32Array(store.count * 2 * FLOATS_PER_INSTANCE);
     const ep = new Float64Array(4);
     for (let i = 0; i < store.count; i++) {
       segmentEndpoints(store, i, ep);
-      const o = i * FLOATS_PER_INSTANCE;
-      const x0h = Math.fround(ep[0]);
-      const y0h = Math.fround(ep[1]);
-      const x1h = Math.fround(ep[2]);
-      const y1h = Math.fround(ep[3]);
-      buf[o] = x0h;
-      buf[o + 1] = y0h;
-      buf[o + 2] = ep[0] - x0h;
-      buf[o + 3] = ep[1] - y0h;
-      buf[o + 4] = x1h;
-      buf[o + 5] = y1h;
-      buf[o + 6] = ep[2] - x1h;
-      buf[o + 7] = ep[3] - y1h;
-      buf[o + 8] = store.identity[i];
-      buf[o + 9] = store.strand[i];
+      writePoint(endBuf, (i * 2) * FLOATS_PER_INSTANCE, ep[0], ep[1]);
+      writePoint(endBuf, (i * 2 + 1) * FLOATS_PER_INSTANCE, ep[2], ep[3]);
     }
-    const gl = this.gl;
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuf);
-    gl.bufferData(gl.ARRAY_BUFFER, buf, gl.STATIC_DRAW);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.overlayEndBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, endBuf, gl.STATIC_DRAW);
   }
 
   clearData() {
     this.store = null;
     this.count = 0;
+    this.overlayStore = null;
+    this.overlayCount = 0;
   }
 
   /**
@@ -191,6 +207,8 @@ export class GlRenderer {
    * @param {number} opts.minLenBp
    * @param {Float64Array | null} opts.highlight world endpoints [x0,y0,x1,y1]
    * @param {[number, number, number]} opts.highlightRgb
+   * @param {boolean} [opts.overlayShow]
+   * @param {[number, number, number]} [opts.overlayRgb]
    */
   render(opts) {
     const gl = this.gl;
@@ -204,7 +222,7 @@ export class GlRenderer {
     gl.viewport(0, 0, W, H);
     gl.clearColor(opts.clear[0], opts.clear[1], opts.clear[2], 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
-    if (this.count === 0 && !opts.highlight) return;
+    if (this.count === 0 && this.overlayCount === 0 && !opts.highlight) return;
 
     const v = opts.view;
     const cxHi = Math.fround(v.cx);
@@ -233,6 +251,32 @@ export class GlRenderer {
       gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.count);
     }
 
+    // Aligner-audit overlay: alignment spans as ink lines, breakpoints as
+    // diamond markers, drawn over the base layer and exempt from its
+    // strand/identity/length display filters.
+    if (opts.overlayShow && this.overlayCount > 0) {
+      const oc = opts.overlayRgb ?? [0, 0, 0];
+      gl.uniform4f(this.u.forceColor, oc[0], oc[1], oc[2], 1);
+      gl.uniform2f(this.u.strandVisible, 1, 1);
+      gl.uniform1f(this.u.minIdentity, 0);
+      gl.uniform1f(this.u.minLenBp, 0);
+      gl.uniform1f(this.u.alpha, 0.8);
+      gl.uniform1f(this.u.widthPx, 1.7 * opts.dpr);
+      gl.uniform1f(this.u.minLenPx, 2.5 * opts.dpr);
+      gl.bindVertexArray(this.overlayVao);
+      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.overlayCount);
+      gl.uniform1f(this.u.alpha, 0.95);
+      gl.uniform1f(this.u.widthPx, 5.5 * opts.dpr);
+      gl.uniform1f(this.u.minLenPx, 5.5 * opts.dpr);
+      gl.bindVertexArray(this.overlayEndVao);
+      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.overlayCount * 2);
+      gl.uniform4f(this.u.forceColor, 0, 0, 0, 0);
+      gl.uniform1f(this.u.alpha, opts.alpha);
+      gl.uniform2f(this.u.strandVisible, opts.showFwd ? 1 : 0, opts.showRev ? 1 : 0);
+      gl.uniform1f(this.u.minIdentity, opts.minIdentity);
+      gl.uniform1f(this.u.minLenBp, opts.minLenBp);
+    }
+
     if (opts.highlight) {
       const s = this.highlightScratch;
       const [x0, y0, x1, y1] = opts.highlight;
@@ -258,6 +302,55 @@ export class GlRenderer {
     }
     gl.bindVertexArray(null);
   }
+}
+
+/**
+ * Interleave a SegmentStore into per-instance floats: split-precision
+ * endpoints (hi/lo pairs) plus identity/strand meta.
+ * @param {SegmentStore} store
+ */
+function buildInstanceData(store) {
+  const buf = new Float32Array(store.count * FLOATS_PER_INSTANCE);
+  const ep = new Float64Array(4);
+  for (let i = 0; i < store.count; i++) {
+    segmentEndpoints(store, i, ep);
+    const o = i * FLOATS_PER_INSTANCE;
+    const x0h = Math.fround(ep[0]);
+    const y0h = Math.fround(ep[1]);
+    const x1h = Math.fround(ep[2]);
+    const y1h = Math.fround(ep[3]);
+    buf[o] = x0h;
+    buf[o + 1] = y0h;
+    buf[o + 2] = ep[0] - x0h;
+    buf[o + 3] = ep[1] - y0h;
+    buf[o + 4] = x1h;
+    buf[o + 5] = y1h;
+    buf[o + 6] = ep[2] - x1h;
+    buf[o + 7] = ep[3] - y1h;
+    buf[o + 8] = store.identity[i];
+    buf[o + 9] = store.strand[i];
+  }
+  return buf;
+}
+
+/**
+ * Write one zero-length instance at (x, y) — the shader's min-length
+ * extension turns it into a diamond marker.
+ * @param {Float32Array} buf @param {number} o @param {number} x @param {number} y
+ */
+function writePoint(buf, o, x, y) {
+  const xh = Math.fround(x);
+  const yh = Math.fround(y);
+  buf[o] = xh;
+  buf[o + 1] = yh;
+  buf[o + 2] = x - xh;
+  buf[o + 3] = y - yh;
+  buf[o + 4] = xh;
+  buf[o + 5] = yh;
+  buf[o + 6] = x - xh;
+  buf[o + 7] = y - yh;
+  buf[o + 8] = 1;
+  buf[o + 9] = 0;
 }
 
 /**

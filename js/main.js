@@ -54,6 +54,8 @@ const inWidth = /** @type {HTMLInputElement} */ ($('in-width'));
 const outWidth = $('out-width');
 const chkMinPx = /** @type {HTMLInputElement} */ ($('chk-minpx'));
 const chkAspect = /** @type {HTMLInputElement} */ ($('chk-aspect'));
+const chkOverlay = /** @type {HTMLInputElement} */ ($('chk-overlay'));
+const rowOverlay = $('row-overlay');
 const btnCompute = /** @type {HTMLButtonElement} */ ($('btn-compute'));
 const btnPng = /** @type {HTMLButtonElement} */ ($('btn-png'));
 const btnSvg = /** @type {HTMLButtonElement} */ ($('btn-svg'));
@@ -64,6 +66,8 @@ const btnSvg = /** @type {HTMLButtonElement} */ ($('btn-svg'));
 const state = {
   /** @type {PlotData | null} */
   data: null,
+  /** @type {{segments: import('./core/types.js').SegmentStore, name: string} | null} */
+  overlay: null,
   /** @type {SegmentGrid | null} */
   grid: null,
   /** @type {View | null} */
@@ -160,6 +164,9 @@ function spawnWorker() {
     } else if (msg.type === 'result') {
       setComputing(false);
       onData(msg.data);
+    } else if (msg.type === 'overlayResult') {
+      setComputing(false);
+      onOverlay(msg);
     } else if (msg.type === 'error') {
       setComputing(false);
       toast(msg.message, true);
@@ -379,6 +386,12 @@ function onData(data) {
   state.data = data;
   state.grid = null;
   state.hoverIndex = null;
+  // New base axes invalidate any overlay (its chip too, unless this IS a
+  // standalone aligner plot).
+  state.overlay = null;
+  renderer.setOverlay(null);
+  rowOverlay.hidden = true;
+  if (data.source === 'kmer') setChip('chip-paf', null);
   renderer.setData(data.segments);
   glcanvas.hidden = false;
   emptyState.hidden = true;
@@ -439,6 +452,12 @@ function onData(data) {
   } else if (data.stats.note) {
     toast(data.stats.note);
   }
+  if (data.source === 'kmer' && pendingOverlayBuf) {
+    const buf = pendingOverlayBuf;
+    pendingOverlayBuf = null;
+    setChip('chip-paf', { name: overlayName, buf });
+    submit({ type: 'pafOverlay', buf, target: data.target, query: data.query });
+  }
   markDirty();
 }
 
@@ -458,6 +477,48 @@ function computeKmer() {
 /** @param {ArrayBuffer} buf */
 function computePaf(buf) {
   submit({ type: 'paf', buf });
+}
+
+/**
+ * A PAF landing on an existing plot becomes the aligner-audit overlay; on an
+ * empty app it loads standalone.
+ * @param {{name: string, buf: ArrayBuffer}} f
+ */
+function loadPafFile(f) {
+  setChip('chip-paf', f);
+  if (state.data) {
+    overlayName = f.name;
+    submit({ type: 'pafOverlay', buf: f.buf, target: state.data.target, query: state.data.query });
+  } else {
+    computePaf(f.buf);
+  }
+}
+
+/** @type {string} */
+let overlayName = '';
+/** @type {ArrayBuffer | null} */
+let pendingOverlayBuf = null;
+
+/** @param {{segments: import('./core/types.js').SegmentStore, skipped: number, unknown: number}} msg */
+function onOverlay(msg) {
+  state.overlay = { segments: msg.segments, name: overlayName };
+  renderer.setOverlay(msg.segments);
+  rowOverlay.hidden = false;
+  chkOverlay.checked = true;
+  const parts = [`Aligner overlay: ${formatCount(msg.segments.count)} calls drawn over the plot.`];
+  if (msg.unknown > 0) parts.push(`${formatInt(msg.unknown)} lines named sequences not on these axes (dropped).`);
+  if (msg.skipped > 0) parts.push(`${formatInt(msg.skipped)} malformed lines skipped.`);
+  toast(parts.join(' '));
+  updateLegend();
+  markDirty();
+}
+
+function clearOverlay() {
+  state.overlay = null;
+  renderer.setOverlay(null);
+  rowOverlay.hidden = true;
+  setChip('chip-paf', null);
+  updateLegend();
 }
 
 function computeDemo() {
@@ -538,8 +599,7 @@ async function handleFiles(files) {
   for (const file of files) {
     const f = await readFile(file);
     if (isPafFile(f)) {
-      setChip('chip-paf', f);
-      computePaf(f.buf);
+      loadPafFile(f);
     } else if (!state.fileTarget) {
       setFasta('target', f);
     } else if (!state.fileQuery) {
@@ -564,10 +624,7 @@ function wireFileInput(id, fn) {
 
 wireFileInput('file-target', (f) => setFasta('target', f));
 wireFileInput('file-query', (f) => setFasta('query', f));
-wireFileInput('file-paf', (f) => {
-  setChip('chip-paf', f);
-  computePaf(f.buf);
-});
+wireFileInput('file-paf', loadPafFile);
 
 plotRoot.addEventListener('dragover', (e) => {
   e.preventDefault();
@@ -774,6 +831,8 @@ function draw(dpr) {
       minLenBp: d.minLenBp,
       highlight: highlightEp,
       highlightRgb: hexToRgb(cssHexOrFallback(theme.ink)),
+      overlayShow: state.overlay !== null && chkOverlay.checked,
+      overlayRgb: hexToRgb(cssHexOrFallback(theme.ink)),
     });
   }
   drawUnderlay(underlay, cssW, cssH, dpr, state.view, state.data, theme);
@@ -1121,6 +1180,34 @@ btnCompute.addEventListener('click', () => {
 });
 $('btn-demo').addEventListener('click', computeDemo);
 $('btn-demo2').addEventListener('click', computeDemo);
+
+/**
+ * Real-data demo: the committed minimap2 PAF of T2T-CHM13 chr17 vs both
+ * NA19240 haplotypes (HPRC Release 2), jumped straight to the heterozygous
+ * 17p11.2 inversion. (The FASTAs for the alignment-free version are 170 MB —
+ * scripts/fetch_realdata.sh fetches them.)
+ */
+async function loadRealDemo() {
+  try {
+    const f = await fetchAsFile('testdata/real/NA19240_vs_chm13_chr17.paf');
+    pendingRegion = 'chr17:18.3M-19.4M';
+    setChip('chip-paf', f);
+    computePaf(f.buf);
+    toast(
+      'Real data: T2T-CHM13 chr17 vs NA19240 (HPRC R2), aligner view — jumped to the heterozygous ' +
+        '17p11.2 inversion; press Go again to flip haplotypes. For the alignment-free version, run ' +
+        'scripts/fetch_realdata.sh and load the FASTAs.',
+    );
+  } catch (err) {
+    toast(err instanceof Error ? err.message : String(err), true);
+  }
+}
+$('btn-demo-real').addEventListener('click', () => void loadRealDemo());
+$('btn-demo-real2').addEventListener('click', () => void loadRealDemo());
+chkOverlay.addEventListener('change', () => {
+  updateLegend();
+  markDirty();
+});
 const inRegion = /** @type {HTMLInputElement} */ ($('in-region'));
 $('btn-region').addEventListener('click', () => jumpToRegion(inRegion.value));
 inRegion.addEventListener('keydown', (e) => {
@@ -1135,6 +1222,7 @@ $('btn-clear').addEventListener('click', () => {
   state.fileTarget = null;
   state.fileQuery = null;
   state.hoverIndex = null;
+  clearOverlay();
   renderer.clearData();
   glcanvas.hidden = true;
   setChip('chip-target', null);
@@ -1215,6 +1303,11 @@ function updateLegend() {
       `<div class="row"><span class="swatch" style="background:${cm.fwdFlat}"></span> forward matches</div>` +
       `<div class="row"><span class="swatch" style="background:${cm.revFlat}"></span> reverse matches</div>`;
   }
+  if (state.overlay && chkOverlay.checked) {
+    legendEl.innerHTML +=
+      `<div class="row"><span class="lab" style="color:var(--ink)">◆—◆</span>` +
+      `<span>aligner calls (overlay)</span></div>`;
+  }
 }
 
 function updateStats() {
@@ -1271,6 +1364,12 @@ async function initFromUrl() {
       setChip('chip-paf', f);
       computePaf(f.buf);
     } else if (p.has('target')) {
+      if (p.has('overlay')) {
+        const o = await fetchAsFile(/** @type {string} */ (p.get('overlay')));
+        pendingOverlayBuf = o.buf;
+        overlayName = o.name;
+        setChip('chip-paf', o);
+      }
       const t = await fetchAsFile(/** @type {string} */ (p.get('target')));
       setFasta('target', t);
       if (p.has('query')) {
