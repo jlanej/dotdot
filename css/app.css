@@ -138,6 +138,55 @@ kbd {
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* ---- help popovers ----------------------------------------------------- */
+
+.help {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0;
+  text-transform: none;
+  cursor: pointer;
+}
+
+.help:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+#help-pop {
+  position: fixed;
+  z-index: 30;
+  max-width: 290px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.2);
+  padding: 9px 12px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--ink-2);
+}
+
+#help-pop b {
+  color: var(--ink);
+}
+
+#help-pop[hidden] {
+  display: none;
 }
 
 .hint {

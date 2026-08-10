@@ -1,8 +1,7 @@
 // @ts-check
-import { test, assert, assertEq, assertClose } from './harness.js';
+import { test, assert, assertEq, assertClose, mulberry32 } from './harness.js';
 import { buildIndex, matchStrand, KMER_DEFAULTS } from '../js/core/kmer.js';
 import { reverseComplement } from '../js/core/dna.js';
-import { mulberry32 } from '../js/demo/synthetic.js';
 import { F64Vec, F32Vec, U8Vec } from '../js/core/vec.js';
 
 /** @param {number} n @param {number} seed */

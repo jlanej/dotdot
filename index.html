@@ -13,12 +13,13 @@
   <header id="topbar">
     <div id="wordmark" aria-label="dotdot">dot<span>dot</span></div>
     <div id="tagline">alignment-free interactive genomic dot plots — raw k-mer structure straight from FASTA, entirely in your browser</div>
+    <button class="help" data-help="controls" aria-label="mouse and keyboard controls">?</button>
   </header>
 
   <div id="layout">
     <aside id="sidebar">
       <section class="panel">
-        <h2>Data</h2>
+        <h2>Data <button class="help" data-help="data" aria-label="about inputs">?</button></h2>
         <div class="file-row">
           <label class="file-btn" for="file-target">Target FASTA</label>
           <input type="file" id="file-target" accept=".fa,.fasta,.fna,.gz,.txt" />
@@ -31,8 +32,8 @@
         </div>
         <p class="hint">Drop files anywhere. One FASTA → self plot; add a second as query. dotdot computes the plot itself — alignment-free, no aligner in the loop, chromosome scale included.</p>
         <div class="btn-row">
-          <button id="btn-demo" class="btn">Demo genomes</button>
-          <button id="btn-demo-real" class="btn">chr17 × NA19240</button>
+          <button id="btn-demo" class="btn" title="Real 1.6 Mb slice: chr17 17p11.2 vs both NA19240 haplotypes, alignment-free">Demo: 17p11.2</button>
+          <button id="btn-demo-real" class="btn" title="Whole chr17 vs both NA19240 haplotypes — alignment-free when the fetched FASTAs are present">Full chr17</button>
           <button id="btn-clear" class="btn subtle">Clear</button>
         </div>
         <div class="file-row" style="margin-top: 12px">
@@ -42,18 +43,19 @@
         </div>
         <p class="hint">Optional: load an aligner's PAF (minimap2 etc., .gz ok). With a plot already on screen it overlays the aligner's calls on the raw k-mer truth; on an empty app it plots standalone.</p>
         <div class="ctl checks" id="row-overlay" hidden>
-          <label><input type="checkbox" id="chk-overlay" checked />show aligner overlay</label>
+          <label><input type="checkbox" id="chk-overlay" checked />show aligner overlay
+            <button class="help" data-help="overlay">?</button></label>
         </div>
       </section>
 
       <section class="panel">
-        <h2>Matching</h2>
+        <h2>Matching <button class="help" data-help="matching" aria-label="about matching options">?</button></h2>
         <div class="ctl">
-          <label for="in-k">k-mer size <output id="out-k">15</output></label>
+          <label for="in-k">k-mer size <button class="help" data-help="k">?</button> <output id="out-k">15</output></label>
           <input type="range" id="in-k" min="8" max="16" step="1" value="15" />
         </div>
         <div class="ctl">
-          <label for="in-gap">bridge gaps ≤</label>
+          <label for="in-gap">bridge gaps ≤ <button class="help" data-help="gap">?</button></label>
           <select id="in-gap">
             <option value="0">0 · exact runs</option>
             <option value="4">4 bp</option>
@@ -63,7 +65,7 @@
           </select>
         </div>
         <div class="ctl">
-          <label for="in-maxocc">skip k-mers with ></label>
+          <label for="in-maxocc">skip k-mers with > <button class="help" data-help="occ">?</button></label>
           <select id="in-maxocc">
             <option value="50">50 hits</option>
             <option value="200" selected>200 hits</option>
@@ -71,7 +73,7 @@
           </select>
         </div>
         <div class="ctl">
-          <label for="in-minrun">min match length</label>
+          <label for="in-minrun">min match length <button class="help" data-help="minrun">?</button></label>
           <select id="in-minrun">
             <option value="0" selected>off</option>
             <option value="30">30 bp</option>
@@ -86,11 +88,11 @@
       <section class="panel">
         <h2>Display</h2>
         <div class="ctl">
-          <label for="in-minident">min identity <output id="out-minident">off</output></label>
+          <label for="in-minident">min identity <button class="help" data-help="minident">?</button> <output id="out-minident">off</output></label>
           <input type="range" id="in-minident" min="0" max="1" step="0.005" value="0" />
         </div>
         <div class="ctl">
-          <label for="in-minlen">min segment length</label>
+          <label for="in-minlen">min segment length <button class="help" data-help="minlen">?</button></label>
           <select id="in-minlen">
             <option value="0" selected>off</option>
             <option value="100">100 bp</option>
@@ -102,10 +104,11 @@
         </div>
         <div class="ctl checks">
           <label><input type="checkbox" id="chk-fwd" checked /><span class="swatch" id="sw-fwd"></span>forward</label>
-          <label><input type="checkbox" id="chk-rev" checked /><span class="swatch" id="sw-rev"></span>reverse</label>
+          <label><input type="checkbox" id="chk-rev" checked /><span class="swatch" id="sw-rev"></span>reverse
+            <button class="help" data-help="strands">?</button></label>
         </div>
         <div class="ctl">
-          <label for="sel-colormode">color by</label>
+          <label for="sel-colormode">color by <button class="help" data-help="colorby">?</button></label>
           <select id="sel-colormode">
             <option value="0" selected>identity</option>
             <option value="1">strand only</option>
@@ -116,10 +119,12 @@
           <input type="range" id="in-width" min="1" max="4" step="0.5" value="2" />
         </div>
         <div class="ctl checks">
-          <label><input type="checkbox" id="chk-minpx" checked />emphasize small matches</label>
+          <label><input type="checkbox" id="chk-minpx" checked />emphasize small matches
+            <button class="help" data-help="minpx">?</button></label>
         </div>
         <div class="ctl checks">
-          <label><input type="checkbox" id="chk-aspect" />lock 1:1 bp aspect</label>
+          <label><input type="checkbox" id="chk-aspect" />lock 1:1 bp aspect
+            <button class="help" data-help="aspect">?</button></label>
         </div>
       </section>
 
@@ -131,7 +136,7 @@
       <section class="panel">
         <h2>Plot</h2>
         <div class="ctl">
-          <label for="in-region">go to target region <kbd>G</kbd></label>
+          <label for="in-region">go to target region <button class="help" data-help="region">?</button> <kbd>G</kbd></label>
           <div class="region-row">
             <input type="text" id="in-region" placeholder="chr17:45M-46.5M" spellcheck="false" autocomplete="off" />
             <button id="btn-region" class="btn">Go</button>
@@ -159,9 +164,9 @@
       <div id="empty-state">
         <div class="dots" aria-hidden="true">··</div>
         <p><strong>Drop FASTA files</strong> for an alignment-free dot plot<br />
-          (or an aligner's PAF, to audit it) — try the
-          <button id="btn-demo2" class="linklike">demo genomes</button> or real
-          <button id="btn-demo-real2" class="linklike">chr17 × NA19240</button></p>
+          (or an aligner's PAF, to audit it) — try real data:
+          <button id="btn-demo2" class="linklike">17p11.2 demo</button> or the
+          <button id="btn-demo-real2" class="linklike">full chr17 × NA19240</button></p>
       </div>
       <div id="progress" hidden>
         <div id="progress-panel">

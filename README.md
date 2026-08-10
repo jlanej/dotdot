@@ -73,10 +73,18 @@ No installation. Serve the repo statically and open it:
 python3 scripts/serve.py
 ```
 
-Then visit <http://127.0.0.1:8420/> and click **Demo genomes** (synthetic,
-instant) or **chr17 × NA19240** (real data: the committed minimap2 PAF of
-T2T-CHM13 chr17 vs both NA19240 haplotypes, jumped straight to a heterozygous
-inversion), or drop your own files. Any static file server works; GitHub Pages can host it as-is. The
+Then visit <http://127.0.0.1:8420/> and click **Demo: 17p11.2** — real data,
+computed alignment-free in your browser: a committed 1.6 Mb slice of
+T2T-CHM13 chr17 (18.0–19.6 Mb) against the corresponding regions of both
+NA19240 haplotypes, with minimap2's calls arriving as the audit overlay. The
+orange anti-diagonals are a heterozygous SV: a 250 kb inversion on hap1 and
+an inverted duplication on hap2. **Full chr17** runs the same comparison at
+whole-chromosome scale — alignment-free whenever the fetched FASTAs are
+present (`scripts/fetch_realdata.sh`), falling back to the committed aligner
+PAF on a fresh clone. Every control has a **?** popover, and the header **?**
+is the mouse/keyboard cheat-sheet.
+
+![the 17p11.2 demo: alignment-free k-mer structure of a heterozygous SV with minimap2's calls overlaid](docs/demo_17p11.png) Any static file server works; GitHub Pages can host it as-is. The
 bundled server also sends `Cross-Origin-Opener-Policy: same-origin` and
 `Cross-Origin-Embedder-Policy: require-corp` — with those headers (Netlify and
 Cloudflare Pages can set them; GitHub Pages cannot) the k-mer engine matches
@@ -129,8 +137,10 @@ on an Apple-silicon laptop:
 |---|---|
 | ![250 kb inversion at 17p11.2 in NA19240 hap1](docs/sv_17p11.png) | ![k-mer engine view of the inverted duplication](docs/sv_17p11_kmer.png) |
 
-The one-click version of this dataset lives on the **chr17 × NA19240** demo
-button (the 574 kB PAF is committed; the FASTAs are fetched by the script).
+One-click versions of this dataset live on the demo buttons: **Demo: 17p11.2**
+(committed 1.4 MB of gzipped FASTA — always alignment-free) and **Full chr17**
+(alignment-free when `scripts/fetch_realdata.sh` has run; the committed 574 kB
+minimap2 PAF otherwise).
 
 ## Auditing an aligner
 

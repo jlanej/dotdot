@@ -11,7 +11,6 @@ import { parsePaf, parsePafOnto } from '../io/paf.js';
 import { buildIndex, matchStrand, pickMaxOcc, KMER_DEFAULTS } from '../core/kmer.js';
 import { reverseComplement } from '../core/dna.js';
 import { F64Vec, F32Vec, U8Vec } from '../core/vec.js';
-import { makeDemo } from '../demo/synthetic.js';
 
 /** @typedef {import('../core/types.js').PlotData} PlotData */
 
@@ -37,7 +36,6 @@ self.onmessage = async (ev) => {
     if (req.type === 'kmer') await handleKmer(req);
     else if (req.type === 'paf') await handlePaf(req);
     else if (req.type === 'pafOverlay') await handlePafOverlay(req);
-    else if (req.type === 'demo') handleDemo(req);
     else throw new Error(`Unknown request type: ${req?.type}`);
   } catch (err) {
     post({
@@ -71,20 +69,6 @@ async function handleKmer(req) {
     };
   }
   computeKmer(req.id, tParsed, qParsed, req.opts, t0);
-}
-
-/** @param {{id:number, opts:object}} req */
-function handleDemo(req) {
-  const t0 = performance.now();
-  progress(req.id, 'Generating demo genomes', 0);
-  const d = makeDemo();
-  computeKmer(
-    req.id,
-    { codes: d.tCodes, catalog: catalogFromLengths(d.tNames, d.tLens) },
-    { codes: d.qCodes, catalog: catalogFromLengths(d.qNames, d.qLens) },
-    req.opts,
-    t0,
-  );
 }
 
 /**
@@ -293,21 +277,6 @@ function postResult(id, data) {
     data.query.starts.buffer,
   ];
   post({ id, type: 'result', data }, transfer);
-}
-
-/**
- * @param {string[]} names @param {number[]} lens
- * @returns {import('../core/types.js').AxisCatalog}
- */
-function catalogFromLengths(names, lens) {
-  const starts = new Float64Array(lens.length + 1);
-  let acc = 0;
-  for (let i = 0; i < lens.length; i++) {
-    starts[i] = acc;
-    acc += lens[i];
-  }
-  starts[lens.length] = acc;
-  return { names, starts, total: acc };
 }
 
 /**

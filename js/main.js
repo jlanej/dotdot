@@ -521,8 +521,76 @@ function clearOverlay() {
   updateLegend();
 }
 
-function computeDemo() {
-  submit({ type: 'demo', opts: matchOpts() });
+/**
+ * Default demo: a committed 1.6 Mb slice of real data — T2T-CHM13
+ * chr17:18.0–19.6 Mb (17p11.2) versus the corresponding regions of both
+ * NA19240 haplotypes — computed alignment-free, with minimap2's calls
+ * arriving as the audit overlay.
+ */
+async function loadDemo17p11() {
+  try {
+    const [t, q, o] = await Promise.all([
+      fetchAsFile('testdata/17p11/chr17_17p11.fa.gz'),
+      fetchAsFile('testdata/17p11/NA19240_17p11.fa.gz'),
+      fetchAsFile('testdata/17p11/minimap2_17p11.paf'),
+    ]);
+    pendingOverlayBuf = o.buf;
+    overlayName = o.name;
+    // Open on structure (the region is segdup-dense); the length slider
+    // reveals the full repeat fabric live.
+    inMinLen.value = '500';
+    setFasta('query', q);
+    setFasta('target', t);
+    toast(
+      'Real data, alignment-free: chr17 17p11.2 (18.0–19.6 Mb) vs both NA19240 haplotypes. ' +
+        'The orange anti-diagonals are a 250 kb inversion (hap1) and an inverted duplication ' +
+        '(hap2) — a heterozygous SV. minimap2’s calls overlay as ink lines with diamond ends.',
+    );
+  } catch (err) {
+    toast(err instanceof Error ? err.message : String(err), true);
+  }
+}
+
+/**
+ * Full chr17 × NA19240: alignment-free when the fetched FASTAs are present
+ * (scripts/fetch_realdata.sh), otherwise the committed aligner PAF with a
+ * pointer to the script.
+ */
+async function loadFullChr17() {
+  const T = 'testdata/real/chr17.fa';
+  const Q = 'testdata/real/NA19240_chr17.fa';
+  try {
+    const [tHead, qHead] = await Promise.all([
+      fetch(T, { method: 'HEAD' }).catch(() => null),
+      fetch(Q, { method: 'HEAD' }).catch(() => null),
+    ]);
+    if (tHead?.ok && qHead?.ok) {
+      inK.value = '16';
+      outK.textContent = '16';
+      const o = await fetchAsFile('testdata/real/NA19240_vs_chm13_chr17.paf');
+      pendingOverlayBuf = o.buf;
+      overlayName = o.name;
+      toast(
+        'Computing the full 84 Mb × 170 Mb chr17 comparison alignment-free — this takes minutes ' +
+          '(Cancel anytime). minimap2’s calls will overlay when it finishes.',
+      );
+      const t = await fetchAsFile(T);
+      const q = await fetchAsFile(Q);
+      setFasta('query', q);
+      setFasta('target', t);
+    } else {
+      const f = await fetchAsFile('testdata/real/NA19240_vs_chm13_chr17.paf');
+      pendingRegion = 'chr17:18.3M-19.4M';
+      setChip('chip-paf', f);
+      computePaf(f.buf);
+      toast(
+        'Full-chromosome FASTAs are not present (run scripts/fetch_realdata.sh to get them) — ' +
+          'showing the aligner’s PAF view instead.',
+      );
+    }
+  } catch (err) {
+    toast(err instanceof Error ? err.message : String(err), true);
+  }
 }
 
 // --------------------------------------------------------------------------
@@ -1091,8 +1159,10 @@ function updateReadout(p) {
 // Keyboard
 
 window.addEventListener('keydown', (e) => {
-  const t = /** @type {HTMLElement} */ (e.target);
-  if (t.closest('input, select, textarea, button')) return;
+  const t = /** @type {HTMLElement | null} */ (e.target instanceof HTMLElement ? e.target : null);
+  // Only typing contexts swallow shortcuts — a residually-focused button
+  // (just clicked) must not eat R/G/arrow keys.
+  if (t && t.closest('input, select, textarea')) return;
   if (!state.view) return;
   const { pw, ph } = state.sizes;
   const pan = 80;
@@ -1176,34 +1246,11 @@ for (const el of [inK, inGap, inMaxOcc, inMinRun]) {
 
 btnCompute.addEventListener('click', () => {
   if (state.fileTarget) computeKmer();
-  else if (state.data?.source === 'kmer') computeDemo();
 });
-$('btn-demo').addEventListener('click', computeDemo);
-$('btn-demo2').addEventListener('click', computeDemo);
-
-/**
- * Real-data demo: the committed minimap2 PAF of T2T-CHM13 chr17 vs both
- * NA19240 haplotypes (HPRC Release 2), jumped straight to the heterozygous
- * 17p11.2 inversion. (The FASTAs for the alignment-free version are 170 MB —
- * scripts/fetch_realdata.sh fetches them.)
- */
-async function loadRealDemo() {
-  try {
-    const f = await fetchAsFile('testdata/real/NA19240_vs_chm13_chr17.paf');
-    pendingRegion = 'chr17:18.3M-19.4M';
-    setChip('chip-paf', f);
-    computePaf(f.buf);
-    toast(
-      'Real data: T2T-CHM13 chr17 vs NA19240 (HPRC R2), aligner view — jumped to the heterozygous ' +
-        '17p11.2 inversion; press Go again to flip haplotypes. For the alignment-free version, run ' +
-        'scripts/fetch_realdata.sh and load the FASTAs.',
-    );
-  } catch (err) {
-    toast(err instanceof Error ? err.message : String(err), true);
-  }
-}
-$('btn-demo-real').addEventListener('click', () => void loadRealDemo());
-$('btn-demo-real2').addEventListener('click', () => void loadRealDemo());
+$('btn-demo').addEventListener('click', () => void loadDemo17p11());
+$('btn-demo2').addEventListener('click', () => void loadDemo17p11());
+$('btn-demo-real').addEventListener('click', () => void loadFullChr17());
+$('btn-demo-real2').addEventListener('click', () => void loadFullChr17());
 chkOverlay.addEventListener('change', () => {
   updateLegend();
   markDirty();
@@ -1345,6 +1392,112 @@ function fatal(msg) {
 }
 
 // --------------------------------------------------------------------------
+// Help popovers: little "?" buttons across the UI, one shared popover.
+
+const HELP = {
+  controls:
+    '<b>Mouse</b><br>drag — pan · wheel — zoom (Alt = x-only) · shift-drag — box zoom · ' +
+    'double-click — zoom in (shift = out) · hover — inspect a match<br><b>Keys</b><br>' +
+    '<kbd>R</kbd>/<kbd>0</kbd> fit · <kbd>G</kbd> region box · <kbd>+</kbd>/<kbd>−</kbd> zoom · ' +
+    'arrows pan · <kbd>1</kbd>/<kbd>2</kbd> strand toggles · <kbd>P</kbd> fps meter',
+  data:
+    'Target FASTA = x axis, query FASTA = y axis (one file → self-plot). dotdot computes matches ' +
+    'itself, alignment-free; gzipped files are fine. Multi-sequence files get boundary gridlines.',
+  matching:
+    'These change what is <i>computed</i> — press Recompute after editing. The Display section ' +
+    'below applies instantly, without recomputing.',
+  k:
+    'Exact-match word size. Longer k → fewer chance matches and faster, but blinder to diverged ' +
+    'sequence. 15 suits most comparisons; 16 helps at chromosome scale.',
+  gap:
+    'Merge co-linear matches on one diagonal across up to this many mismatched bases. Larger ' +
+    'values give longer, cleaner segments; the bridged mismatch shows up as reduced identity.',
+  occ:
+    'Skip k-mers occurring more often than this in the target — repeat masking. At genome scale ' +
+    'the cutoff also auto-tightens using the index’s own occurrence histogram, so Alu-scale ' +
+    'repeat families can’t flood the plot.',
+  minrun:
+    'Drop merged runs shorter than this at compute time. At genome scale a small evidence filter ' +
+    'applies automatically.',
+  minident:
+    'Hide segments below this identity (matched fraction after gap bridging; for aligner PAFs, ' +
+    'nmatch/alnlen). Instant — nothing recomputes.',
+  minlen:
+    '<b>The</b> dial at genome scale: low reveals the repeat fabric, high shows clean chromosome ' +
+    'structure. Dense results pick a sane starting value automatically. Instant.',
+  strands:
+    'Forward matches are blue; reverse-complement matches are orange — inversions appear as ' +
+    'orange anti-diagonals. Toggle with keys <kbd>1</kbd> and <kbd>2</kbd>.',
+  colorby:
+    '“identity” shades each segment by its matched fraction (legend ramps); “strand only” uses ' +
+    'flat blue/orange.',
+  minpx:
+    'Stretch tiny matches to a minimum on-screen size so small features remain visible when ' +
+    'zoomed way out.',
+  aspect: 'Lock both axes to the same bp-per-pixel scale, so perfect matches run at exactly 45°.',
+  region:
+    'Jump to a target region: <b>chr17:18.3M-19.4M</b>, a bare sequence name, or ' +
+    '<b>100,000-250,000</b>. The query axis frames whatever maps there; when a region maps to ' +
+    'several places (other haplotype, duplications), pressing Go again cycles through them.',
+  overlay:
+    'Drop an aligner’s PAF on an existing plot and its calls draw as ink lines with diamond ' +
+    'breakpoint markers over the alignment-free layer — the aligner’s story against the raw ' +
+    'sequence structure. Display filters never touch the overlay.',
+};
+
+const helpPop = document.createElement('div');
+helpPop.id = 'help-pop';
+helpPop.hidden = true;
+document.body.append(helpPop);
+
+/** @type {HTMLElement | null} */
+let helpAnchor = null;
+
+function closeHelp() {
+  helpPop.hidden = true;
+  helpAnchor = null;
+}
+
+document.addEventListener(
+  'click',
+  (e) => {
+    const t = /** @type {HTMLElement} */ (e.target);
+    const btn = t.closest('.help');
+    if (btn instanceof HTMLElement) {
+      // Keep the click from reaching the label/control underneath.
+      e.preventDefault();
+      e.stopPropagation();
+      if (helpAnchor === btn) {
+        closeHelp();
+        return;
+      }
+      const html = HELP[/** @type {keyof typeof HELP} */ (btn.dataset.help ?? '')];
+      if (!html) return;
+      helpPop.innerHTML = html;
+      helpPop.hidden = false;
+      helpAnchor = btn;
+      const r = btn.getBoundingClientRect();
+      helpPop.style.left = '0px';
+      helpPop.style.top = '0px';
+      const pw = helpPop.offsetWidth;
+      const ph = helpPop.offsetHeight;
+      let x = r.left;
+      let y = r.bottom + 6;
+      if (x + pw > innerWidth - 8) x = innerWidth - pw - 8;
+      if (y + ph > innerHeight - 8) y = r.top - ph - 6;
+      helpPop.style.left = `${Math.max(4, x)}px`;
+      helpPop.style.top = `${Math.max(4, y)}px`;
+    } else if (!helpPop.hidden && !t.closest('#help-pop')) {
+      closeHelp();
+    }
+  },
+  true,
+);
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeHelp();
+});
+
+// --------------------------------------------------------------------------
 // URL parameters: ?demo=1 | ?paf=url | ?target=url[&query=url] (+ k, gap, occ)
 
 async function initFromUrl() {
@@ -1358,7 +1511,7 @@ async function initFromUrl() {
   if (p.has('region')) pendingRegion = p.get('region');
   try {
     if (p.has('demo')) {
-      computeDemo();
+      await loadDemo17p11();
     } else if (p.has('paf')) {
       const f = await fetchAsFile(/** @type {string} */ (p.get('paf')));
       setChip('chip-paf', f);
