@@ -1,0 +1,19 @@
+# CI runs on GitHub's cloud runners only — nothing here ever installs on a
+# developer machine. Deno (a single static binary) typechecks the JSDoc-typed
+# source and runs the pure-logic tests. The app itself has no build step.
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+      - run: deno check js/main.js js/worker/compute.js js/worker/match.js
+      - run: deno test tests/

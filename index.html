@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
+  <meta name="description" content="dotdot — hyperperformant interactive genomic dot plots. FASTA k-mer engine and minimap2 PAF viewer, entirely in your browser." />
+  <title>dotdot · genomic dot plots</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Ccircle%20cx='11'%20cy='21'%20r='6'%20fill='%232a78d6'/%3E%3Ccircle%20cx='21'%20cy='11'%20r='6'%20fill='%23eb6834'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="./css/app.css" />
+</head>
+<body>
+  <header id="topbar">
+    <div id="wordmark" aria-label="dotdot">dot<span>dot</span></div>
+    <div id="tagline">alignment-free interactive genomic dot plots — raw k-mer structure straight from FASTA, entirely in your browser</div>
+  </header>
+
+  <div id="layout">
+    <aside id="sidebar">
+      <section class="panel">
+        <h2>Data</h2>
+        <div class="file-row">
+          <label class="file-btn" for="file-target">Target FASTA</label>
+          <input type="file" id="file-target" accept=".fa,.fasta,.fna,.gz,.txt" />
+          <span class="chip" id="chip-target">—</span>
+        </div>
+        <div class="file-row">
+          <label class="file-btn" for="file-query">Query FASTA</label>
+          <input type="file" id="file-query" accept=".fa,.fasta,.fna,.gz,.txt" />
+          <span class="chip" id="chip-query">= target</span>
+        </div>
+        <p class="hint">Drop files anywhere. One FASTA → self plot; add a second as query. dotdot computes the plot itself — alignment-free, no aligner in the loop, chromosome scale included.</p>
+        <div class="btn-row">
+          <button id="btn-demo" class="btn">Demo genomes</button>
+          <button id="btn-clear" class="btn subtle">Clear</button>
+        </div>
+        <div class="file-row" style="margin-top: 12px">
+          <label class="file-btn" for="file-paf">Aligner PAF</label>
+          <input type="file" id="file-paf" accept=".paf,.gz,.txt" />
+          <span class="chip" id="chip-paf">—</span>
+        </div>
+        <p class="hint">Optional: load an aligner's PAF (minimap2 etc., .gz ok) to inspect what it called — and compare against the raw k-mer truth.</p>
+      </section>
+
+      <section class="panel">
+        <h2>Matching</h2>
+        <div class="ctl">
+          <label for="in-k">k-mer size <output id="out-k">15</output></label>
+          <input type="range" id="in-k" min="8" max="16" step="1" value="15" />
+        </div>
+        <div class="ctl">
+          <label for="in-gap">bridge gaps ≤</label>
+          <select id="in-gap">
+            <option value="0">0 · exact runs</option>
+            <option value="4">4 bp</option>
+            <option value="16">16 bp</option>
+            <option value="64" selected>64 bp</option>
+            <option value="256">256 bp</option>
+          </select>
+        </div>
+        <div class="ctl">
+          <label for="in-maxocc">skip k-mers with ></label>
+          <select id="in-maxocc">
+            <option value="50">50 hits</option>
+            <option value="200" selected>200 hits</option>
+            <option value="1000">1000 hits</option>
+          </select>
+        </div>
+        <div class="ctl">
+          <label for="in-minrun">min match length</label>
+          <select id="in-minrun">
+            <option value="0" selected>off</option>
+            <option value="30">30 bp</option>
+            <option value="100">100 bp</option>
+            <option value="300">300 bp</option>
+            <option value="1000">1 kb</option>
+          </select>
+        </div>
+        <button id="btn-compute" class="btn primary" disabled>Compute dot plot</button>
+      </section>
+
+      <section class="panel">
+        <h2>Display</h2>
+        <div class="ctl">
+          <label for="in-minident">min identity <output id="out-minident">off</output></label>
+          <input type="range" id="in-minident" min="0" max="1" step="0.005" value="0" />
+        </div>
+        <div class="ctl">
+          <label for="in-minlen">min segment length</label>
+          <select id="in-minlen">
+            <option value="0" selected>off</option>
+            <option value="100">100 bp</option>
+            <option value="500">500 bp</option>
+            <option value="2000">2 kb</option>
+            <option value="10000">10 kb</option>
+            <option value="50000">50 kb</option>
+          </select>
+        </div>
+        <div class="ctl checks">
+          <label><input type="checkbox" id="chk-fwd" checked /><span class="swatch" id="sw-fwd"></span>forward</label>
+          <label><input type="checkbox" id="chk-rev" checked /><span class="swatch" id="sw-rev"></span>reverse</label>
+        </div>
+        <div class="ctl">
+          <label for="sel-colormode">color by</label>
+          <select id="sel-colormode">
+            <option value="0" selected>identity</option>
+            <option value="1">strand only</option>
+          </select>
+        </div>
+        <div class="ctl">
+          <label for="in-width">line width <output id="out-width">2</output></label>
+          <input type="range" id="in-width" min="1" max="4" step="0.5" value="2" />
+        </div>
+        <div class="ctl checks">
+          <label><input type="checkbox" id="chk-minpx" checked />emphasize small matches</label>
+        </div>
+        <div class="ctl checks">
+          <label><input type="checkbox" id="chk-aspect" />lock 1:1 bp aspect</label>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Legend</h2>
+        <div id="legend" class="empty">no data</div>
+      </section>
+
+      <section class="panel">
+        <h2>Plot</h2>
+        <div class="ctl">
+          <label for="in-region">go to target region <kbd>G</kbd></label>
+          <div class="region-row">
+            <input type="text" id="in-region" placeholder="chr17:45M-46.5M" spellcheck="false" autocomplete="off" />
+            <button id="btn-region" class="btn">Go</button>
+          </div>
+        </div>
+        <dl id="stats"></dl>
+        <div class="btn-row">
+          <button id="btn-fit" class="btn">Fit <kbd>R</kbd></button>
+          <button id="btn-png" class="btn" disabled>PNG</button>
+          <button id="btn-svg" class="btn" disabled>SVG</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Hover</h2>
+        <div id="hover-card" class="empty">nothing under the cursor</div>
+      </section>
+    </aside>
+
+    <main id="plot-root">
+      <canvas id="underlay"></canvas>
+      <canvas id="glcanvas" hidden></canvas>
+      <canvas id="overlay"></canvas>
+      <div id="tooltip" hidden></div>
+      <div id="empty-state">
+        <div class="dots" aria-hidden="true">··</div>
+        <p><strong>Drop FASTA files</strong> for an alignment-free dot plot<br />
+          (or an aligner's PAF, to audit it) — or try the
+          <button id="btn-demo2" class="linklike">demo genomes</button></p>
+      </div>
+      <div id="progress" hidden>
+        <div id="progress-panel">
+          <div id="progress-label">Working…</div>
+          <div id="progress-track"><div id="progress-bar"></div></div>
+          <button id="btn-cancel" class="btn subtle">Cancel</button>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <footer id="statusbar">
+    <div id="readout">—</div>
+    <div id="hints">drag pan · wheel zoom · shift-drag box zoom · double-click zoom · <kbd>R</kbd> fit · <kbd>P</kbd> fps</div>
+  </footer>
+
+  <div id="toast" hidden></div>
+  <script type="module" src="./js/main.js"></script>
+</body>
+</html>
