@@ -8,7 +8,7 @@ import { View } from './core/transform.js';
 import { SegmentGrid } from './core/grid.js';
 import { segmentEndpoints } from './core/types.js';
 import { locate } from './core/catalog.js';
-import { resolveRegion } from './core/region.js';
+import { resolveRegion, parseBp } from './core/region.js';
 import { GlRenderer } from './render/gl.js';
 import { drawUnderlay, drawOverlay, LAYOUT } from './render/axes.js';
 import { buildColormap, hexToRgb } from './render/colormap.js';
@@ -40,13 +40,13 @@ const legendEl = $('legend');
 const statsEl = $('stats');
 
 const inK = /** @type {HTMLInputElement} */ ($('in-k'));
-const outK = $('out-k');
-const inGap = /** @type {HTMLSelectElement} */ ($('in-gap'));
-const inMaxOcc = /** @type {HTMLSelectElement} */ ($('in-maxocc'));
-const inMinRun = /** @type {HTMLSelectElement} */ ($('in-minrun'));
+const inKNum = /** @type {HTMLInputElement} */ ($('in-k-num'));
+const inGap = /** @type {HTMLInputElement} */ ($('in-gap'));
+const inMaxOcc = /** @type {HTMLInputElement} */ ($('in-maxocc'));
+const inMinRun = /** @type {HTMLInputElement} */ ($('in-minrun'));
 const inMinIdent = /** @type {HTMLInputElement} */ ($('in-minident'));
 const outMinIdent = $('out-minident');
-const inMinLen = /** @type {HTMLSelectElement} */ ($('in-minlen'));
+const inMinLen = /** @type {HTMLInputElement} */ ($('in-minlen'));
 const chkFwd = /** @type {HTMLInputElement} */ ($('chk-fwd'));
 const chkRev = /** @type {HTMLInputElement} */ ($('chk-rev'));
 const selColorMode = /** @type {HTMLSelectElement} */ ($('sel-colormode'));
@@ -244,8 +244,7 @@ function runPool(plan) {
       kmersSab: plan.kmersSab,
       posSab: plan.posSab,
       bucketsSab: plan.bucketsSab,
-      shift: plan.shift,
-      mask: plan.mask,
+      indexMeta: plan.indexMeta,
       opts: plan.opts,
       qStarts: plan.qStarts,
       rcStarts: plan.rcStarts,
@@ -355,12 +354,30 @@ function setComputing(on) {
 // --------------------------------------------------------------------------
 // Options
 
+/**
+ * Parse a length-ish field that accepts presets or free text: "off"/"" → 0,
+ * otherwise any bp expression ("64", "1kb", "2,500").
+ * @param {string} text @param {number} [fallback]
+ */
+function parseLenOff(text, fallback = 0) {
+  const t = text.trim().toLowerCase();
+  if (t === '' || t === 'off' || t === '0') return 0;
+  const v = parseBp(t);
+  return Number.isFinite(v) && v >= 0 ? Math.round(v) : fallback;
+}
+
+/** Current k, clamped to the engine's 4..26 range. */
+function currentK() {
+  const v = Math.round(Number(inKNum.value));
+  return Number.isFinite(v) ? Math.min(26, Math.max(4, v)) : 15;
+}
+
 function matchOpts() {
   return {
-    k: Number(inK.value),
-    maxGap: Number(inGap.value),
-    maxOcc: Number(inMaxOcc.value),
-    minRunLen: Number(inMinRun.value),
+    k: currentK(),
+    maxGap: parseLenOff(inGap.value, 64),
+    maxOcc: Math.max(1, parseLenOff(inMaxOcc.value, 200) || 200),
+    minRunLen: parseLenOff(inMinRun.value, 0),
     stride: 1,
   };
 }
@@ -370,7 +387,7 @@ function displayOpts() {
     showFwd: chkFwd.checked,
     showRev: chkRev.checked,
     minIdentity: Number(inMinIdent.value),
-    minLenBp: Number(inMinLen.value),
+    minLenBp: parseLenOff(inMinLen.value, 0),
     colorMode: /** @type {0|1} */ (Number(selColorMode.value)),
     widthPx: Number(inWidth.value),
     minLenPx: chkMinPx.checked ? 2.2 : 0,
@@ -426,7 +443,7 @@ function onData(data) {
   // Dense k-mer results (genome scale) default to a structural view: pick the
   // smallest display length filter that keeps the drawn count sane. The data
   // is all there — the slider reveals it live, no recompute.
-  if (data.source === 'kmer' && data.segments.count > 2_000_000 && Number(inMinLen.value) === 0) {
+  if (data.source === 'kmer' && data.segments.count > 2_000_000 && parseLenOff(inMinLen.value) === 0) {
     const dx = data.segments.dx;
     const n = data.segments.count;
     const options = [100, 500, 2000, 10000, 50000];
@@ -522,29 +539,30 @@ function clearOverlay() {
 }
 
 /**
- * Default demo: a committed 1.6 Mb slice of real data — T2T-CHM13
- * chr17:18.0–19.6 Mb (17p11.2) versus the corresponding regions of both
- * NA19240 haplotypes — computed alignment-free, with minimap2's calls
- * arriving as the audit overlay.
+ * Default demo: two committed slices of real chr17 vs both NA19240
+ * haplotypes, computed alignment-free with minimap2's calls as the audit
+ * overlay — 17p11.2 (18.0–19.6 Mb: heterozygous 250 kb inversion + inverted
+ * duplication) and the ROI at 10.75–11.05 Mb (heterozygous ~4.9 kb deletion
+ * at 10.895 Mb, hap2).
  */
-async function loadDemo17p11() {
+async function loadDemo() {
   try {
     const [t, q, o] = await Promise.all([
-      fetchAsFile('testdata/17p11/chr17_17p11.fa.gz'),
-      fetchAsFile('testdata/17p11/NA19240_17p11.fa.gz'),
-      fetchAsFile('testdata/17p11/minimap2_17p11.paf'),
+      fetchAsFile('testdata/demo/target.fa.gz'),
+      fetchAsFile('testdata/demo/query.fa.gz'),
+      fetchAsFile('testdata/demo/minimap2_demo.paf'),
     ]);
     pendingOverlayBuf = o.buf;
     overlayName = o.name;
-    // Open on structure (the region is segdup-dense); the length slider
+    // Open on structure (17p11.2 is segdup-dense); the length slider
     // reveals the full repeat fabric live.
     inMinLen.value = '500';
     setFasta('query', q);
     setFasta('target', t);
     toast(
-      'Real data, alignment-free: chr17 17p11.2 (18.0–19.6 Mb) vs both NA19240 haplotypes. ' +
-        'The orange anti-diagonals are a 250 kb inversion (hap1) and an inverted duplication ' +
-        '(hap2) — a heterozygous SV. minimap2’s calls overlay as ink lines with diamond ends.',
+      'Real chr17 loci vs both NA19240 haplotypes, alignment-free. 17p11.2: heterozygous 250 kb ' +
+        'inversion (hap1) + inverted duplication (hap2). ROI10.9: heterozygous ~5 kb deletion — ' +
+        'press G and jump to chr17_ROI10.9:130k-170k. minimap2’s calls overlay in ink.',
     );
   } catch (err) {
     toast(err instanceof Error ? err.message : String(err), true);
@@ -566,7 +584,7 @@ async function loadFullChr17() {
     ]);
     if (tHead?.ok && qHead?.ok) {
       inK.value = '16';
-      outK.textContent = '16';
+      inKNum.value = '16';
       const o = await fetchAsFile('testdata/real/NA19240_vs_chm13_chr17.paf');
       pendingOverlayBuf = o.buf;
       overlayName = o.name;
@@ -778,7 +796,7 @@ function jumpToRegion(expr) {
       // Distant mapping locations (e.g. the two haplotype bands) cannot share
       // one compact viewport — cluster the intervals and frame the heaviest.
       iv.sort((p, q) => p.a - q.a);
-      const gapLimit = Math.max(3 * span, 2e6);
+      const gapLimit = Math.max(3 * span, Math.min(2e6, qTotal * 0.05));
       /** @type {{a: number, b: number, w: number}[]} */
       const clusters = [];
       for (const seg of iv) {
@@ -1216,7 +1234,16 @@ window.addEventListener('keydown', (e) => {
 // --------------------------------------------------------------------------
 // Sidebar wiring
 
-inK.addEventListener('input', () => (outK.textContent = inK.value));
+// k slider and its editable number stay in lockstep; the number accepts the
+// full engine range (4..26) even though the slider starts at 8.
+inK.addEventListener('input', () => {
+  inKNum.value = inK.value;
+});
+inKNum.addEventListener('change', () => {
+  const k = currentK();
+  inKNum.value = String(k);
+  inK.value = String(Math.min(26, Math.max(8, k)));
+});
 inWidth.addEventListener('input', () => {
   outWidth.textContent = inWidth.value;
   markDirty();
@@ -1232,11 +1259,12 @@ for (const el of [inMinLen, selColorMode]) {
     markDirty();
   });
 }
+inMinLen.addEventListener('input', markDirty); // live while typing
 for (const el of [chkFwd, chkRev, chkMinPx]) {
   el.addEventListener('change', markDirty);
 }
 chkAspect.addEventListener('change', fitView);
-for (const el of [inK, inGap, inMaxOcc, inMinRun]) {
+for (const el of [inK, inKNum, inGap, inMaxOcc, inMinRun]) {
   el.addEventListener('change', () => {
     if (state.data?.source === 'kmer' || state.fileTarget) {
       btnCompute.disabled = state.computing || (!state.fileTarget && state.data?.source !== 'kmer');
@@ -1247,8 +1275,8 @@ for (const el of [inK, inGap, inMaxOcc, inMinRun]) {
 btnCompute.addEventListener('click', () => {
   if (state.fileTarget) computeKmer();
 });
-$('btn-demo').addEventListener('click', () => void loadDemo17p11());
-$('btn-demo2').addEventListener('click', () => void loadDemo17p11());
+$('btn-demo').addEventListener('click', () => void loadDemo());
+$('btn-demo2').addEventListener('click', () => void loadDemo());
 $('btn-demo-real').addEventListener('click', () => void loadFullChr17());
 $('btn-demo-real2').addEventListener('click', () => void loadFullChr17());
 chkOverlay.addEventListener('change', () => {
@@ -1407,24 +1435,27 @@ const HELP = {
     'These change what is <i>computed</i> — press Recompute after editing. The Display section ' +
     'below applies instantly, without recomputing.',
   k:
-    'Exact-match word size. Longer k → fewer chance matches and faster, but blinder to diverged ' +
-    'sequence. 15 suits most comparisons; 16 helps at chromosome scale.',
+    'Exact-match word size — type any value from <b>4 to 26</b> (the slider covers 8+). Longer k ' +
+    '→ fewer chance matches and faster, but blinder to diverged sequence; 15 suits most ' +
+    'comparisons, 16–21 helps at chromosome scale. k above 16 doubles index memory.',
   gap:
-    'Merge co-linear matches on one diagonal across up to this many mismatched bases. Larger ' +
-    'values give longer, cleaner segments; the bridged mismatch shows up as reduced identity.',
+    'Merge co-linear matches on one diagonal across up to this many mismatched bases. Type any ' +
+    'value ("64", "1kb", …) — presets are suggestions. Larger values give longer, cleaner ' +
+    'segments; the bridged mismatch shows up as reduced identity.',
   occ:
-    'Skip k-mers occurring more often than this in the target — repeat masking. At genome scale ' +
-    'the cutoff also auto-tightens using the index’s own occurrence histogram, so Alu-scale ' +
-    'repeat families can’t flood the plot.',
+    'Skip k-mers occurring more often than this in the target — repeat masking. Any number ' +
+    'works; presets are suggestions. At genome scale the cutoff also auto-tightens using the ' +
+    'index’s own occurrence histogram, so Alu-scale repeat families can’t flood the plot.',
   minrun:
-    'Drop merged runs shorter than this at compute time. At genome scale a small evidence filter ' +
-    'applies automatically.',
+    'Drop merged runs shorter than this at compute time ("off", "30", "1kb", any value). At ' +
+    'genome scale a small evidence filter applies automatically.',
   minident:
     'Hide segments below this identity (matched fraction after gap bridging; for aligner PAFs, ' +
     'nmatch/alnlen). Instant — nothing recomputes.',
   minlen:
     '<b>The</b> dial at genome scale: low reveals the repeat fabric, high shows clean chromosome ' +
-    'structure. Dense results pick a sane starting value automatically. Instant.',
+    'structure. Type anything ("off", "750", "2kb") — it applies live as you type. Dense results ' +
+    'pick a sane starting value automatically.',
   strands:
     'Forward matches are blue; reverse-complement matches are orange — inversions appear as ' +
     'orange anti-diagonals. Toggle with keys <kbd>1</kbd> and <kbd>2</kbd>.',
@@ -1503,15 +1534,15 @@ window.addEventListener('keydown', (e) => {
 async function initFromUrl() {
   const p = new URLSearchParams(location.search);
   if (p.has('k')) {
-    inK.value = p.get('k') ?? inK.value;
-    outK.textContent = inK.value;
+    inKNum.value = p.get('k') ?? inKNum.value;
+    inK.value = String(Math.min(26, Math.max(8, currentK())));
   }
   if (p.has('gap')) inGap.value = p.get('gap') ?? inGap.value;
   if (p.has('occ')) inMaxOcc.value = p.get('occ') ?? inMaxOcc.value;
   if (p.has('region')) pendingRegion = p.get('region');
   try {
     if (p.has('demo')) {
-      await loadDemo17p11();
+      await loadDemo();
     } else if (p.has('paf')) {
       const f = await fetchAsFile(/** @type {string} */ (p.get('paf')));
       setChip('chip-paf', f);

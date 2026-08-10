@@ -125,10 +125,11 @@ function computeKmer(id, tParsed, qParsed, optsIn, t0) {
     const qTotal = qParsed.catalog.total;
     const tTotal = tParsed.catalog.total;
     const rcCodes = reverseComplement(qParsed.codes);
-    /** @param {Uint8Array | Uint32Array} src @param {'u8'|'u32'} kind */
+    /** @param {Uint8Array | Uint32Array | Float64Array} src @param {'u8'|'u32'|'f64'} kind */
     const toSab = (src, kind) => {
       const sab = new SharedArrayBuffer(src.byteLength);
-      const view = kind === 'u8' ? new Uint8Array(sab) : new Uint32Array(sab);
+      const view =
+        kind === 'u8' ? new Uint8Array(sab) : kind === 'u32' ? new Uint32Array(sab) : new Float64Array(sab);
       view.set(/** @type {any} */ (src));
       return sab;
     };
@@ -148,11 +149,19 @@ function computeKmer(id, tParsed, qParsed, optsIn, t0) {
         cores,
         qSab: toSab(qParsed.codes, 'u8'),
         rcSab: toSab(rcCodes, 'u8'),
-        kmersSab: toSab(index.kmers, 'u32'),
+        kmersSab: toSab(index.kmers, index.wide ? 'f64' : 'u32'),
         posSab: toSab(index.pos, 'u32'),
         bucketsSab: toSab(index.bucketStarts, 'u32'),
-        shift: index.shift,
-        mask: index.mask,
+        // One bundle for every scalar the matcher needs to reconstruct the
+        // index — forwarded wholesale so new fields can't be dropped en route.
+        indexMeta: {
+          k: effOpts.k,
+          wide: index.wide,
+          shift: index.shift,
+          mask: index.mask,
+          top: index.top,
+          prefDiv: index.prefDiv,
+        },
         opts: effOpts,
         qStarts: qParsed.catalog.starts,
         rcStarts: mirrorStarts(qParsed.catalog.starts),

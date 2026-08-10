@@ -220,7 +220,8 @@ input[type='range'] {
   margin: 2px 0;
 }
 
-select {
+select,
+input.combo {
   width: 100%;
   padding: 4px 6px;
   border: 1px solid var(--border);
@@ -228,6 +229,28 @@ select {
   background: var(--panel);
   color: var(--ink);
   font: inherit;
+}
+
+input.combo {
+  font-variant-numeric: tabular-nums;
+}
+
+input.combo:focus,
+.ctl input[type='number']:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.ctl input[type='number'] {
+  width: 56px;
+  padding: 2px 4px 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
 }
 
 .region-row {

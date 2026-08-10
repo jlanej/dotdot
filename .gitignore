@@ -2,6 +2,6 @@
 *.local
 .tmp*/
 testdata/*.fa
-testdata/17p11/*.fa
+testdata/demo/*.fa
 testdata/real/*
 !testdata/real/NA19240_vs_chm13_chr17.paf

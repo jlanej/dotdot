@@ -73,16 +73,24 @@ No installation. Serve the repo statically and open it:
 python3 scripts/serve.py
 ```
 
-Then visit <http://127.0.0.1:8420/> and click **Demo: 17p11.2** — real data,
-computed alignment-free in your browser: a committed 1.6 Mb slice of
-T2T-CHM13 chr17 (18.0–19.6 Mb) against the corresponding regions of both
-NA19240 haplotypes, with minimap2's calls arriving as the audit overlay. The
-orange anti-diagonals are a heterozygous SV: a 250 kb inversion on hap1 and
-an inverted duplication on hap2. **Full chr17** runs the same comparison at
-whole-chromosome scale — alignment-free whenever the fetched FASTAs are
-present (`scripts/fetch_realdata.sh`), falling back to the committed aligner
-PAF on a fresh clone. Every control has a **?** popover, and the header **?**
-is the mouse/keyboard cheat-sheet.
+Then visit <http://127.0.0.1:8420/> and click **Demo: chr17 loci** — real
+data, computed alignment-free in your browser: two committed slices of
+T2T-CHM13 chr17 against the corresponding regions of both NA19240
+haplotypes, with minimap2's calls arriving as the audit overlay.
+
+- **17p11.2** (chr17:18.0–19.6 Mb): a heterozygous SV pair — a 250 kb
+  inversion on hap1 and an inverted duplication on hap2 (orange
+  anti-diagonals).
+- **ROI10.9** (chr17:10.75–11.05 Mb): a heterozygous **~4.9 kb deletion** at
+  chr17:10.895 Mb — hap2's diagonal steps sideways while hap1 runs straight
+  through. Jump to it with `G` → `chr17_ROI10.9:130k-170k`.
+
+**Full chr17** runs the whole-chromosome comparison — alignment-free
+whenever the fetched FASTAs are present (`scripts/fetch_realdata.sh`),
+falling back to the committed aligner PAF on a fresh clone. Every control has
+a **?** popover (all matching/display fields accept free values — `1kb`,
+`2,500`, anything parseable — with presets as suggestions; k is editable from
+4 to 26), and the header **?** is the mouse/keyboard cheat-sheet.
 
 ![the 17p11.2 demo: alignment-free k-mer structure of a heterozygous SV with minimap2's calls overlaid](docs/demo_17p11.png) Any static file server works; GitHub Pages can host it as-is. The
 bundled server also sends `Cross-Origin-Opener-Policy: same-origin` and
@@ -137,10 +145,11 @@ on an Apple-silicon laptop:
 |---|---|
 | ![250 kb inversion at 17p11.2 in NA19240 hap1](docs/sv_17p11.png) | ![k-mer engine view of the inverted duplication](docs/sv_17p11_kmer.png) |
 
-One-click versions of this dataset live on the demo buttons: **Demo: 17p11.2**
-(committed 1.4 MB of gzipped FASTA — always alignment-free) and **Full chr17**
-(alignment-free when `scripts/fetch_realdata.sh` has run; the committed 574 kB
-minimap2 PAF otherwise).
+One-click versions of this dataset live on the demo buttons: **Demo: chr17
+loci** (committed 1.7 MB of gzipped FASTA — always alignment-free, including
+the heterozygous 4.9 kb deletion at chr17:10.895 Mb) and **Full chr17**
+(alignment-free when `scripts/fetch_realdata.sh` has run; the committed
+574 kB minimap2 PAF otherwise).
 
 ## Auditing an aligner
 

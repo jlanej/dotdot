@@ -32,7 +32,7 @@
         </div>
         <p class="hint">Drop files anywhere. One FASTA → self plot; add a second as query. dotdot computes the plot itself — alignment-free, no aligner in the loop, chromosome scale included.</p>
         <div class="btn-row">
-          <button id="btn-demo" class="btn" title="Real 1.6 Mb slice: chr17 17p11.2 vs both NA19240 haplotypes, alignment-free">Demo: 17p11.2</button>
+          <button id="btn-demo" class="btn" title="Real chr17 slices (17p11.2 + the 10.9 Mb ROI) vs both NA19240 haplotypes, alignment-free">Demo: chr17 loci</button>
           <button id="btn-demo-real" class="btn" title="Whole chr17 vs both NA19240 haplotypes — alignment-free when the fetched FASTAs are present">Full chr17</button>
           <button id="btn-clear" class="btn subtle">Clear</button>
         </div>
@@ -51,36 +51,40 @@
       <section class="panel">
         <h2>Matching <button class="help" data-help="matching" aria-label="about matching options">?</button></h2>
         <div class="ctl">
-          <label for="in-k">k-mer size <button class="help" data-help="k">?</button> <output id="out-k">15</output></label>
-          <input type="range" id="in-k" min="8" max="16" step="1" value="15" />
+          <label for="in-k">k-mer size <button class="help" data-help="k">?</button>
+            <input type="number" id="in-k-num" min="4" max="26" step="1" value="15" /></label>
+          <input type="range" id="in-k" min="8" max="26" step="1" value="15" />
         </div>
         <div class="ctl">
           <label for="in-gap">bridge gaps ≤ <button class="help" data-help="gap">?</button></label>
-          <select id="in-gap">
-            <option value="0">0 · exact runs</option>
-            <option value="4">4 bp</option>
-            <option value="16">16 bp</option>
-            <option value="64" selected>64 bp</option>
-            <option value="256">256 bp</option>
-          </select>
+          <input type="text" id="in-gap" class="combo" list="dl-gap" value="64" spellcheck="false" autocomplete="off" />
+          <datalist id="dl-gap">
+            <option value="0" label="exact runs"></option>
+            <option value="4"></option>
+            <option value="16"></option>
+            <option value="64"></option>
+            <option value="256"></option>
+          </datalist>
         </div>
         <div class="ctl">
           <label for="in-maxocc">skip k-mers with > <button class="help" data-help="occ">?</button></label>
-          <select id="in-maxocc">
-            <option value="50">50 hits</option>
-            <option value="200" selected>200 hits</option>
-            <option value="1000">1000 hits</option>
-          </select>
+          <input type="text" id="in-maxocc" class="combo" list="dl-occ" value="200" spellcheck="false" autocomplete="off" />
+          <datalist id="dl-occ">
+            <option value="50"></option>
+            <option value="200"></option>
+            <option value="1000"></option>
+          </datalist>
         </div>
         <div class="ctl">
           <label for="in-minrun">min match length <button class="help" data-help="minrun">?</button></label>
-          <select id="in-minrun">
-            <option value="0" selected>off</option>
-            <option value="30">30 bp</option>
-            <option value="100">100 bp</option>
-            <option value="300">300 bp</option>
-            <option value="1000">1 kb</option>
-          </select>
+          <input type="text" id="in-minrun" class="combo" list="dl-minrun" value="off" spellcheck="false" autocomplete="off" />
+          <datalist id="dl-minrun">
+            <option value="off"></option>
+            <option value="30"></option>
+            <option value="100"></option>
+            <option value="300"></option>
+            <option value="1kb"></option>
+          </datalist>
         </div>
         <button id="btn-compute" class="btn primary" disabled>Compute dot plot</button>
       </section>
@@ -93,14 +97,15 @@
         </div>
         <div class="ctl">
           <label for="in-minlen">min segment length <button class="help" data-help="minlen">?</button></label>
-          <select id="in-minlen">
-            <option value="0" selected>off</option>
-            <option value="100">100 bp</option>
-            <option value="500">500 bp</option>
-            <option value="2000">2 kb</option>
-            <option value="10000">10 kb</option>
-            <option value="50000">50 kb</option>
-          </select>
+          <input type="text" id="in-minlen" class="combo" list="dl-minlen" value="off" spellcheck="false" autocomplete="off" />
+          <datalist id="dl-minlen">
+            <option value="off"></option>
+            <option value="100"></option>
+            <option value="500"></option>
+            <option value="2kb"></option>
+            <option value="10kb"></option>
+            <option value="50kb"></option>
+          </datalist>
         </div>
         <div class="ctl checks">
           <label><input type="checkbox" id="chk-fwd" checked /><span class="swatch" id="sw-fwd"></span>forward</label>
@@ -165,7 +170,7 @@
         <div class="dots" aria-hidden="true">··</div>
         <p><strong>Drop FASTA files</strong> for an alignment-free dot plot<br />
           (or an aligner's PAF, to audit it) — try real data:
-          <button id="btn-demo2" class="linklike">17p11.2 demo</button> or the
+          <button id="btn-demo2" class="linklike">chr17 loci demo</button> or the
           <button id="btn-demo-real2" class="linklike">full chr17 × NA19240</button></p>
       </div>
       <div id="progress" hidden>

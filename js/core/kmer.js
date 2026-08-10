@@ -33,12 +33,15 @@
 
 /**
  * @typedef {Object} KmerIndex
- * @property {Uint32Array} kmers   packed k-mers, bucket-grouped and sorted within bucket
+ * @property {Uint32Array | Float64Array} kmers  packed k-mers, bucket-grouped, sorted within bucket
  * @property {Uint32Array} pos     target positions parallel to `kmers`
  * @property {Uint32Array} bucketStarts  length nBuckets+1
- * @property {number} shift        kmer >>> shift = bucket id
  * @property {number} k
- * @property {number} mask
+ * @property {boolean} wide        k > 16: k-mers are exact integers in Float64Array
+ * @property {number} shift        narrow path: kmer >>> shift = bucket id
+ * @property {number} mask         narrow path: rolling mask
+ * @property {number} top          wide path: 4^(k-1), the leading-base place value
+ * @property {number} prefDiv      wide path: bucket id = floor(kmer / prefDiv)
  * @property {Float64Array} occSumSq  sum of occ^2 per occurrence class (index 1..1024)
  */
 
@@ -74,15 +77,21 @@ const PROGRESS_EVERY = 1 << 21;
  * @returns {KmerIndex}
  */
 export function buildIndex(codes, starts, k, stride, onProgress) {
-  if (k < 4 || k > 16) throw new Error(`k must be 4..16 (got ${k})`);
+  if (k < 4 || k > 26) throw new Error(`k must be 4..26 (got ${k})`);
   if (stride < 1) throw new Error('stride must be >= 1');
   const n = codes.length;
   if (n >= 2 ** 32 - 2) throw new Error('Sequence too large for in-browser matching — import a minimap2 PAF instead.');
 
+  // k <= 16 packs into a uint32 and rolls with bitwise ops; k <= 26 packs
+  // into the exact-integer range of a double (2k <= 52 bits) and rolls with
+  // top-digit-removal arithmetic — every value stays a bit-exact integer.
+  const wide = k > 16;
   const kbits = 2 * k;
-  const mask = kbits === 32 ? 0xffffffff : (1 << kbits) - 1;
+  const mask = wide ? 0 : kbits === 32 ? 0xffffffff : (1 << kbits) - 1;
+  const top = wide ? Math.pow(4, k - 1) : 0;
   const prefixBits = Math.min(22, Math.max(8, Math.ceil(Math.log2(Math.max(n, 256)))), kbits);
   const shift = kbits - prefixBits;
+  const prefDiv = wide ? Math.pow(2, shift) : 0;
   const nBuckets = 1 << prefixBits;
 
   // Pass 1: bucket occupancy.
@@ -98,14 +107,22 @@ export function buildIndex(codes, starts, k, stride, onProgress) {
       }
       const c = codes[i];
       if (c < 4) {
-        kmer = (((kmer << 2) | c) & mask) >>> 0;
+        if (wide) {
+          const hi = Math.floor(kmer / top);
+          kmer = (kmer - hi * top) * 4 + c;
+        } else {
+          kmer = (((kmer << 2) | c) & mask) >>> 0;
+        }
         run++;
       } else {
         run = 0;
       }
       if (run >= k) {
         const p = i - k + 1;
-        if (stride === 1 || p % stride === 0) bucketStarts[(kmer >>> shift) + 1]++;
+        if (stride === 1 || p % stride === 0) {
+          const b = wide ? Math.floor(kmer / prefDiv) : kmer >>> shift;
+          bucketStarts[b + 1]++;
+        }
       }
       if (onProgress && (i & (PROGRESS_EVERY - 1)) === 0) onProgress(i, 2 * n);
     }
@@ -113,7 +130,7 @@ export function buildIndex(codes, starts, k, stride, onProgress) {
 
   for (let b = 0; b < nBuckets; b++) bucketStarts[b + 1] += bucketStarts[b];
   const total = bucketStarts[nBuckets];
-  const kmers = new Uint32Array(total);
+  const kmers = wide ? new Float64Array(total) : new Uint32Array(total);
   const pos = new Uint32Array(total);
 
   // Pass 2: fill buckets.
@@ -129,7 +146,12 @@ export function buildIndex(codes, starts, k, stride, onProgress) {
       }
       const c = codes[i];
       if (c < 4) {
-        kmer = (((kmer << 2) | c) & mask) >>> 0;
+        if (wide) {
+          const hi = Math.floor(kmer / top);
+          kmer = (kmer - hi * top) * 4 + c;
+        } else {
+          kmer = (((kmer << 2) | c) & mask) >>> 0;
+        }
         run++;
       } else {
         run = 0;
@@ -137,7 +159,8 @@ export function buildIndex(codes, starts, k, stride, onProgress) {
       if (run >= k) {
         const p = i - k + 1;
         if (stride === 1 || p % stride === 0) {
-          const j = cur[kmer >>> shift]++;
+          const b = wide ? Math.floor(kmer / prefDiv) : kmer >>> shift;
+          const j = cur[b]++;
           kmers[j] = kmer;
           pos[j] = p;
         }
@@ -174,14 +197,14 @@ export function buildIndex(codes, starts, k, stride, onProgress) {
     }
   }
 
-  return { kmers, pos, bucketStarts, shift, k, mask, occSumSq };
+  return { kmers, pos, bucketStarts, k, wide, shift, mask, top, prefDiv, occSumSq };
 }
 
 /**
  * Iterative dual-array quicksort of kmers[lo..hi] (inclusive), mirroring
  * swaps into pos[]. Median-of-three pivot; insertion sort under 16 elements.
  * Robust on the adversarial case (one huge low-complexity bucket).
- * @param {Uint32Array} kmers
+ * @param {Uint32Array | Float64Array} kmers
  * @param {Uint32Array} pos
  * @param {number} lo
  * @param {number} hi
@@ -236,7 +259,7 @@ function sortPairs(kmers, pos, lo, hi) {
 }
 
 /**
- * @param {Uint32Array} a
+ * @param {Uint32Array | Float64Array} a
  * @param {Uint32Array} b
  * @param {number} i
  * @param {number} j
@@ -277,7 +300,7 @@ function swap(a, b, i, j) {
  * @param {number} [qHi] end of k-mer start positions (exclusive)
  */
 export function matchStrand(index, qCodes, qStarts, qTotal, tStarts, tTotal, opts, strandFlag, out, onProgress, qLo = 0, qHi = qCodes.length) {
-  const { kmers, pos, bucketStarts, shift, k, mask } = index;
+  const { kmers, pos, bucketStarts, k, wide, shift, mask, top, prefDiv } = index;
   const { maxGap, minRunLen } = opts;
   // maxOcc here counts *index entries* per k-mer group (the worker translates
   // user intent — original-target occurrences and the anchor budget — into
@@ -433,7 +456,12 @@ export function matchStrand(index, qCodes, qStarts, qTotal, tStarts, tTotal, opt
     }
     const c = qCodes[i];
     if (c < 4) {
-      kmer = (((kmer << 2) | c) & mask) >>> 0;
+      if (wide) {
+        const hi2 = Math.floor(kmer / top);
+        kmer = (kmer - hi2 * top) * 4 + c;
+      } else {
+        kmer = (((kmer << 2) | c) & mask) >>> 0;
+      }
       run++;
     } else {
       run = 0;
@@ -458,7 +486,7 @@ export function matchStrand(index, qCodes, qStarts, qTotal, tStarts, tTotal, opt
         lo = memoLo;
         hi = memoHi;
       } else {
-        const b = kmer >>> shift;
+        const b = wide ? Math.floor(kmer / prefDiv) : kmer >>> shift;
         const be = bucketStarts[b + 1];
         lo = lowerBound(kmers, bucketStarts[b], be, kmer);
         // Upper bound by binary search too: satellite k-mers can occur 10^5+
@@ -516,7 +544,7 @@ export function pickMaxOcc(index, qLen, tLen, qSample, userCapEntries, budget = 
 
 /**
  * First index in [lo, hi) whose value is >= x.
- * @param {Uint32Array} a @param {number} lo @param {number} hi @param {number} x
+ * @param {Uint32Array | Float64Array} a @param {number} lo @param {number} hi @param {number} x
  */
 function lowerBound(a, lo, hi, x) {
   while (lo < hi) {
@@ -529,7 +557,7 @@ function lowerBound(a, lo, hi, x) {
 
 /**
  * First index in [lo, hi) whose value is > x.
- * @param {Uint32Array} a @param {number} lo @param {number} hi @param {number} x
+ * @param {Uint32Array | Float64Array} a @param {number} lo @param {number} hi @param {number} x
  */
 function upperBound(a, lo, hi, x) {
   while (lo < hi) {

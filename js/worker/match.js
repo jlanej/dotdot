@@ -17,12 +17,10 @@ self.onmessage = (ev) => {
   try {
     /** @type {import('../core/kmer.js').KmerIndex} */
     const index = {
-      kmers: new Uint32Array(req.kmersSab),
+      kmers: req.indexMeta.wide ? new Float64Array(req.kmersSab) : new Uint32Array(req.kmersSab),
       pos: new Uint32Array(req.posSab),
       bucketStarts: new Uint32Array(req.bucketsSab),
-      shift: req.shift,
-      mask: req.mask,
-      k: req.opts.k,
+      ...req.indexMeta,
       occSumSq: new Float64Array(0),
     };
     const qCodes = new Uint8Array(req.qSab);

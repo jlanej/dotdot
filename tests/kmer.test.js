@@ -221,3 +221,37 @@ test('kmer: k=16 packs into 32 bits without collisions breaking coords', () => {
   assertEq(segs[0].x, 50);
   assertEq(segs[0].len, 300);
 });
+
+test('kmer: wide k (17..26) matches exactly on both strands', () => {
+  for (const k of [17, 21, 26]) {
+    const t = randCodes(600, 40 + k);
+    const q = t.slice(120, 420);
+    const fwd = match(t, starts([600]), q, starts([300]), { k });
+    const f = fwd.filter((s) => s.strand === 0);
+    assertEq(f.length, 1, `k=${k} forward count`);
+    assertEq(f[0].x, 120, `k=${k} x`);
+    assertEq(f[0].y, 0, `k=${k} y`);
+    assertEq(f[0].len, 300, `k=${k} len`);
+
+    const qr = reverseComplement(t.slice(200, 500));
+    const rev = match(t, starts([600]), qr, starts([300]), { k });
+    const r = rev.filter((s) => s.strand === 1);
+    assertEq(r.length, 1, `k=${k} reverse count`);
+    assertEq(r[0].x, 200, `k=${k} rev x`);
+    assertEq(r[0].len, 300, `k=${k} rev len`);
+  }
+});
+
+test('kmer: wide k respects record boundaries and gap bridging', () => {
+  const a = randCodes(200, 61);
+  const b = randCodes(220, 62);
+  const t = new Uint8Array(420);
+  t.set(a, 0);
+  t.set(b, 200);
+  const segs = match(t, starts([200, 220]), t.slice(), starts([200, 220]), { k: 21, maxGap: 256 });
+  const fwd = segs.filter((s) => s.strand === 0);
+  assertEq(fwd.length, 2);
+  fwd.sort((p, q2) => p.x - q2.x);
+  assertEq(fwd[0].len, 200);
+  assertEq(fwd[1].len, 220);
+});
