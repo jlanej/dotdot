@@ -43,6 +43,38 @@ export class GlRenderer {
     /** @type {(() => void) | null} */
     this.onRestored = null;
 
+    // GPU resources are created in init() — and re-created on context
+    // restore — but declared here with definite types: init() always runs
+    // before any use, and the checker can't see through the method call.
+    /** @type {WebGLProgram} */
+    this.program = /** @type {any} */ (null);
+    /** @type {Record<string, WebGLUniformLocation | null>} */
+    this.u = /** @type {any} */ (null);
+    /** @type {WebGLBuffer | null} */
+    this.cornerBuf = null;
+    /** @type {WebGLBuffer | null} */
+    this.instanceBuf = null;
+    /** @type {WebGLBuffer | null} */
+    this.overlayBuf = null;
+    /** @type {WebGLBuffer | null} */
+    this.overlayEndBuf = null;
+    /** @type {WebGLBuffer | null} */
+    this.highlightBuf = null;
+    /** @type {WebGLVertexArrayObject | null} */
+    this.mainVao = null;
+    /** @type {WebGLVertexArrayObject | null} */
+    this.overlayVao = null;
+    /** @type {WebGLVertexArrayObject | null} */
+    this.overlayEndVao = null;
+    /** @type {WebGLVertexArrayObject | null} */
+    this.highlightVao = null;
+    /** @type {WebGLTexture | null} */
+    this.colormapTex = null;
+    this.highlightScratch = new Float32Array(FLOATS_PER_INSTANCE);
+    this.overlayCount = 0;
+    /** @type {SegmentStore | null} */
+    this.overlayStore = null;
+
     canvas.addEventListener('webglcontextlost', (e) => {
       e.preventDefault();
       this.lost = true;

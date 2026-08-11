@@ -219,7 +219,7 @@ test('kmer: range-partitioned matching tiles seamlessly', () => {
   matchStrand(index, q, qs, 400, starts([600]), 600, opts, 0, out, undefined, 0, 200);
   matchStrand(index, q, qs, 400, starts([600]), 600, opts, 0, out, undefined, 200, 400);
   assertEq(out.x.n, 2);
-  const seg = (i) => ({ x: out.x.a[i], y: out.y.a[i], len: out.dx.a[i] });
+  const seg = (/** @type {number} */ i) => ({ x: out.x.a[i], y: out.y.a[i], len: out.dx.a[i] });
   const a = seg(0);
   const b = seg(1);
   const [first, second] = a.y < b.y ? [a, b] : [b, a];

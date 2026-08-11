@@ -24,8 +24,9 @@ the HPRC Release 2 NA19240 assembly, from minimap2 PAF. Reproduce it with
 
 ## Highlights
 
-- **Alignment-free k-mer engine, chromosome scale** — 2-bit packed k-mers
-  (k ≤ 16) in a bucketed, sorted index; anchors merge into diagonal runs with
+- **Alignment-free k-mer engine, chromosome scale** — packed k-mers
+  (**k = 4–26**: bitwise uint32 up to 16, exact-integer double packing above)
+  in a bucketed, sorted index; anchors merge into diagonal runs with
   configurable mismatch bridging (`bridge gaps`) and per-sequence-pair
   boundary discipline. At genome scale it manages itself: two-sided sampling,
   a repeat cutoff computed from the index's own occurrence histogram (no
@@ -33,6 +34,13 @@ the HPRC Release 2 NA19240 assembly, from minimap2 PAF. Reproduce it with
   thread — cancellable, with live progress — and fans out across CPU cores
   via SharedArrayBuffer wherever the host serves cross-origin isolation
   headers (the bundled dev server does).
+- **Progressive detail: coarse → zoom → Refine** — sampling is automatic by
+  default but fully user-controllable (`auto`, `off`, or any pinned value),
+  and **Refine view** recomputes the *visible window* at full density and
+  merges it into the plot in place: whole-chromosome context stays coarse,
+  the region you're inspecting becomes exact, and axes/zoom/overlay never
+  move. Measured: refining a 108 kb window took it from 834 to 34,096
+  segments while the rest of the plot stayed put.
 - **Aligner audit via PAF** — load any PAF-emitting aligner's output
   (minimap2 etc., optionally gzipped; numbers parsed straight from bytes).
   Dropped onto an existing plot it becomes an **overlay**: the aligner's
@@ -53,9 +61,13 @@ the HPRC Release 2 NA19240 assembly, from minimap2 PAF. Reproduce it with
   (validated: worst CVD ΔE 24.7, normal-vision 33.6, ≥3:1 contrast, both
   themes), with perceptual OKLab identity ramps. Light and dark themes follow
   the OS.
-- **Interactive** — pan, wheel zoom (Alt = x-only), shift-drag box zoom,
+- **Interactive** — drag pan, pinch / wheel / two-finger-scroll zoom
+  (Alt = x-only), on-plot **+/−/fit** buttons, shift-drag box zoom,
   double-click zoom, hover tooltips with per-sequence coordinates, crosshair
-  readout, keyboard shortcuts (`R` fit, `1`/`2` strand toggles, `P` fps meter).
+  readout, keyboard shortcuts (`R` fit, `G` region box, `1`/`2` strand
+  toggles, `P` fps meter) — and a clickable **?** popover on every control,
+  with the header **?** as the full cheat-sheet. All matching/display fields
+  take free values (`1kb`, `2,500`, `off`) with presets as suggestions.
 - **Region jump** (`G`) — type `chr17:18.3M-19.4M` (or a sequence name, or a
   `?region=` URL parameter) and the view frames that target range with the
   query side derived from what actually maps there; when a region maps to
@@ -87,12 +99,14 @@ haplotypes, with minimap2's calls arriving as the audit overlay.
 
 **Full chr17** runs the whole-chromosome comparison — alignment-free
 whenever the fetched FASTAs are present (`scripts/fetch_realdata.sh`),
-falling back to the committed aligner PAF on a fresh clone. Every control has
-a **?** popover (all matching/display fields accept free values — `1kb`,
-`2,500`, anything parseable — with presets as suggestions; k is editable from
-4 to 26), and the header **?** is the mouse/keyboard cheat-sheet.
+falling back to the committed aligner PAF on a fresh clone. The intended
+rhythm at that scale: let the coarse auto-sampled pass finish, pan the
+overview, zoom into anything interesting, and hit **Refine view** for exact
+local detail.
 
-![the 17p11.2 demo: alignment-free k-mer structure of a heterozygous SV with minimap2's calls overlaid](docs/demo_17p11.png) Any static file server works; GitHub Pages can host it as-is. The
+![the demo's 17p11.2 locus: alignment-free k-mer structure of a heterozygous SV with minimap2's calls overlaid](docs/demo_17p11.png)
+
+Any static file server hosts dotdot as-is (GitHub Pages included). The
 bundled server also sends `Cross-Origin-Opener-Policy: same-origin` and
 `Cross-Origin-Embedder-Policy: require-corp` — with those headers (Netlify and
 Cloudflare Pages can set them; GitHub Pages cannot) the k-mer engine matches
@@ -126,17 +140,18 @@ requests fetch just those sequences from the 1.8 GB assembly files). Measured
 on an Apple-silicon laptop:
 
 - **Alignment-free** — the full 84.3 Mb × 170 Mb comparison straight from
-  FASTA completes in minutes single-threaded, yielding 8.7 M match segments
-  that pan and zoom at ~100 fps (auto-sampled: 1/2 target k-mers, 1/4 query
-  positions, repeat cutoff picked from the occurrence histogram; with
-  cross-origin isolation the matching phase spreads across all cores). Dense
-  results default the display to matches ≥ 100 bp — drag the filter down to
-  reveal the repeat wallpaper, or up to see pure chromosome structure. At
-  `chr17:18.3M-19.4M` the raw k-mer view resolves a textbook heterozygous SV
-  — hap1 carries a clean 250 kb inversion at 17p11.2 while hap2 is collinear
-  there but carries an inverted duplication at 19.0–19.2 Mb — including the
-  internal paralog lattice that chained alignments summarize away. One `Go`
-  keypress flips between the two haplotypes' views.
+  FASTA completes in minutes, yielding ~2.3 M evidence-filtered match
+  segments that pan and zoom at ~100 fps (auto-sampled, repeat cutoff picked
+  from the occurrence histogram; with cross-origin isolation the matching
+  phase spreads across all cores). Dense results pick a sane display
+  length-filter automatically — drag it down for the repeat fabric, up for
+  pure chromosome structure, and **Refine view** for exact local detail
+  wherever you've zoomed. At `chr17:18.3M-19.4M` the raw k-mer view resolves
+  a textbook heterozygous SV — hap1 carries a clean 250 kb inversion at
+  17p11.2 while hap2 is collinear there but carries an inverted duplication
+  at 19.0–19.2 Mb — including the internal paralog lattice that chained
+  alignments summarize away. One `Go` keypress flips between the two
+  haplotypes' views.
 - **Aligner audit** — the same pair through `minimap2 -cx asm5` gives 847
   alignments (19 inversions) that load instantly; compare its breakpoint
   calls and its view of the segdup lattice against the k-mer truth above.
@@ -150,6 +165,20 @@ loci** (committed 1.7 MB of gzipped FASTA — always alignment-free, including
 the heterozygous 4.9 kb deletion at chr17:10.895 Mb) and **Full chr17**
 (alignment-free when `scripts/fetch_realdata.sh` has run; the committed
 574 kB minimap2 PAF otherwise).
+
+## Progressive detail: sampling and Refine view
+
+At chromosome scale the engine samples (the `sampling` field: `auto` sizes it
+to the data, `off` forces full density, any number pins it). That makes the
+overview fast — and the **Refine view** button closes the loop: it recomputes
+the currently visible window at full density and merges the result in place,
+so the plot stays one continuous coordinate space with coarse context
+everywhere and exact k-mer structure where you're looking. Below, the
+demo's heterozygous ~4.9 kb deletion after refining: hap2's diagonal halts at
+a breakpoint diamond, jumps ~5 kb across reference-only sequence with zero
+query advance, and resumes.
+
+![refined view of the heterozygous deletion: hap2's diagonal steps sideways across the deleted span](docs/roi_deletion_hap2.png)
 
 ## Auditing an aligner
 
@@ -185,13 +214,12 @@ CPU core — treat them as generous upper bounds on what a foreground tab does.
 
 ```
 js/
-├── core/        dna packing · k-mer index+matcher · camera · picking grid · catalogs
+├── core/        dna packing · k-mer index+matcher · camera · picking grid · catalogs · regions
 ├── io/          FASTA and PAF parsers (byte-level), gzip
-├── worker/      compute worker: parse → index → match, transferable results
+├── worker/      compute coordinator (parse → index → match/plan) · pooled matcher
 ├── render/      WebGL2 instanced renderer · shaders · OKLab colormaps · 2D axes chrome
 ├── export/      PNG compositor · SVG builder
-├── demo/        deterministic structural-variant demo generator
-└── main.js      UI wiring, interactions, render loop
+└── main.js      UI wiring, interactions, worker pool, render loop
 ```
 
 Design notes, for the curious:
@@ -213,19 +241,40 @@ Design notes, for the curious:
 ## Development
 
 ```bash
-python3 scripts/serve.py            # dev server (no-cache) on :8420
-open http://127.0.0.1:8420/tests/   # run the test suite in the browser
+python3 scripts/serve.py                # dev server (no-cache + COOP/COEP) on :8420
+open http://127.0.0.1:8420/tests/           # run the test suite in the browser
+open http://127.0.0.1:8420/tests/typecheck.html   # strict typecheck in the browser
 ```
 
 - Tests are dependency-free dual-runtime suites: the same files run in the
-  browser page and under `deno test tests/` in CI (61 tests: engine
-  coordinates, reverse-complement mapping, gap bridging, boundary discipline,
-  parsers, camera math, picking, region expressions, colormap monotonicity,
+  browser page and under `deno test tests/` in CI (68 tests: engine
+  coordinates on both strands and all k, reverse-complement mapping, gap
+  bridging, boundary discipline, range-restricted indexing/matching, parsers,
+  camera math, picking, region expressions, colormap monotonicity,
   formatting).
+- `tests/typecheck.html` runs the real TypeScript compiler (fetched from a
+  CDN at dev time — nothing installs) over the same entry points CI checks
+  with `deno check`, so type errors surface locally on a machine with no
+  JavaScript runtime at all.
 - `scripts/make_testdata.py` regenerates the synthetic assembly pair
   (`testdata/*.fa`, git-ignored) used to produce `testdata/example.paf` with
   minimap2; `scripts/fetch_realdata.sh` fetches the chr17 / NA19240 example.
 - `testdata/bigcoord.paf` exercises Gb-scale coordinate precision.
+
+## Credits
+
+dotdot was designed, implemented, and verified in collaboration with
+**Claude (Fable 5, Anthropic)** working in Claude Code — engine and renderer
+design, the aligner-audit concept's implementation, in-browser testing, and
+the real-data analyses in this README came out of that pairing, with
+direction, domain judgment, and the aligner-agnostic thesis from the project
+author.
+
+Data and tools this project gratefully builds on: the
+[T2T Consortium](https://github.com/marbl/CHM13)'s CHM13v2.0 reference, the
+[Human Pangenome Reference Consortium](https://humanpangenome.org/)'s
+Release 2 NA19240 assembly, [minimap2](https://github.com/lh3/minimap2)
+(Heng Li) as the audited aligner, and NCBI/UCSC data services.
 
 ## License
 

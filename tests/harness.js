@@ -37,7 +37,9 @@ export async function runAll(report) {
 }
 
 /**
+ * Assertion function: the checker narrows `cond` to truthy after a call.
  * @param {unknown} cond @param {string} [msg]
+ * @returns {asserts cond}
  */
 export function assert(cond, msg = 'assertion failed') {
   if (!cond) throw new Error(msg);
