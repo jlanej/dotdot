@@ -1049,7 +1049,11 @@ overlay.addEventListener(
     e.preventDefault();
     const p = plotXY(/** @type {PointerEvent} */ (/** @type {unknown} */ (e)));
     const scale = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 100 : 1;
-    const factor = Math.min(5, Math.max(0.2, Math.exp(-e.deltaY * scale * 0.0022)));
+    // Trackpad pinch arrives as ctrl+wheel (Chrome/Firefox) with small
+    // deltas — give it real leverage; plain wheel/two-finger scroll zooms
+    // at the normal rate.
+    const sens = e.ctrlKey ? 0.012 : 0.0022;
+    const factor = Math.min(5, Math.max(0.2, Math.exp(-e.deltaY * scale * sens)));
     const axes = e.altKey ? 'x' : 'both';
     const { pw, ph } = state.sizes;
     state.view.zoomAt(p.x, p.y, factor, pw, ph, axes);
@@ -1057,6 +1061,36 @@ overlay.addEventListener(
   },
   { passive: false },
 );
+
+// Safari on macOS delivers trackpad pinch as proprietary gesture events (no
+// ctrl+wheel) — without these handlers a pinch zooms the page instead of the
+// plot. `scale` is cumulative since gesturestart, so zoom by the ratio.
+let gestureLastScale = 1;
+overlay.addEventListener(
+  'gesturestart',
+  (e) => {
+    e.preventDefault();
+    gestureLastScale = /** @type {any} */ (e).scale ?? 1;
+  },
+  { passive: false },
+);
+overlay.addEventListener(
+  'gesturechange',
+  (e) => {
+    e.preventDefault();
+    if (!state.view) return;
+    const ev = /** @type {any} */ (e);
+    const s = ev.scale ?? 1;
+    const factor = Math.min(5, Math.max(0.2, s / (gestureLastScale || 1)));
+    gestureLastScale = s;
+    const p = plotXY(ev);
+    const { pw, ph } = state.sizes;
+    state.view.zoomAt(p.x, p.y, factor, pw, ph, 'both');
+    markDirty();
+  },
+  { passive: false },
+);
+overlay.addEventListener('gestureend', (e) => e.preventDefault(), { passive: false });
 
 overlay.addEventListener('dblclick', (e) => {
   if (!state.view) return;
@@ -1424,8 +1458,9 @@ function fatal(msg) {
 
 const HELP = {
   controls:
-    '<b>Mouse</b><br>drag — pan · wheel — zoom (Alt = x-only) · shift-drag — box zoom · ' +
-    'double-click — zoom in (shift = out) · hover — inspect a match<br><b>Keys</b><br>' +
+    '<b>Mouse / trackpad</b><br>drag — pan · pinch or wheel/two-finger scroll — zoom ' +
+    '(Alt = x-only) · shift-drag — box zoom · double-click — zoom in (shift = out) · ' +
+    'hover — inspect a match<br><b>Keys</b><br>' +
     '<kbd>R</kbd>/<kbd>0</kbd> fit · <kbd>G</kbd> region box · <kbd>+</kbd>/<kbd>−</kbd> zoom · ' +
     'arrows pan · <kbd>1</kbd>/<kbd>2</kbd> strand toggles · <kbd>P</kbd> fps meter',
   data:
