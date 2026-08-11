@@ -278,4 +278,6 @@ Release 2 NA19240 assembly, [minimap2](https://github.com/lh3/minimap2)
 
 ## License
 
-Not yet chosen — add one before publishing.
+[MIT](LICENSE). The committed example data derive from openly released
+resources (T2T-CHM13v2.0 via NCBI RefSeq; the NA19240 assembly from HPRC
+Release 2) — see those projects for their data-use statements.
