@@ -6,8 +6,11 @@
  * strict+checkJs configuration; a clean run here means CI's typecheck will be
  * clean or very nearly so.
  */
-const TS_URL = 'https://esm.sh/typescript@5.6.3';
-const LIB_URL = 'https://cdn.jsdelivr.net/npm/typescript@5.6.3/lib/';
+// Track the TypeScript line Deno ships (Deno 2.x follows current TS) so a
+// clean run here predicts a clean `deno check` in CI.
+const TS_VERSION = '5.9.2';
+const TS_URL = `https://esm.sh/typescript@${TS_VERSION}`;
+const LIB_URL = `https://cdn.jsdelivr.net/npm/typescript@${TS_VERSION}/lib/`;
 
 const ENTRIES = [
   '/js/main.js',

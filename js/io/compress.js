@@ -17,7 +17,10 @@ export function isGzip(bytes) {
  */
 export async function maybeGunzip(bytes) {
   if (!isGzip(bytes)) return bytes;
-  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+  // Inputs here always wrap plain ArrayBuffers (file reads / fetches, never
+  // shared memory); narrow for Blob, which rejects SAB-backed views by type.
+  const plain = /** @type {Uint8Array<ArrayBuffer>} */ (bytes);
+  const stream = new Blob([plain]).stream().pipeThrough(new DecompressionStream('gzip'));
   const buf = await new Response(stream).arrayBuffer();
   return new Uint8Array(buf);
 }
