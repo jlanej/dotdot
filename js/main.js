@@ -1324,6 +1324,31 @@ inRegion.addEventListener('keydown', (e) => {
 });
 $('btn-cancel').addEventListener('click', cancelCompute);
 $('btn-fit').addEventListener('click', fitView);
+
+/** @param {number} f */
+function zoomStep(f) {
+  if (!state.view) return;
+  const { pw, ph } = state.sizes;
+  state.view.zoomAt(pw / 2, ph / 2, f, pw, ph, 'both');
+  markDirty();
+}
+$('btn-zoom-in').addEventListener('click', () => zoomStep(1.6));
+$('btn-zoom-out').addEventListener('click', () => zoomStep(1 / 1.6));
+$('btn-zoom-fit').addEventListener('click', fitView);
+
+// Some WebKit-based browsers (DuckDuckGo among them) implement trackpad
+// pinch as native page magnification the page cannot intercept. Detect it
+// once and point at the plot's own zoom paths.
+let pageZoomHinted = false;
+window.visualViewport?.addEventListener('resize', () => {
+  const vv = window.visualViewport;
+  if (!vv || pageZoomHinted || vv.scale <= 1.1) return;
+  pageZoomHinted = true;
+  toast(
+    'Your browser magnified the whole page (its own pinch gesture). Press ⌘0 to reset it — ' +
+      'then zoom the plot with two-finger scroll, double-click, or the +/− buttons.',
+  );
+});
 $('btn-clear').addEventListener('click', () => {
   state.data = null;
   state.grid = null;
@@ -1458,8 +1483,9 @@ function fatal(msg) {
 
 const HELP = {
   controls:
-    '<b>Mouse / trackpad</b><br>drag — pan · pinch or wheel/two-finger scroll — zoom ' +
-    '(Alt = x-only) · shift-drag — box zoom · double-click — zoom in (shift = out) · ' +
+    '<b>Mouse / trackpad</b><br>drag — pan · two-finger scroll or wheel — zoom (Alt = x-only) · ' +
+    'pinch — zoom (Safari/Chrome; some browsers reserve pinch for page magnification — use the ' +
+    'on-plot +/− buttons there) · shift-drag — box zoom · double-click — zoom in (shift = out) · ' +
     'hover — inspect a match<br><b>Keys</b><br>' +
     '<kbd>R</kbd>/<kbd>0</kbd> fit · <kbd>G</kbd> region box · <kbd>+</kbd>/<kbd>−</kbd> zoom · ' +
     'arrows pan · <kbd>1</kbd>/<kbd>2</kbd> strand toggles · <kbd>P</kbd> fps meter',

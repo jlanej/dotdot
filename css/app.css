@@ -480,6 +480,35 @@ input.combo:focus,
   display: none;
 }
 
+#zoomctl {
+  position: absolute;
+  right: 22px;
+  bottom: 56px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  z-index: 6;
+}
+
+#zoomctl button {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--ink-2);
+  font: 600 16px/1 system-ui, sans-serif;
+  cursor: pointer;
+  opacity: 0.85;
+}
+
+#zoomctl button:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  opacity: 1;
+}
+
 #tooltip {
   position: absolute;
   z-index: 5;
