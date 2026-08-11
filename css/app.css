@@ -485,7 +485,10 @@ input.combo:focus,
   pointer-events: none;
 }
 
-#overlay {
+/* Must out-specify `#plot-root canvas` above — that rule turns the canvas
+   stack hit-test-invisible, and this one turns the top layer back on for
+   real pointers. (ID+ID beats ID+element.) */
+#plot-root #overlay {
   pointer-events: auto;
   touch-action: none;
   cursor: crosshair;
