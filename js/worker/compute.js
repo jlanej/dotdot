@@ -66,14 +66,14 @@ async function handleKmer(req) {
     qParsed = parseFasta(qBytes, 'query');
   } else {
     // Self dot plot — clone the catalog so transfer lists stay disjoint.
-    qParsed = {
-      catalog: {
-        names: tParsed.catalog.names.slice(),
-        starts: tParsed.catalog.starts.slice(),
-        total: tParsed.catalog.total,
-      },
-      codes: tParsed.codes,
+    /** @type {import('../core/types.js').AxisCatalog} */
+    const clone = {
+      names: tParsed.catalog.names.slice(),
+      starts: tParsed.catalog.starts.slice(),
+      total: tParsed.catalog.total,
     };
+    if (tParsed.catalog.offsets) clone.offsets = tParsed.catalog.offsets.slice();
+    qParsed = { catalog: clone, codes: tParsed.codes };
   }
   computeKmer(req.id, tParsed, qParsed, req.opts, t0, req.window ?? null);
 }
@@ -330,6 +330,10 @@ function postResult(id, data) {
     data.target.starts.buffer,
     data.query.starts.buffer,
   ];
+  if (data.target.offsets) transfer.push(data.target.offsets.buffer);
+  if (data.query.offsets && data.query.offsets !== data.target.offsets) {
+    transfer.push(data.query.offsets.buffer);
+  }
   post({ id, type: 'result', data }, transfer);
 }
 

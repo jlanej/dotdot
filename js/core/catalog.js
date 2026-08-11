@@ -4,7 +4,8 @@
 /** @typedef {import('./types.js').AxisCatalog} AxisCatalog */
 
 /**
- * Which sequence contains global position g?
+ * Which sequence contains global position g? `local` includes the record's
+ * display offset when present, so callers show true genomic coordinates.
  * @param {AxisCatalog} cat
  * @param {number} g
  * @returns {{ index: number, name: string, local: number } | null}
@@ -19,7 +20,8 @@ export function locate(cat, g) {
     if (cat.starts[mid + 1] <= g) lo = mid + 1;
     else hi = mid;
   }
-  return { index: lo, name: cat.names[lo], local: g - cat.starts[lo] };
+  const display = cat.offsets ? cat.offsets[lo] : 0;
+  return { index: lo, name: cat.names[lo], local: g - cat.starts[lo] + display };
 }
 
 /**

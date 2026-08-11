@@ -50,6 +50,15 @@ the HPRC Release 2 NA19240 assembly, from minimap2 PAF. Reproduce it with
   empty app a PAF plots standalone, colored by `nmatch/alnlen` identity.
   Measured standalone: a 160 MB PAF with **2,000,000 alignments loads in
   ~13 s** and pans and zooms at **native refresh rate (120 fps)**.
+- **First-class reference genomes** — pick **T2T-CHM13v2.0** or **GRCh38**
+  from a dropdown and type a genome-browser window
+  (`chrX:57,820,000-60,670,000`); dotdot streams exactly that region from
+  UCSC's public 2bit files over HTTP byte ranges — a 3 Mb centromere costs
+  ~750 kB of transfer, and the genome itself never downloads. On its own the
+  window **self-plots** (showcase presets default to satellite/HOR arrays);
+  load a FASTA afterwards and it dots against the reference window. Axes,
+  hover, and region jumps all speak **true genomic coordinates**, and that
+  bookkeeping survives Refine view.
 - **True genome-scale precision** — coordinates are carried as split float
   pairs into WebGL (relative-to-center, Sterbenz-exact), so the view stays
   sub-bp crisp at position 2,950,000,000 as at position 100. Axis ticks switch
@@ -86,8 +95,9 @@ python3 scripts/serve.py
 ```
 
 Then visit <http://127.0.0.1:8420/> and click **Demo: chr17 loci** — real
-data, computed alignment-free in your browser: two committed slices of
-T2T-CHM13 chr17 against the corresponding regions of both NA19240
+data, computed alignment-free in your browser: two slices of T2T-CHM13
+chr17, **streamed live from the reference** (committed copies are the
+offline fallback), against the corresponding regions of both NA19240
 haplotypes, with minimap2's calls arriving as the audit overlay.
 
 - **17p11.2** (chr17:18.0–19.6 Mb): a heterozygous SV pair — a 250 kb
@@ -106,6 +116,26 @@ local detail.
 
 ![the demo's 17p11.2 locus: alignment-free k-mer structure of a heterozygous SV with minimap2's calls overlaid](docs/demo_17p11.png)
 
+### Reference genomes, no downloads
+
+The **Reference** dropdown gives instant material with no files at all:
+selecting **T2T-CHM13v2.0** streams its default showcase window — the DXZ1
+alpha-satellite array in the chrX centromere — and self-plots it:
+
+![the DXZ1 higher-order-repeat lattice at the chrX centromere, self-plotted from a streamed T2T-CHM13v2.0 window](docs/satellite_chrX.png)
+
+*chrX:57,820,000-60,670,000 (T2T-CHM13v2.0): the ~2 kb higher-order repeat
+period of DXZ1 renders as a dense lattice off the main diagonal —
+~550,000 match segments from ~750 kB of streamed 2bit data.*
+
+Type any window (`chr8:44.2M-46.33M`, `chr1:121,700,000-125,100,000` — k/M/G
+units and commas welcome; a bare name loads the whole sequence) or pick a
+showcase preset (chrX DXZ1, chr8 and chr17 centromeres, a chr1
+pericentromere). With a reference window loaded, added FASTAs dot **against
+it** — the demo above is exactly that pattern. Hover, the readout, and `G`
+region jumps all accept and report true genomic coordinates
+(`chrX:58,000,000-58,200,000` works directly).
+
 Any static file server hosts dotdot as-is (GitHub Pages included). The
 bundled server also sends `Cross-Origin-Opener-Policy: same-origin` and
 `Cross-Origin-Embedder-Policy: require-corp` — with those headers (Netlify and
@@ -119,7 +149,8 @@ on all CPU cores; without them it runs the identical single-worker path.
 | One FASTA | self dot plot (repeats, palindromes, satellite structure) |
 | Two FASTAs | first = target (x), second = query (y) — alignment-free, the primary path |
 | PAF / PAF.gz | optional aligner audit: any PAF-emitting aligner's output on the same axes |
-| URL parameters | `?demo=1` · `?target=<url>&query=<url>[&overlay=<paf-url>]` · `?paf=<url>` · plus `k=`, `gap=`, `occ=`, `region=` |
+| Reference dropdown | T2T-CHM13v2.0 / GRCh38 windows streamed from UCSC 2bit files — self-plot, or the target for added FASTAs |
+| URL parameters | `?demo=1` · `?ref=t2t&refregion=chrX:57.8M-60.7M` · `?target=<url>&query=<url>[&overlay=<paf-url>]` · `?paf=<url>` · plus `k=`, `gap=`, `occ=`, `region=` |
 
 Practical envelope: up to ~50 Mb of combined sequence the engine runs dense
 and exact (bacteria, fungi, chromosome pairs, plasmids, viral genomes).
@@ -161,8 +192,9 @@ on an Apple-silicon laptop:
 | ![250 kb inversion at 17p11.2 in NA19240 hap1](docs/sv_17p11.png) | ![k-mer engine view of the inverted duplication](docs/sv_17p11_kmer.png) |
 
 One-click versions of this dataset live on the demo buttons: **Demo: chr17
-loci** (committed 1.7 MB of gzipped FASTA — always alignment-free, including
-the heterozygous 4.9 kb deletion at chr17:10.895 Mb) and **Full chr17**
+loci** (target slices streamed live from the T2T reference, committed
+copies as the offline fallback — always alignment-free, including the
+heterozygous 4.9 kb deletion at chr17:10.895 Mb) and **Full chr17**
 (alignment-free when `scripts/fetch_realdata.sh` has run; the committed
 574 kB minimap2 PAF otherwise).
 
@@ -215,7 +247,7 @@ CPU core — treat them as generous upper bounds on what a foreground tab does.
 ```
 js/
 ├── core/        dna packing · k-mer index+matcher · camera · picking grid · catalogs · regions
-├── io/          FASTA and PAF parsers (byte-level), gzip
+├── io/          FASTA and PAF parsers (byte-level) · remote 2bit reader · gzip
 ├── worker/      compute coordinator (parse → index → match/plan) · pooled matcher
 ├── render/      WebGL2 instanced renderer · shaders · OKLab colormaps · 2D axes chrome
 ├── export/      PNG compositor · SVG builder
@@ -247,10 +279,11 @@ open http://127.0.0.1:8420/tests/typecheck.html   # strict typecheck in the brow
 ```
 
 - Tests are dependency-free dual-runtime suites: the same files run in the
-  browser page and under `deno test tests/` in CI (68 tests: engine
+  browser page and under `deno test tests/` in CI (80 tests: engine
   coordinates on both strands and all k, reverse-complement mapping, gap
   bridging, boundary discipline, range-restricted indexing/matching, parsers,
-  camera math, picking, region expressions, colormap monotonicity,
+  2bit decoding against in-memory fixtures, camera math, picking, region
+  expressions with true-coordinate offsets, colormap monotonicity,
   formatting).
 - `tests/typecheck.html` runs the real TypeScript compiler (fetched from a
   CDN at dev time — nothing installs) over the same entry points CI checks

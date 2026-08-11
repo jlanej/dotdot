@@ -58,6 +58,36 @@ test('region: clamps to sequence length', () => {
   assertEq(r.x1, 90_276_897);
 });
 
+test('region: an exact name containing a colon wins over range parsing', () => {
+  const colonCat = {
+    names: ['chrX:57.8M-60.7M'],
+    starts: new Float64Array([0, 2_850_000]),
+    total: 2_850_000,
+  };
+  const r = resolveRegion('chrX:57.8M-60.7M', colonCat);
+  assert(r !== null);
+  assertEq(r.x0, 0);
+  assertEq(r.x1, 2_850_000);
+});
+
+test('region: true genomic coordinates map through display offsets', () => {
+  const refCat = {
+    names: ['chrX'],
+    starts: new Float64Array([0, 2_850_000]),
+    total: 2_850_000,
+    offsets: new Float64Array([57_820_000]),
+  };
+  // true coords (>= offset) are translated into the local axis
+  const r = resolveRegion('chrX:58,000,000-58,050,000', refCat);
+  assert(r !== null);
+  assertEq(r.x0, 180_000);
+  assertEq(r.x1, 230_000);
+  // small values still mean local coordinates
+  const r2 = resolveRegion('chrX:100k-200k', refCat);
+  assert(r2 !== null);
+  assertEq(r2.x0, 100_000);
+});
+
 test('region: garbage returns null', () => {
   assertEq(resolveRegion('chrUnknown:1-2', cat), null);
   assertEq(resolveRegion('chr17:5M-4M', cat), null);

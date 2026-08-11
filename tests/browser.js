@@ -10,6 +10,7 @@ import './catalog.test.js';
 import './colormap.test.js';
 import './format.test.js';
 import './region.test.js';
+import './twobit.test.js';
 import { runAll } from './harness.js';
 
 const results = /** @type {HTMLElement} */ (document.getElementById('results'));

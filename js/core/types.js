@@ -12,6 +12,9 @@
  * @property {Float64Array} starts Global start of each sequence plus a final
  *   sentinel equal to `total` (length = names.length + 1).
  * @property {number} total
+ * @property {Float64Array} [offsets] Optional display offset per record: the
+ *   true genomic coordinate of local position 0 (reference-region slices).
+ *   Affects coordinate display and region parsing only, never geometry.
  */
 
 /**

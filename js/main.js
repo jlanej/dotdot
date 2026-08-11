@@ -14,6 +14,8 @@ import { drawUnderlay, drawOverlay, LAYOUT } from './render/axes.js';
 import { buildColormap, hexToRgb } from './render/colormap.js';
 import { formatBp, formatInt, formatCount } from './render/format.js';
 import { looksLikePaf } from './io/paf.js';
+import { RemoteTwoBit, regionToFasta } from './io/twobit.js';
+import { REFERENCES, parseBrowserRegion } from './refs.js';
 import { exportPng } from './export/png.js';
 import { exportSvg } from './export/svg.js';
 
@@ -57,6 +59,11 @@ const chkMinPx = /** @type {HTMLInputElement} */ ($('chk-minpx'));
 const chkAspect = /** @type {HTMLInputElement} */ ($('chk-aspect'));
 const chkOverlay = /** @type {HTMLInputElement} */ ($('chk-overlay'));
 const rowOverlay = $('row-overlay');
+const selRef = /** @type {HTMLSelectElement} */ ($('sel-ref'));
+const refBox = $('ref-box');
+const inRefRegion = /** @type {HTMLInputElement} */ ($('in-refregion'));
+const selRefPreset = /** @type {HTMLSelectElement} */ ($('sel-refpreset'));
+const rowRefPreset = $('row-refpreset');
 const btnCompute = /** @type {HTMLButtonElement} */ ($('btn-compute'));
 const btnPng = /** @type {HTMLButtonElement} */ ($('btn-png'));
 const btnSvg = /** @type {HTMLButtonElement} */ ($('btn-svg'));
@@ -558,17 +565,120 @@ function clearOverlay() {
   updateLegend();
 }
 
+// --------------------------------------------------------------------------
+// Built-in references (remote 2bit, byte-range fetched)
+
+/** @type {Map<string, RemoteTwoBit>} */
+const twobits = new Map();
+
+/** @param {import('./refs.js').ReferenceGenome} ref */
+function getTwoBit(ref) {
+  let tb = twobits.get(ref.id);
+  if (!tb) {
+    tb = new RemoteTwoBit(ref.twobit);
+    twobits.set(ref.id, tb);
+  }
+  return tb;
+}
+
+function currentRef() {
+  return REFERENCES.find((r) => r.id === selRef.value) ?? null;
+}
+
+for (const r of REFERENCES) {
+  const opt = document.createElement('option');
+  opt.value = r.id;
+  opt.textContent = r.label;
+  selRef.append(opt);
+}
+
 /**
- * Default demo: two committed slices of real chr17 vs both NA19240
- * haplotypes, computed alignment-free with minimap2's calls as the audit
- * overlay — 17p11.2 (18.0–19.6 Mb: heterozygous 250 kb inversion + inverted
- * duplication) and the ROI at 10.75–11.05 Mb (heterozygous ~4.9 kb deletion
- * at 10.895 Mb, hap2).
+ * Reflect a reference selection in the UI (region default + presets).
+ * @param {boolean} autoload load the default region immediately
+ */
+function applyRefSelection(autoload) {
+  const ref = currentRef();
+  refBox.hidden = !ref;
+  if (!ref) return;
+  inRefRegion.value = ref.defaultRegion;
+  selRefPreset.innerHTML = '';
+  rowRefPreset.hidden = ref.presets.length === 0;
+  for (const p of ref.presets) {
+    const opt = document.createElement('option');
+    opt.value = p.region;
+    opt.textContent = p.label;
+    selRefPreset.append(opt);
+  }
+  if (autoload) void loadRefRegion(ref.defaultRegion);
+}
+
+/**
+ * Fetch a reference region (browser coordinates, 1-based) and install it as
+ * the target: self-plot when no query FASTA is loaded, query-vs-reference
+ * otherwise. The synthesized FASTA carries an `@offset=` token so every
+ * coordinate the app shows for it is a true genomic coordinate.
+ * @param {string} text
+ */
+async function loadRefRegion(text) {
+  const ref = currentRef();
+  if (!ref) return;
+  const parsed = parseBrowserRegion(text);
+  if (!parsed) {
+    toast(`Could not parse region “${text}” — try chrX:57.8M-60.7M (1-based).`, true);
+    return;
+  }
+  try {
+    const tb = getTwoBit(ref);
+    const meta = await tb.seqMeta(parsed.chrom).catch(async (err) => {
+      const names = await tb.names().catch(() => []);
+      throw new Error(
+        (err instanceof Error ? err.message : String(err)) +
+          (names.length ? ` Available: ${names.slice(0, 8).join(', ')}…` : ''),
+      );
+    });
+    const start0 = parsed.start1 !== null ? parsed.start1 - 1 : 0;
+    const end0 = Math.min(parsed.end1 ?? meta.dnaSize, meta.dnaSize);
+    const len = end0 - start0;
+    if (len <= 0) {
+      toast(`${parsed.chrom} is only ${formatBp(meta.dnaSize)} long.`, true);
+      return;
+    }
+    if (len > 300e6) {
+      toast('Region too large — 300 Mb max.', true);
+      return;
+    }
+    toast(
+      `Fetching ${parsed.chrom}:${formatInt(start0 + 1)}-${formatInt(end0)} (${formatBp(len)}) ` +
+        `from ${ref.label}…` + (len > 33e6 ? ' Large region — this will take a while.' : ''),
+    );
+    const bases = await tb.fetchRegion(parsed.chrom, start0, end0);
+    const label1 = `${parsed.chrom}:${formatInt(start0 + 1)}-${formatInt(end0)}`;
+    const fasta = regionToFasta(parsed.chrom, `${ref.label} ${label1}`, start0, bases);
+    setFasta('target', { name: `${label1} · ${ref.label}`, buf: fasta.buffer });
+  } catch (err) {
+    toast(err instanceof Error ? err.message : String(err), true);
+  }
+}
+
+selRef.addEventListener('change', () => applyRefSelection(true));
+selRefPreset.addEventListener('change', () => {
+  inRefRegion.value = selRefPreset.value;
+  void loadRefRegion(selRefPreset.value);
+});
+$('btn-refload').addEventListener('click', () => void loadRefRegion(inRefRegion.value));
+inRefRegion.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') void loadRefRegion(inRefRegion.value);
+});
+
+/**
+ * Default demo: two slices of real chr17 vs both NA19240 haplotypes,
+ * alignment-free with minimap2's calls as the audit overlay. The target is
+ * streamed live from the T2T reference (first-class support in action);
+ * offline or if UCSC is unreachable, the committed copy steps in.
  */
 async function loadDemo() {
   try {
-    const [t, q, o] = await Promise.all([
-      fetchAsFile('testdata/demo/target.fa.gz'),
+    const [q, o] = await Promise.all([
       fetchAsFile('testdata/demo/query.fa.gz'),
       fetchAsFile('testdata/demo/minimap2_demo.paf'),
     ]);
@@ -578,11 +688,33 @@ async function loadDemo() {
     // reveals the full repeat fabric live.
     inMinLen.value = '500';
     setFasta('query', q);
+    /** @type {{name: string, buf: ArrayBuffer}} */
+    let t;
+    let source;
+    try {
+      const ref = REFERENCES[0];
+      const tb = getTwoBit(ref);
+      const [r1, r2] = await Promise.all([
+        tb.fetchRegion('chr17', 18_000_000, 19_600_000),
+        tb.fetchRegion('chr17', 10_750_000, 11_050_000),
+      ]);
+      const f1 = regionToFasta('chr17_17p11.2', `${ref.label} chr17:18,000,001-19,600,000`, 18_000_000, r1);
+      const f2 = regionToFasta('chr17_ROI10.9', `${ref.label} chr17:10,750,001-11,050,000`, 10_750_000, r2);
+      const buf = new Uint8Array(f1.length + f2.length);
+      buf.set(f1, 0);
+      buf.set(f2, f1.length);
+      t = { name: 'chr17 slices · T2T (streamed)', buf: buf.buffer };
+      source = 'streamed live from the T2T reference';
+    } catch {
+      t = await fetchAsFile('testdata/demo/target.fa.gz');
+      source = 'from the committed offline copy';
+    }
     setFasta('target', t);
     toast(
-      'Real chr17 loci vs both NA19240 haplotypes, alignment-free. 17p11.2: heterozygous 250 kb ' +
-        'inversion (hap1) + inverted duplication (hap2). ROI10.9: heterozygous ~5 kb deletion — ' +
-        'press G and jump to chr17_ROI10.9:130k-170k. minimap2’s calls overlay in ink.',
+      `Real chr17 loci vs both NA19240 haplotypes, alignment-free — target ${source}. ` +
+        '17p11.2: heterozygous 250 kb inversion (hap1) + inverted duplication (hap2). ROI10.9: ' +
+        'heterozygous ~5 kb deletion — press G, jump chr17_ROI10.9:10.88M-10.92M. ' +
+        'minimap2’s calls overlay in ink.',
     );
   } catch (err) {
     toast(err instanceof Error ? err.message : String(err), true);
@@ -1630,6 +1762,14 @@ const HELP = {
   data:
     'Target FASTA = x axis, query FASTA = y axis (one file → self-plot). dotdot computes matches ' +
     'itself, alignment-free; gzipped files are fine. Multi-sequence files get boundary gridlines.',
+  ref:
+    'Built-in reference genomes, fetched on demand as <b>byte ranges</b> from UCSC’s 2bit files — ' +
+    'the genome itself never downloads. Type any region in genome-browser coordinates ' +
+    '(<b>chrX:57.8M-60.7M</b>, 1-based) and Load: with no query FASTA the region plots against ' +
+    'itself (try the centromere showcase presets — satellite arrays are spectacular); with a ' +
+    'query FASTA loaded, the query dots against the region. Coordinates shown for reference ' +
+    'regions are true genomic positions, and the region-jump box accepts them too. Shareable: ' +
+    '?ref=t2t&refregion=chrX:57.8M-60.7M.',
   matching:
     'These change what is <i>computed</i> — press Recompute after editing. The Display section ' +
     'below applies instantly, without recomputing.',
@@ -1749,7 +1889,22 @@ async function initFromUrl() {
   if (p.has('occ')) inMaxOcc.value = p.get('occ') ?? inMaxOcc.value;
   if (p.has('region')) pendingRegion = p.get('region');
   try {
-    if (p.has('demo')) {
+    if (p.has('ref')) {
+      if (p.has('query')) {
+        const q = await fetchAsFile(/** @type {string} */ (p.get('query')));
+        setFasta('query', q);
+      }
+      selRef.value = p.get('ref') ?? '';
+      applyRefSelection(false);
+      const ref = currentRef();
+      if (ref) {
+        const region = p.get('refregion') ?? ref.defaultRegion;
+        inRefRegion.value = region;
+        await loadRefRegion(region);
+      } else {
+        toast(`Unknown reference “${p.get('ref')}” — available: ${REFERENCES.map((r) => r.id).join(', ')}.`, true);
+      }
+    } else if (p.has('demo')) {
       await loadDemo();
     } else if (p.has('paf')) {
       const f = await fetchAsFile(/** @type {string} */ (p.get('paf')));

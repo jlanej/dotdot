@@ -20,6 +20,27 @@
     <aside id="sidebar">
       <section class="panel">
         <h2>Data <button class="help" data-help="data" aria-label="about inputs">?</button></h2>
+        <div class="ctl">
+          <label for="sel-ref">reference <button class="help" data-help="ref">?</button></label>
+          <select id="sel-ref">
+            <option value="" selected>— none —</option>
+          </select>
+        </div>
+        <div id="ref-box" hidden>
+          <div class="ctl">
+            <label for="in-refregion">reference region (1-based)</label>
+            <div class="region-row">
+              <input type="text" id="in-refregion" placeholder="chrX:57.8M-60.7M" spellcheck="false" autocomplete="off" />
+              <button id="btn-refload" class="btn">Load</button>
+            </div>
+          </div>
+          <div class="ctl" id="row-refpreset">
+            <label for="sel-refpreset">showcase regions</label>
+            <select id="sel-refpreset"></select>
+          </div>
+          <p class="hint">The region becomes the target: no query FASTA → it plots against
+            itself (repeat structure); with a query FASTA → the query dots against it.</p>
+        </div>
         <div class="file-row">
           <label class="file-btn" for="file-target">Target FASTA</label>
           <input type="file" id="file-target" accept=".fa,.fasta,.fna,.gz,.txt" />

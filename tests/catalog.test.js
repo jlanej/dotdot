@@ -19,6 +19,17 @@ test('catalog: locate finds the right band and local coord', () => {
   assertEq(locate(cat, -1), null);
 });
 
+test('catalog: locate adds display offsets when present', () => {
+  const withOff = {
+    names: ['chrX'],
+    starts: new Float64Array([0, 1000]),
+    total: 1000,
+    offsets: new Float64Array([57_820_000]),
+  };
+  assertEq(locate(withOff, 0)?.local, 57_820_000);
+  assertEq(locate(withOff, 999)?.local, 57_820_999);
+});
+
 test('catalog: bandsInRange clips to visible window', () => {
   const all = bandsInRange(cat, -50, 600);
   assertEq(all.first, 0);

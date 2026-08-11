@@ -46,3 +46,18 @@ test('fasta: sniffing', () => {
   assert(looksLikeFasta(enc.encode('\n\n>abc\nACGT')));
   assert(!looksLikeFasta(enc.encode('q\t1\t2\t3')));
 });
+
+test('fasta: @offset display tokens populate catalog.offsets', () => {
+  const { catalog } = parseFasta(
+    enc.encode('>chrX T2T chrX:100,001-100,008 @offset=100000\nACGTACGT\n>plain desc\nTTTT\n'),
+  );
+  assert(catalog.offsets !== undefined, 'offsets present');
+  const off = /** @type {Float64Array} */ (catalog.offsets);
+  assertEq(off[0], 100000);
+  assertEq(off[1], 0);
+});
+
+test('fasta: no offsets array when no tokens', () => {
+  const { catalog } = parseFasta(enc.encode('>a\nACGT\n>b\nTTTT\n'));
+  assertEq(catalog.offsets, undefined);
+});

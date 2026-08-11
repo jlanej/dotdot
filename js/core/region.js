@@ -34,6 +34,12 @@ export function resolveRegion(expr, cat) {
   const s = expr.trim();
   if (s.length === 0) return null;
 
+  // An exact sequence name always wins — names are allowed to contain ':'.
+  if (findSeq(cat, s) >= 0) {
+    const idx = findSeq(cat, s);
+    return { x0: cat.starts[idx], x1: cat.starts[idx + 1], label: cat.names[idx] };
+  }
+
   const colon = s.lastIndexOf(':');
   /** @type {string | null} */
   let name = null;
@@ -41,19 +47,20 @@ export function resolveRegion(expr, cat) {
   if (colon > 0) {
     name = s.slice(0, colon).trim();
     rangePart = s.slice(colon + 1);
-  } else if (!/[0-9]/.test(s[0]) || findSeq(cat, s) >= 0) {
-    // Bare sequence name (names may start with digits, so check the catalog).
+  } else if (!/[0-9]/.test(s[0])) {
     name = s;
     rangePart = '';
   }
 
   let offset = 0;
   let limit = cat.total;
+  let display = 0;
   if (name !== null) {
     const idx = findSeq(cat, name);
     if (idx < 0) return null;
     offset = cat.starts[idx];
     limit = cat.starts[idx + 1] - cat.starts[idx];
+    display = cat.offsets ? cat.offsets[idx] : 0;
     if (rangePart.trim() === '') {
       return { x0: offset, x1: offset + limit, label: cat.names[idx] };
     }
@@ -61,9 +68,16 @@ export function resolveRegion(expr, cat) {
 
   const dash = splitRange(rangePart);
   if (!dash) return null;
-  const a = parseBp(dash[0]);
-  const b = parseBp(dash[1]);
+  let a = parseBp(dash[0]);
+  let b = parseBp(dash[1]);
   if (!Number.isFinite(a) || !Number.isFinite(b) || b <= a) return null;
+  // Reference-region plots display true genomic coordinates: when the range
+  // clearly refers to them (at or beyond the record's genomic offset), map
+  // back into the local axis.
+  if (display > 0 && a >= display) {
+    a -= display;
+    b -= display;
+  }
   const x0 = offset + Math.max(0, Math.min(a, limit));
   const x1 = offset + Math.max(0, Math.min(b, limit));
   if (x1 <= x0) return null;

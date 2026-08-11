@@ -27,6 +27,8 @@ export function parseFasta(bytes, fallbackName = 'seq') {
   const names = [];
   /** @type {number[]} */
   const startList = [];
+  /** @type {number[]} */
+  const offsetList = [];
   const codes = new Uint8Array(n); // upper bound; sequence <= file size
   let w = 0;
   let i = 0;
@@ -47,6 +49,15 @@ export function parseFasta(bytes, fallbackName = 'seq') {
         const name = td.decode(bytes.subarray(i + 1, end)).trim();
         names.push(name.length > 0 ? name : `seq${names.length + 1}`);
         startList.push(w);
+        // Optional display-offset token in the description: `@offset=N`
+        // marks a reference-region slice whose local 0 is genomic position N.
+        let off = 0;
+        if (nameEnd >= 0) {
+          const desc = td.decode(bytes.subarray(nameEnd, j));
+          const m = /@offset=(\d+)/.exec(desc);
+          if (m) off = Number(m[1]);
+        }
+        offsetList.push(off);
         sawRecord = true;
       }
       i = j + 1;
@@ -56,6 +67,7 @@ export function parseFasta(bytes, fallbackName = 'seq') {
       if (!sawRecord) {
         names.push(fallbackName);
         startList.push(0);
+        offsetList.push(0);
         sawRecord = true;
       }
       while (i < n) {
@@ -76,10 +88,11 @@ export function parseFasta(bytes, fallbackName = 'seq') {
   for (let s = 0; s < startList.length; s++) starts[s] = startList[s];
   starts[startList.length] = w;
 
-  return {
-    catalog: { names, starts, total: w },
-    codes: codes.subarray(0, w),
-  };
+  /** @type {import('../core/types.js').AxisCatalog} */
+  const catalog = { names, starts, total: w };
+  if (offsetList.some((o) => o > 0)) catalog.offsets = Float64Array.from(offsetList);
+
+  return { catalog, codes: codes.subarray(0, w) };
 }
 
 /**
