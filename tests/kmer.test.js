@@ -189,6 +189,25 @@ test('kmer: stride subsampling still finds the diagonal', () => {
   assert(covered > 900, `stride coverage too low: ${covered}`);
 });
 
+test('kmer: range-restricted index covers only its window, in global coords', () => {
+  const t = randCodes(600, 70);
+  const opts = { ...KMER_DEFAULTS, maxGap: 0 };
+  // index only target [200, 400)
+  const index = buildIndex(t, starts([600]), opts.k, 1, undefined, 200, 400);
+  const qTotal = 600;
+  const out = makeOut();
+  matchStrand(index, t.slice(), starts([600]), qTotal, starts([600]), 600, opts, 0, out);
+  // the self-match against a windowed index is exactly the window's diagonal
+  assertEq(out.x.n, 1);
+  assertEq(out.x.a[0], 200);
+  assertEq(out.y.a[0], 200);
+  assertEq(out.dx.a[0], 200 - 1 + opts.k); // starts 200..399 → covers 200..399+k-1
+  // sequence outside the window finds nothing
+  const out2 = makeOut();
+  matchStrand(index, t.slice(0, 150), starts([150]), 150, starts([600]), 600, opts, 0, out2);
+  assertEq(out2.x.n, 0);
+});
+
 test('kmer: range-partitioned matching tiles seamlessly', () => {
   const t = randCodes(600, 30);
   const q = t.slice(100, 500); // one 400 bp match

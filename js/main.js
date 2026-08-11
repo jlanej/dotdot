@@ -47,6 +47,7 @@ const inMinRun = /** @type {HTMLInputElement} */ ($('in-minrun'));
 const inMinIdent = /** @type {HTMLInputElement} */ ($('in-minident'));
 const outMinIdent = $('out-minident');
 const inMinLen = /** @type {HTMLInputElement} */ ($('in-minlen'));
+const inSample = /** @type {HTMLInputElement} */ ($('in-sample'));
 const chkFwd = /** @type {HTMLInputElement} */ ($('chk-fwd'));
 const chkRev = /** @type {HTMLInputElement} */ ($('chk-rev'));
 const selColorMode = /** @type {HTMLSelectElement} */ ($('sel-colormode'));
@@ -59,6 +60,7 @@ const rowOverlay = $('row-overlay');
 const btnCompute = /** @type {HTMLButtonElement} */ ($('btn-compute'));
 const btnPng = /** @type {HTMLButtonElement} */ ($('btn-png'));
 const btnSvg = /** @type {HTMLButtonElement} */ ($('btn-svg'));
+const btnRefine = /** @type {HTMLButtonElement} */ ($('btn-refine'));
 
 // --------------------------------------------------------------------------
 // State
@@ -167,6 +169,9 @@ function spawnWorker() {
     } else if (msg.type === 'overlayResult') {
       setComputing(false);
       onOverlay(msg);
+    } else if (msg.type === 'regionResult') {
+      setComputing(false);
+      onRegionRefined(msg);
     } else if (msg.type === 'error') {
       setComputing(false);
       toast(msg.message, true);
@@ -372,12 +377,26 @@ function currentK() {
   return Number.isFinite(v) ? Math.min(26, Math.max(4, v)) : 15;
 }
 
+/**
+ * Sampling field: 'auto' follows input size; 'off'/'1' forces full density;
+ * any number is honored exactly.
+ * @returns {'auto' | number}
+ */
+function currentSample() {
+  const t = inSample.value.trim().toLowerCase();
+  if (t === '' || t === 'auto') return 'auto';
+  if (t === 'off') return 1;
+  const v = parseBp(t);
+  return Number.isFinite(v) && v >= 1 ? Math.round(v) : 'auto';
+}
+
 function matchOpts() {
   return {
     k: currentK(),
     maxGap: parseLenOff(inGap.value, 64),
     maxOcc: Math.max(1, parseLenOff(inMaxOcc.value, 200) || 200),
     minRunLen: parseLenOff(inMinRun.value, 0),
+    sample: currentSample(),
     stride: 1,
   };
 }
@@ -426,6 +445,7 @@ function onData(data) {
   updateStats();
   btnPng.disabled = false;
   btnSvg.disabled = false;
+  btnRefine.disabled = !(data.source === 'kmer' && state.fileTarget);
   btnCompute.textContent = data.source === 'kmer' ? 'Recompute' : 'Compute dot plot';
 
   // Build the picking grid after the first frame so the plot appears
@@ -1330,6 +1350,118 @@ inRegion.addEventListener('keydown', (e) => {
 $('btn-cancel').addEventListener('click', cancelCompute);
 $('btn-fit').addEventListener('click', fitView);
 
+/**
+ * Recompute the visible window at full density and merge the result into
+ * the existing plot in place — coarse chromosome context everywhere else,
+ * exact detail where you're looking. Axes, zoom, and the overlay stay put.
+ */
+function refineView() {
+  if (state.computing) return;
+  const d = state.data;
+  if (!d || d.source !== 'kmer' || !state.view) {
+    toast('Refine works on alignment-free plots (FASTA inputs).');
+    return;
+  }
+  if (!state.fileTarget) {
+    toast('The original FASTA buffers are no longer loaded — recompute first.');
+    return;
+  }
+  const { pw, ph } = state.sizes;
+  const b = state.view.bounds(pw, ph);
+  const tx0 = Math.max(0, Math.floor(b.x0));
+  const tx1 = Math.min(d.target.total, Math.ceil(b.x1));
+  const qy0 = Math.max(0, Math.floor(b.y0));
+  const qy1 = Math.min(d.query.total, Math.ceil(b.y1));
+  if (tx1 - tx0 < 100 || qy1 - qy0 < 100) {
+    toast('The visible window is too small to refine.');
+    return;
+  }
+  if (tx1 - tx0 > d.target.total * 0.9 && qy1 - qy0 > d.query.total * 0.9) {
+    toast('Zoom into a region first — Refine recomputes the visible window at full detail.');
+    return;
+  }
+  submit({
+    type: 'kmer',
+    target: state.fileTarget.buf,
+    query: state.fileQuery ? state.fileQuery.buf : null,
+    opts: { ...matchOpts(), sample: 1 },
+    window: { tx0, tx1, qy0, qy1 },
+  });
+}
+
+/**
+ * @param {{segments: import('./core/types.js').SegmentStore, window: {tx0:number,tx1:number,qy0:number,qy1:number}, identMin: number}} msg
+ */
+function onRegionRefined(msg) {
+  const d = state.data;
+  if (!d) return;
+  const w = msg.window;
+  const s = d.segments;
+  const ns = msg.segments;
+  // Old segments fully inside the window are superseded by the refined pass;
+  // edge-crossers stay (their in-window parts briefly coexist — harmless).
+  /** @type {number[]} */
+  const keep = [];
+  for (let i = 0; i < s.count; i++) {
+    const inside =
+      s.x[i] >= w.tx0 && s.x[i] + s.dx[i] <= w.tx1 && s.y[i] >= w.qy0 && s.y[i] + s.dy[i] <= w.qy1;
+    if (!inside) keep.push(i);
+  }
+  const total = keep.length + ns.count;
+  if (total > 20_000_000) {
+    toast('Refining this window would exceed the segment budget — narrow the view or raise min match length.', true);
+    return;
+  }
+  const merged = {
+    count: total,
+    x: new Float64Array(total),
+    y: new Float64Array(total),
+    dx: new Float32Array(total),
+    dy: new Float32Array(total),
+    strand: new Uint8Array(total),
+    identity: new Float32Array(total),
+  };
+  for (let j = 0; j < keep.length; j++) {
+    const i = keep[j];
+    merged.x[j] = s.x[i];
+    merged.y[j] = s.y[i];
+    merged.dx[j] = s.dx[i];
+    merged.dy[j] = s.dy[i];
+    merged.strand[j] = s.strand[i];
+    merged.identity[j] = s.identity[i];
+  }
+  merged.x.set(ns.x, keep.length);
+  merged.y.set(ns.y, keep.length);
+  merged.dx.set(ns.dx, keep.length);
+  merged.dy.set(ns.dy, keep.length);
+  merged.strand.set(ns.strand, keep.length);
+  merged.identity.set(ns.identity, keep.length);
+
+  d.segments = merged;
+  renderer.setData(merged);
+  state.grid = null;
+  state.hoverIndex = null;
+  setTimeout(() => {
+    if (state.data === d) {
+      state.grid = new SegmentGrid(merged, d.target.total, d.query.total);
+    }
+  }, 30);
+  if (msg.identMin < state.identLo) {
+    state.identLo = Math.max(0, Math.floor(msg.identMin * 100) / 100);
+    inMinIdent.min = String(state.identLo);
+    updateLegend();
+  }
+  updateStats();
+  const lenFilter = parseLenOff(inMinLen.value, 0);
+  toast(
+    `Refined ${formatBp(w.tx1 - w.tx0)} × ${formatBp(w.qy1 - w.qy0)} at full detail: ` +
+      `+${formatCount(ns.count)} segments in the window.` +
+      (lenFilter > 0 ? ` Min segment length is ${formatBp(lenFilter)} — lower it to see the fine structure.` : ''),
+  );
+  markDirty();
+}
+$('btn-refine').addEventListener('click', refineView);
+
 /** @param {number} f */
 function zoomStep(f) {
   if (!state.view) return;
@@ -1370,6 +1502,7 @@ $('btn-clear').addEventListener('click', () => {
   emptyState.hidden = false;
   btnPng.disabled = true;
   btnSvg.disabled = true;
+  btnRefine.disabled = true;
   btnCompute.disabled = true;
   btnCompute.textContent = 'Compute dot plot';
   legendEl.className = 'empty';
@@ -1515,6 +1648,15 @@ const HELP = {
   minrun:
     'Drop merged runs shorter than this at compute time ("off", "30", "1kb", any value). At ' +
     'genome scale a small evidence filter applies automatically.',
+  sample:
+    '<b>auto</b> thins matching on big inputs (test every Nth query position, sized to the ' +
+    'data) so chromosomes compute in minutes. Set a number to pin it, or <b>off</b> for full ' +
+    'density — exact but slow at chromosome scale. Tip: keep auto for the overview, zoom in, ' +
+    'then hit <b>Refine view</b> to recompute just the window at full detail.',
+  refine:
+    'Recomputes the <i>visible window</i> at full density and merges it into the plot in place ' +
+    '— axes, zoom, and the aligner overlay stay put. The way to work: coarse whole-chromosome ' +
+    'pass, zoom to a region of interest, refine, repeat. Needs the FASTA inputs still loaded.',
   minident:
     'Hide segments below this identity (matched fraction after gap bridging; for aligner PAFs, ' +
     'nmatch/alnlen). Instant — nothing recomputes.',

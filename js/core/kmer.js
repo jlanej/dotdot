@@ -69,14 +69,19 @@ export const MAX_SEGMENTS = 16_000_000;
 const PROGRESS_EVERY = 1 << 21;
 
 /**
+ * Restricting [tLo, tHi) indexes only k-mers *starting* in that target range
+ * (with rolling warm-up), for region-refine passes — positions stay global.
+ *
  * @param {Uint8Array} codes
  * @param {Float64Array} starts record boundaries (R+1 entries, last = length)
  * @param {number} k
  * @param {number} stride
  * @param {(done: number, total: number) => void} [onProgress]
+ * @param {number} [tLo] first k-mer start position to index (inclusive)
+ * @param {number} [tHi] end of k-mer start positions (exclusive)
  * @returns {KmerIndex}
  */
-export function buildIndex(codes, starts, k, stride, onProgress) {
+export function buildIndex(codes, starts, k, stride, onProgress, tLo = 0, tHi = codes.length) {
   if (k < 4 || k > 26) throw new Error(`k must be 4..26 (got ${k})`);
   if (stride < 1) throw new Error('stride must be >= 1');
   const n = codes.length;
@@ -94,13 +99,19 @@ export function buildIndex(codes, starts, k, stride, onProgress) {
   const prefDiv = wide ? Math.pow(2, shift) : 0;
   const nBuckets = 1 << prefixBits;
 
+  const startI = Math.max(0, tLo - (k - 1));
+  const endI = Math.min(n, tHi + k - 1);
+  const span = Math.max(1, endI - startI);
+  let recInit = 1;
+  while (recInit < starts.length - 1 && starts[recInit] <= startI) recInit++;
+
   // Pass 1: bucket occupancy.
   const bucketStarts = new Uint32Array(nBuckets + 1);
   {
     let kmer = 0;
     let run = 0;
-    let rec = 1;
-    for (let i = 0; i < n; i++) {
+    let rec = recInit;
+    for (let i = startI; i < endI; i++) {
       while (i >= starts[rec]) {
         rec++;
         run = 0;
@@ -119,12 +130,12 @@ export function buildIndex(codes, starts, k, stride, onProgress) {
       }
       if (run >= k) {
         const p = i - k + 1;
-        if (stride === 1 || p % stride === 0) {
+        if (p >= tLo && (stride === 1 || p % stride === 0)) {
           const b = wide ? Math.floor(kmer / prefDiv) : kmer >>> shift;
           bucketStarts[b + 1]++;
         }
       }
-      if (onProgress && (i & (PROGRESS_EVERY - 1)) === 0) onProgress(i, 2 * n);
+      if (onProgress && (i & (PROGRESS_EVERY - 1)) === 0) onProgress(i - startI, 2 * span);
     }
   }
 
@@ -138,8 +149,8 @@ export function buildIndex(codes, starts, k, stride, onProgress) {
     const cur = bucketStarts.slice(0, nBuckets);
     let kmer = 0;
     let run = 0;
-    let rec = 1;
-    for (let i = 0; i < n; i++) {
+    let rec = recInit;
+    for (let i = startI; i < endI; i++) {
       while (i >= starts[rec]) {
         rec++;
         run = 0;
@@ -158,14 +169,14 @@ export function buildIndex(codes, starts, k, stride, onProgress) {
       }
       if (run >= k) {
         const p = i - k + 1;
-        if (stride === 1 || p % stride === 0) {
+        if (p >= tLo && (stride === 1 || p % stride === 0)) {
           const b = wide ? Math.floor(kmer / prefDiv) : kmer >>> shift;
           const j = cur[b]++;
           kmers[j] = kmer;
           pos[j] = p;
         }
       }
-      if (onProgress && (i & (PROGRESS_EVERY - 1)) === 0) onProgress(n + i, 2 * n);
+      if (onProgress && (i & (PROGRESS_EVERY - 1)) === 0) onProgress(span + (i - startI), 2 * span);
     }
   }
 

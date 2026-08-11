@@ -86,6 +86,18 @@
             <option value="1kb"></option>
           </datalist>
         </div>
+        <div class="ctl">
+          <label for="in-sample">sampling <button class="help" data-help="sample">?</button></label>
+          <input type="text" id="in-sample" class="combo" list="dl-sample" value="auto" spellcheck="false" autocomplete="off" />
+          <datalist id="dl-sample">
+            <option value="auto"></option>
+            <option value="off" label="full density"></option>
+            <option value="2"></option>
+            <option value="4"></option>
+            <option value="8"></option>
+            <option value="16"></option>
+          </datalist>
+        </div>
         <button id="btn-compute" class="btn primary" disabled>Compute dot plot</button>
       </section>
 
@@ -150,6 +162,8 @@
         <dl id="stats"></dl>
         <div class="btn-row">
           <button id="btn-fit" class="btn">Fit <kbd>R</kbd></button>
+          <button id="btn-refine" class="btn" disabled title="Recompute the visible window at full detail">Refine view</button>
+          <button class="help" data-help="refine" style="align-self: center">?</button>
           <button id="btn-png" class="btn" disabled>PNG</button>
           <button id="btn-svg" class="btn" disabled>SVG</button>
         </div>

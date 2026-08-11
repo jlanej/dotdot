@@ -46,7 +46,14 @@ self.onmessage = async (ev) => {
   }
 };
 
-/** @param {{id:number, target:ArrayBuffer, query:ArrayBuffer|null, opts:object}} req */
+/**
+ * @typedef {{tx0:number, tx1:number, qy0:number, qy1:number}} RefineWindow
+ * Global-coordinate window for a region-refine pass: only target k-mers
+ * starting in [tx0,tx1) are indexed and only query positions in [qy0,qy1)
+ * are matched, at full density.
+ */
+
+/** @param {{id:number, target:ArrayBuffer, query:ArrayBuffer|null, opts:object, window?:RefineWindow}} req */
 async function handleKmer(req) {
   const t0 = performance.now();
   progress(req.id, 'Reading files', 0);
@@ -68,29 +75,45 @@ async function handleKmer(req) {
       codes: tParsed.codes,
     };
   }
-  computeKmer(req.id, tParsed, qParsed, req.opts, t0);
+  computeKmer(req.id, tParsed, qParsed, req.opts, t0, req.window ?? null);
 }
 
 /**
  * @param {number} id
  * @param {{catalog: import('../core/types.js').AxisCatalog, codes: Uint8Array}} tParsed
  * @param {{catalog: import('../core/types.js').AxisCatalog, codes: Uint8Array}} qParsed
- * @param {object} optsIn
+ * @param {object & {sample?: 'auto'|number}} optsIn
  * @param {number} t0
+ * @param {RefineWindow | null} [window]
  */
-function computeKmer(id, tParsed, qParsed, optsIn, t0) {
+function computeKmer(id, tParsed, qParsed, optsIn, t0, window = null) {
   const opts = { ...KMER_DEFAULTS, ...optsIn };
   // Keep the index within ~48M entries on big targets by striding, and cap
   // query-side lookups the same way — random-access lookups are the wall at
-  // chromosome scale, and run merging bridges the sampling holes.
-  const autoStride = Math.max(1, Math.ceil(tParsed.codes.length / 48_000_000));
+  // chromosome scale, and run merging bridges the sampling holes. All auto
+  // values derive from the *worked* extent, so a refine window computes at
+  // full density even when the whole chromosome would not.
+  const tLenEff = window ? Math.max(1, window.tx1 - window.tx0) : tParsed.codes.length;
+  const qLenEff = window ? Math.max(1, window.qy1 - window.qy0) : qParsed.codes.length;
+  const autoStride = Math.max(1, Math.ceil(tLenEff / 48_000_000));
   const stride = Math.max(opts.stride, autoStride);
-  const autoQSample = Math.max(1, Math.ceil(qParsed.codes.length / 48_000_000));
-  const qSample = Math.max(opts.qSample ?? 1, autoQSample);
+  const autoQSample = Math.max(1, Math.ceil(qLenEff / 48_000_000));
+  // 'auto' (or absent) follows size; an explicit number is honored exactly —
+  // including 1 = full density at the user's own risk/time.
+  const qSample =
+    opts.sample == null || opts.sample === 'auto'
+      ? autoQSample
+      : Math.max(1, Math.floor(opts.sample));
 
   progress(id, 'Indexing target', 0);
-  const index = buildIndex(tParsed.codes, tParsed.catalog.starts, opts.k, stride, (d, t) =>
-    progress(id, 'Indexing target', d / t),
+  const index = buildIndex(
+    tParsed.codes,
+    tParsed.catalog.starts,
+    opts.k,
+    stride,
+    (d, t) => progress(id, 'Indexing target', d / t),
+    window ? Math.max(0, Math.floor(window.tx0)) : 0,
+    window ? Math.min(tParsed.codes.length, Math.ceil(window.tx1)) : tParsed.codes.length,
   );
 
   // Translate the user's occurrence cap (original-target semantics) into an
@@ -98,13 +121,7 @@ function computeKmer(id, tParsed, qParsed, optsIn, t0) {
   // index's own occurrence histogram — repeat families, not sequence length,
   // are what melt genome-scale runs.
   const userCapEntries = Math.max(1, Math.floor(opts.maxOcc / stride));
-  const maxOccEff = pickMaxOcc(
-    index,
-    qParsed.codes.length,
-    tParsed.codes.length,
-    qSample,
-    userCapEntries,
-  );
+  const maxOccEff = pickMaxOcc(index, qLenEff, tLenEff, qSample, userCapEntries);
   // Sampled runs cannot represent one- or two-anchor matches faithfully
   // anyway (sub-pixel at this scale) — require a few co-linear anchors of
   // evidence instead of letting tens of millions of repeat fragments exhaust
@@ -120,7 +137,7 @@ function computeKmer(id, tParsed, qParsed, optsIn, t0) {
   const cores = Math.min(8, Math.max(1, (navigator.hardwareConcurrency || 4) - 2));
   const isolated =
     typeof SharedArrayBuffer !== 'undefined' && /** @type {any} */ (self).crossOriginIsolated === true;
-  if (isolated && cores >= 2 && qParsed.codes.length > 4_000_000) {
+  if (!window && isolated && cores >= 2 && qParsed.codes.length > 4_000_000) {
     progress(id, 'Preparing shared memory', 0.5);
     const qTotal = qParsed.catalog.total;
     const tTotal = tParsed.catalog.total;
@@ -192,16 +209,23 @@ function computeKmer(id, tParsed, qParsed, optsIn, t0) {
   const tTotal = tParsed.catalog.total;
 
   const tStarts = tParsed.catalog.starts;
+  const qLo = window ? Math.max(0, Math.floor(window.qy0)) : 0;
+  const qHi = window ? Math.min(qParsed.codes.length, Math.ceil(window.qy1)) : qParsed.codes.length;
   progress(id, 'Matching forward strand', 0);
-  matchStrand(index, qParsed.codes, qParsed.catalog.starts, qTotal, tStarts, tTotal, effOpts, 0, out, (d, t) =>
-    progress(id, 'Matching forward strand', d / t),
+  matchStrand(
+    index, qParsed.codes, qParsed.catalog.starts, qTotal, tStarts, tTotal, effOpts, 0, out,
+    (d, t) => progress(id, 'Matching forward strand', d / t),
+    qLo, qHi,
   );
 
   progress(id, 'Matching reverse strand', 0);
   const rcCodes = reverseComplement(qParsed.codes);
   const rcStarts = mirrorStarts(qParsed.catalog.starts);
-  matchStrand(index, rcCodes, rcStarts, qTotal, tStarts, tTotal, effOpts, 1, out, (d, t) =>
-    progress(id, 'Matching reverse strand', d / t),
+  // The same query window, mirrored into reverse-complement coordinates.
+  matchStrand(
+    index, rcCodes, rcStarts, qTotal, tStarts, tTotal, effOpts, 1, out,
+    (d, t) => progress(id, 'Matching reverse strand', d / t),
+    qTotal - qHi, qTotal - qLo,
   );
 
   progress(id, 'Building plot', 0.9);
@@ -217,6 +241,27 @@ function computeKmer(id, tParsed, qParsed, optsIn, t0) {
   let identMin = 1;
   for (let i = 0; i < segments.count; i++) {
     if (segments.identity[i] < identMin) identMin = segments.identity[i];
+  }
+  if (window) {
+    post(
+      {
+        id,
+        type: 'regionResult',
+        segments,
+        window,
+        identMin,
+        elapsedMs: performance.now() - t0,
+      },
+      [
+        segments.x.buffer,
+        segments.y.buffer,
+        segments.dx.buffer,
+        segments.dy.buffer,
+        segments.strand.buffer,
+        segments.identity.buffer,
+      ],
+    );
+    return;
   }
   /** @type {PlotData} */
   const data = {
