@@ -52,6 +52,21 @@ body {
   background: var(--page);
   color: var(--ink);
   overflow: hidden;
+  /* An app, not a document: without this, WebKit browsers treat plot drags
+     as text-selection gestures (I-beam cursor, no pan). */
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Typing fields and data readouts stay selectable/copyable. */
+input,
+textarea,
+#hover-card,
+#stats,
+#readout,
+#help-pop {
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 kbd {

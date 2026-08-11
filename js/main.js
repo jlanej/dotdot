@@ -725,6 +725,9 @@ plotRoot.addEventListener('drop', (e) => {
 });
 document.addEventListener('dragover', (e) => e.preventDefault());
 document.addEventListener('drop', (e) => e.preventDefault());
+// Final backstop against text-selection drags stealing plot gestures in
+// WebKit browsers.
+plotRoot.addEventListener('selectstart', (e) => e.preventDefault());
 
 // --------------------------------------------------------------------------
 // View / drawing
@@ -968,6 +971,8 @@ function plotXY(e) {
 
 overlay.addEventListener('pointerdown', (e) => {
   if (!state.view) return;
+  // Claim the gesture before the browser starts a native selection drag.
+  e.preventDefault();
   try {
     overlay.setPointerCapture(e.pointerId);
   } catch {
