@@ -127,7 +127,7 @@ export function exportSvg(p) {
   <rect width="${p.vpW}" height="${p.vpH}" fill="${theme.page}"/>
   <rect x="${LAYOUT.l}" y="${LAYOUT.t}" width="${pw}" height="${ph}" fill="${theme.surface}"/>
   <g fill="${theme.ink}" fill-opacity="${STRIPE_ALPHA}">${stripes.join('')}</g>
-  <g stroke="${theme.grid}" stroke-width="1">${gridLines.join('')}</g>
+  <g stroke="${theme.baseline}" stroke-width="1">${gridLines.join('')}</g>
   <clipPath id="plot"><rect x="${LAYOUT.l}" y="${LAYOUT.t}" width="${pw}" height="${ph}"/></clipPath>
   <g clip-path="url(#plot)" stroke-width="${opts.widthPx}" stroke-linecap="round">${lines.join('')}</g>
   <rect x="${LAYOUT.l}" y="${LAYOUT.t}" width="${pw}" height="${ph}" fill="none" stroke="${theme.baseline}"/>

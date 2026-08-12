@@ -66,7 +66,9 @@ export function drawUnderlay(canvas, cssW, cssH, dpr, view, data, theme) {
   ctx.beginPath();
   ctx.rect(LAYOUT.l, LAYOUT.t, pw, ph);
   ctx.clip();
-  ctx.strokeStyle = theme.grid;
+  // Region boundaries wear the (stronger) baseline token — they separate
+  // coordinate spaces, which is a bigger claim than a tick's gridline.
+  ctx.strokeStyle = theme.baseline;
   ctx.lineWidth = 1;
 
   const b = view.bounds(pw, ph);
@@ -326,10 +328,11 @@ export function bandStripes(cat, w0, w1, px) {
   return out;
 }
 
-/** The separators' ink opacity — recessive by design (background structure,
- * never competing with data marks); overlapping x/y stripes deepen slightly
- * into the 2D region lattice. */
-export const STRIPE_ALPHA = 0.04;
+/** The separators' ink opacity — visible at a glance yet still background
+ * structure (never competing with data marks); overlapping x/y stripes
+ * deepen into the 2D region lattice. 4% proved imperceptible on real
+ * displays; 7% reads clearly in both themes. */
+export const STRIPE_ALPHA = 0.07;
 
 /**
  * Visible band-name labels with the shared placement rules (≤60 bands,
