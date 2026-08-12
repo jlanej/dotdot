@@ -18,6 +18,32 @@
 
   <div id="layout">
     <aside id="sidebar">
+      <section class="panel" id="panel-detail" hidden>
+        <h2>Detail <button class="help" data-help="detail" aria-label="about the detail controls">?</button></h2>
+        <div class="ctl">
+          <label for="in-minlen-range">min segment length <output id="out-minlen">off</output></label>
+          <div class="minlen-row">
+            <input type="range" id="in-minlen-range" min="0" max="100" step="1" value="0"
+              aria-label="min segment length (log scale)" />
+            <input type="text" id="in-minlen" class="combo" list="dl-minlen" value="off" spellcheck="false" autocomplete="off" />
+          </div>
+          <datalist id="dl-minlen">
+            <option value="off"></option>
+            <option value="100"></option>
+            <option value="500"></option>
+            <option value="2kb"></option>
+            <option value="10kb"></option>
+            <option value="50kb"></option>
+          </datalist>
+        </div>
+        <div class="btn-row detail-actions">
+          <button id="btn-refine" class="btn primary" disabled title="Recompute the visible window at full detail (F)">Refine view <kbd>F</kbd></button>
+          <label class="autoref" title="Refine automatically when you rest at a zoomed view"><input type="checkbox" id="chk-autorefine" />auto</label>
+          <button class="help" data-help="refine" style="align-self: center">?</button>
+        </div>
+        <p class="hint"><kbd>[</kbd> / <kbd>]</kbd> step the length filter — sweep repeat fabric ↔ structure without leaving the plot.</p>
+      </section>
+
       <section class="panel">
         <h2>Data <button class="help" data-help="data" aria-label="about inputs">?</button></h2>
         <div class="ctl">
@@ -128,18 +154,6 @@
           <label for="in-minident">min identity <button class="help" data-help="minident">?</button> <output id="out-minident">off</output></label>
           <input type="range" id="in-minident" min="0" max="1" step="0.005" value="0" />
         </div>
-        <div class="ctl">
-          <label for="in-minlen">min segment length <button class="help" data-help="minlen">?</button></label>
-          <input type="text" id="in-minlen" class="combo" list="dl-minlen" value="off" spellcheck="false" autocomplete="off" />
-          <datalist id="dl-minlen">
-            <option value="off"></option>
-            <option value="100"></option>
-            <option value="500"></option>
-            <option value="2kb"></option>
-            <option value="10kb"></option>
-            <option value="50kb"></option>
-          </datalist>
-        </div>
         <div class="ctl checks">
           <label><input type="checkbox" id="chk-fwd" checked /><span class="swatch" id="sw-fwd"></span>forward</label>
           <label><input type="checkbox" id="chk-rev" checked /><span class="swatch" id="sw-rev"></span>reverse
@@ -183,8 +197,6 @@
         <dl id="stats"></dl>
         <div class="btn-row">
           <button id="btn-fit" class="btn">Fit <kbd>R</kbd></button>
-          <button id="btn-refine" class="btn" disabled title="Recompute the visible window at full detail">Refine view</button>
-          <button class="help" data-help="refine" style="align-self: center">?</button>
           <button id="btn-png" class="btn" disabled>PNG</button>
           <button id="btn-svg" class="btn" disabled>SVG</button>
         </div>
@@ -204,6 +216,7 @@
         <button id="btn-zoom-in" title="Zoom in (+)">+</button>
         <button id="btn-zoom-out" title="Zoom out (−)">−</button>
         <button id="btn-zoom-fit" title="Fit everything (R)">⤢</button>
+        <button id="btn-zoom-refine" title="Refine view — full detail in this window (F)" disabled>✦</button>
       </div>
       <div id="tooltip" hidden></div>
       <div id="empty-state">
@@ -225,7 +238,7 @@
 
   <footer id="statusbar">
     <div id="readout">—</div>
-    <div id="hints">drag pan · pinch / wheel zoom · shift-drag box zoom · double-click zoom · <kbd>R</kbd> fit · <kbd>P</kbd> fps</div>
+    <div id="hints">drag pan · pinch / wheel zoom · shift-drag box zoom · double-click zoom · <kbd>R</kbd> fit · <kbd>F</kbd> refine · <kbd>[</kbd><kbd>]</kbd> detail · <kbd>P</kbd> fps</div>
   </footer>
 
   <div id="toast" hidden></div>

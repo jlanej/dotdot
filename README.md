@@ -73,8 +73,9 @@ the HPRC Release 2 NA19240 assembly, from minimap2 PAF. Reproduce it with
 - **Interactive** — drag pan, pinch / wheel / two-finger-scroll zoom
   (Alt = x-only), on-plot **+/−/fit** buttons, shift-drag box zoom,
   double-click zoom, hover tooltips with per-sequence coordinates, crosshair
-  readout, keyboard shortcuts (`R` fit, `G` region box, `1`/`2` strand
-  toggles, `P` fps meter) — and a clickable **?** popover on every control,
+  readout, keyboard shortcuts (`R` fit, `F` refine, `[`/`]` detail ladder,
+  `G` region box, `1`/`2` strand toggles, `P` fps meter) — and a clickable
+  **?** popover on every control,
   with the header **?** as the full cheat-sheet. All matching/display fields
   take free values (`1kb`, `2,500`, `off`) with presets as suggestions.
 - **Region jump** (`G`) — type `chr17:18.3M-19.4M` (or a sequence name, or a
@@ -206,10 +207,14 @@ heterozygous 4.9 kb deletion at chr17:10.895 Mb) and **Full chr17**
 
 At chromosome scale the engine samples (the `sampling` field: `auto` sizes it
 to the data, `off` forces full density, any number pins it). That makes the
-overview fast — and the **Refine view** button closes the loop: it recomputes
-the currently visible window at full density and merges the result in place,
-so the plot stays one continuous coordinate space with coarse context
-everywhere and exact k-mer structure where you're looking. Below, the
+overview fast — and **Refine view** closes the loop: it recomputes the
+currently visible window at full density and merges the result in place, so
+the plot stays one continuous coordinate space with coarse context everywhere
+and exact k-mer structure where you're looking. The **Detail** panel keeps
+the loop at your fingertips: the min-segment-length dial (slider, exact
+value, or `[`/`]` from the plot) sweeps repeat fabric ↔ structure live, `F`
+or the on-plot ✦ refines, and checking **auto** refines by itself whenever
+you rest at a zoomed view. Below, the
 demo's heterozygous ~4.9 kb deletion after refining: hap2's diagonal halts at
 a breakpoint diamond, jumps ~5 kb across reference-only sequence with zero
 query advance, and resumes.

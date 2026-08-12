@@ -651,3 +651,44 @@ input.combo:focus,
 #toast.error {
   border-left-color: var(--critical);
 }
+
+/* ---- Detail quick panel (top of sidebar) --------------------------------- */
+.minlen-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.minlen-row input[type='range'] {
+  flex: 1;
+  min-width: 0;
+}
+.minlen-row input.combo {
+  width: 74px;
+  flex: none;
+}
+.detail-actions {
+  align-items: center;
+}
+.detail-actions .autoref {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--ink-2);
+  cursor: pointer;
+  user-select: none;
+}
+.detail-actions .autoref input {
+  accent-color: var(--accent);
+}
+#zoomctl button:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+#zoomctl button:disabled:hover {
+  color: var(--ink-2);
+  border-color: var(--border);
+}
+#btn-zoom-refine {
+  font-size: 13px;
+}

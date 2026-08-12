@@ -50,6 +50,10 @@ const inMinRun = /** @type {HTMLInputElement} */ ($('in-minrun'));
 const inMinIdent = /** @type {HTMLInputElement} */ ($('in-minident'));
 const outMinIdent = $('out-minident');
 const inMinLen = /** @type {HTMLInputElement} */ ($('in-minlen'));
+const inMinLenRange = /** @type {HTMLInputElement} */ ($('in-minlen-range'));
+const outMinLen = $('out-minlen');
+const chkAutoRefine = /** @type {HTMLInputElement} */ ($('chk-autorefine'));
+const panelDetail = $('panel-detail');
 const inSample = /** @type {HTMLInputElement} */ ($('in-sample'));
 const chkFwd = /** @type {HTMLInputElement} */ ($('chk-fwd'));
 const chkRev = /** @type {HTMLInputElement} */ ($('chk-rev'));
@@ -69,6 +73,43 @@ const btnCompute = /** @type {HTMLButtonElement} */ ($('btn-compute'));
 const btnPng = /** @type {HTMLButtonElement} */ ($('btn-png'));
 const btnSvg = /** @type {HTMLButtonElement} */ ($('btn-svg'));
 const btnRefine = /** @type {HTMLButtonElement} */ ($('btn-refine'));
+const btnZoomRefine = /** @type {HTMLButtonElement} */ ($('btn-zoom-refine'));
+
+/** Refine has two homes (Detail panel + the on-plot zoom cluster). */
+function setRefineEnabled(/** @type {boolean} */ on) {
+  btnRefine.disabled = !on;
+  btnZoomRefine.disabled = !on;
+}
+
+// ---- min-segment-length: the detail dial -----------------------------------
+// One value, three views: log slider (0 = off, 1..100 sweeps 10 bp..100 kb),
+// free-text field, and a formatted readout. The 1-2-5 ladder backs [ / ].
+const MINLEN_LADDER = [0, 10, 20, 50, 100, 200, 500, 1e3, 2e3, 5e3, 1e4, 2e4, 5e4, 1e5];
+
+/** @param {number} t slider position 0..100 */
+function minLenFromSlider(t) {
+  if (t <= 0) return 0;
+  const bp = Math.pow(10, 1 + (t / 100) * 4);
+  const tick = Math.pow(10, Math.floor(Math.log10(bp))) / 10; // 2 significant figures
+  return Math.round(bp / tick) * tick;
+}
+
+/** @param {number} bp */
+function sliderFromMinLen(bp) {
+  if (bp <= 0) return 0;
+  return Math.max(1, Math.min(100, Math.round(((Math.log10(bp) - 1) / 4) * 100)));
+}
+
+/**
+ * Set the display length filter, keeping slider, field, and readout in sync.
+ * @param {number} bp @param {{skipText?: boolean}} [o]
+ */
+function setMinLen(bp, o = {}) {
+  if (!o.skipText) inMinLen.value = bp > 0 ? String(Math.round(bp)) : 'off';
+  inMinLenRange.value = String(sliderFromMinLen(bp));
+  outMinLen.textContent = bp > 0 ? formatBp(bp) : 'off';
+  markDirty();
+}
 
 // --------------------------------------------------------------------------
 // State
@@ -473,7 +514,10 @@ function onData(data, reqId = -1) {
   updateStats();
   btnPng.disabled = false;
   btnSvg.disabled = false;
-  btnRefine.disabled = !(data.source === 'kmer' && state.fileTarget);
+  setRefineEnabled(data.source === 'kmer' && !!state.fileTarget);
+  panelDetail.hidden = false;
+  setMinLen(parseLenOff(inMinLen.value, 0), { skipText: true });
+  autoRefinedSig = '';
   btnCompute.textContent = data.source === 'kmer' ? 'Recompute' : 'Compute dot plot';
 
   // Build the picking grid after the first frame so the plot appears
@@ -503,7 +547,7 @@ function onData(data, reqId = -1) {
     }
     for (let j = 0; j < options.length; j++) {
       if ((counts[j] / sampled) * n <= 500_000) {
-        inMinLen.value = String(options[j]);
+        setMinLen(options[j]);
         toast(
           `Dense result: showing matches ≥ ${formatBp(options[j])} of ${formatCount(n)} total — ` +
             'lower “min segment length” to reveal more.',
@@ -789,7 +833,7 @@ async function loadDemo() {
     if (gen !== refLoadGen) return;
     // Open on structure (17p11.2 is segdup-dense); the length slider
     // reveals the full repeat fabric live.
-    inMinLen.value = '500';
+    setMinLen(500);
     // Both slots land in the same tick so the debounced autocompute runs
     // exactly once, on the demo pair — and the overlay binds to that request.
     queuedActions = { overlay: o, region: carriedRegion };
@@ -1185,6 +1229,7 @@ function frame() {
     lastFrame = now;
     if (dt > 0 && dt < 1000) state.fps = state.fps * 0.85 + (1000 / dt) * 0.15;
   }
+  autoRefineTick(performance.now());
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
@@ -1249,6 +1294,12 @@ Object.defineProperty(globalThis, '__dotdotDraw', {
     draw(window.devicePixelRatio || 1);
     state.dirty = false;
   },
+});
+
+// The settle watcher rides the same rAF loop — this drives one tick manually
+// so hidden-tab automation can exercise auto-refine deterministically.
+Object.defineProperty(globalThis, '__dotdotAutoTick', {
+  value: (/** @type {number} */ now) => autoRefineTick(now),
 });
 
 // --------------------------------------------------------------------------
@@ -1547,6 +1598,20 @@ window.addEventListener('keydown', (e) => {
     case 'P':
       state.fpsOn = !state.fpsOn;
       break;
+    case 'f':
+    case 'F':
+      refineView();
+      break;
+    case '[':
+    case ']': {
+      const cur = parseLenOff(inMinLen.value, 0);
+      let idx = 0;
+      for (let i = 0; i < MINLEN_LADDER.length; i++) if (MINLEN_LADDER[i] <= cur) idx = i;
+      idx = Math.max(0, Math.min(MINLEN_LADDER.length - 1, idx + (e.key === ']' ? 1 : -1)));
+      setMinLen(MINLEN_LADDER[idx]);
+      updateLegend();
+      break;
+    }
     case 'g':
     case 'G':
       /** @type {HTMLInputElement} */ ($('in-region')).focus();
@@ -1592,7 +1657,10 @@ for (const el of [inMinLen, selColorMode]) {
     markDirty();
   });
 }
-inMinLen.addEventListener('input', markDirty); // live while typing
+// Field, slider, and readout stay one value — live while typing/dragging.
+inMinLen.addEventListener('input', () => setMinLen(parseLenOff(inMinLen.value, 0), { skipText: true }));
+inMinLenRange.addEventListener('input', () => setMinLen(minLenFromSlider(Number(inMinLenRange.value))));
+inMinLenRange.addEventListener('change', updateLegend);
 for (const el of [chkFwd, chkRev, chkMinPx]) {
   el.addEventListener('change', markDirty);
 }
@@ -1621,16 +1689,18 @@ $('btn-fit').addEventListener('click', fitView);
  * Recompute the visible window at full density and merge the result into
  * the existing plot in place — coarse chromosome context everywhere else,
  * exact detail where you're looking. Axes, zoom, and the overlay stay put.
+ * @param {boolean} [auto] triggered by the settle watcher: fail silently,
+ *   and suppress the completion toast
  */
-function refineView() {
+function refineView(auto = false) {
   if (state.computing) return;
   const d = state.data;
   if (!d || d.source !== 'kmer' || !state.view) {
-    toast('Refine works on alignment-free plots (FASTA inputs).');
+    if (!auto) toast('Refine works on alignment-free plots (FASTA inputs).');
     return;
   }
   if (!state.fileTarget) {
-    toast('The original FASTA buffers are no longer loaded — recompute first.');
+    if (!auto) toast('The original FASTA buffers are no longer loaded — recompute first.');
     return;
   }
   const { pw, ph } = state.sizes;
@@ -1640,14 +1710,49 @@ function refineView() {
   const qy0 = Math.max(0, Math.floor(b.y0));
   const qy1 = Math.min(d.query.total, Math.ceil(b.y1));
   if (tx1 - tx0 < 100 || qy1 - qy0 < 100) {
-    toast('The visible window is too small to refine.');
+    if (!auto) toast('The visible window is too small to refine.');
     return;
   }
   if (tx1 - tx0 > d.target.total * 0.9 && qy1 - qy0 > d.query.total * 0.9) {
-    toast('Zoom into a region first — Refine recomputes the visible window at full detail.');
+    if (!auto) toast('Zoom into a region first — Refine recomputes the visible window at full detail.');
     return;
   }
+  refineQuiet = auto;
+  autoRefinedSig = lastViewSig; // a window refined by hand needn't auto-refine again
+  // Debug/automation stamp (globalThis.__dotdot.lastRefine).
+  /** @type {any} */ (state).lastRefine = { auto, window: { tx0, tx1, qy0, qy1 } };
   submitKmer({ ...matchOpts(), sample: 1 }, { tx0, tx1, qy0, qy1 });
+}
+
+// ---- auto-refine: settle-watcher over the view -----------------------------
+// With "auto" on, resting ~1 s at a meaningfully zoomed view refines that
+// window by itself — the zoom → refine loop with the second step removed.
+// supersede() keeps rapid navigation cheap; the signature guard keeps any
+// window from refining twice.
+let lastViewSig = '';
+let viewSettledAt = 0;
+let autoRefinedSig = '';
+let refineQuiet = false;
+
+/** @param {number} now */
+function autoRefineTick(now) {
+  if (!state.view || !state.data) return;
+  const { pw, ph } = state.sizes;
+  const b = state.view.bounds(pw, ph);
+  const sig = `${Math.round(b.x0)},${Math.round(b.x1)},${Math.round(b.y0)},${Math.round(b.y1)}`;
+  if (sig !== lastViewSig) {
+    lastViewSig = sig;
+    viewSettledAt = now;
+    return;
+  }
+  if (!chkAutoRefine.checked || state.computing) return;
+  if (now - viewSettledAt < 900 || sig === autoRefinedSig) return;
+  if (state.data.source !== 'kmer' || !state.fileTarget) return;
+  const txSpan = Math.min(state.data.target.total, b.x1) - Math.max(0, b.x0);
+  const qySpan = Math.min(state.data.query.total, b.y1) - Math.max(0, b.y0);
+  const areaFrac = (txSpan * qySpan) / (state.data.target.total * state.data.query.total);
+  if (txSpan < 100 || qySpan < 100 || areaFrac > 0.25) return;
+  refineView(true);
 }
 
 /**
@@ -1692,15 +1797,19 @@ function onRegionRefined(msg) {
     updateLegend();
   }
   updateStats();
-  const lenFilter = parseLenOff(inMinLen.value, 0);
-  toast(
-    `Refined ${formatBp(w.tx1 - w.tx0)} × ${formatBp(w.qy1 - w.qy0)} at full detail: ` +
-      `+${formatCount(ns.count)} segments in the window.` +
-      (lenFilter > 0 ? ` Min segment length is ${formatBp(lenFilter)} — lower it to see the fine structure.` : ''),
-  );
+  if (!refineQuiet) {
+    const lenFilter = parseLenOff(inMinLen.value, 0);
+    toast(
+      `Refined ${formatBp(w.tx1 - w.tx0)} × ${formatBp(w.qy1 - w.qy0)} at full detail: ` +
+        `+${formatCount(ns.count)} segments in the window.` +
+        (lenFilter > 0 ? ` Min segment length is ${formatBp(lenFilter)} — lower it to see the fine structure.` : ''),
+    );
+  }
+  refineQuiet = false;
   markDirty();
 }
-$('btn-refine').addEventListener('click', refineView);
+$('btn-refine').addEventListener('click', () => refineView());
+btnZoomRefine.addEventListener('click', () => refineView());
 
 /** @param {number} f */
 function zoomStep(f) {
@@ -1753,7 +1862,8 @@ $('btn-clear').addEventListener('click', () => {
   emptyState.hidden = false;
   btnPng.disabled = true;
   btnSvg.disabled = true;
-  btnRefine.disabled = true;
+  setRefineEnabled(false);
+  panelDetail.hidden = true;
   btnCompute.disabled = true;
   btnCompute.textContent = 'Compute dot plot';
   legendEl.className = 'empty';
@@ -1881,7 +1991,8 @@ const HELP = {
     'pinch — zoom (Safari/Chrome; some browsers reserve pinch for page magnification — use the ' +
     'on-plot +/− buttons there) · shift-drag — box zoom · double-click — zoom in (shift = out) · ' +
     'hover — inspect a match<br><b>Keys</b><br>' +
-    '<kbd>R</kbd>/<kbd>0</kbd> fit · <kbd>G</kbd> region box · <kbd>+</kbd>/<kbd>−</kbd> zoom · ' +
+    '<kbd>R</kbd>/<kbd>0</kbd> fit · <kbd>F</kbd> refine view · <kbd>[</kbd>/<kbd>]</kbd> min ' +
+    'segment length down/up · <kbd>G</kbd> region box · <kbd>+</kbd>/<kbd>−</kbd> zoom · ' +
     'arrows pan · <kbd>1</kbd>/<kbd>2</kbd> strand toggles · <kbd>P</kbd> fps meter',
   data:
     'Target FASTA = x axis, query FASTA = y axis (one file → self-plot). Each button ' +
@@ -1920,17 +2031,21 @@ const HELP = {
     'data) so chromosomes compute in minutes. Set a number to pin it, or <b>off</b> for full ' +
     'density — exact but slow at chromosome scale. Tip: keep auto for the overview, zoom in, ' +
     'then hit <b>Refine view</b> to recompute just the window at full detail.',
+  detail:
+    'The exploration dial, always at hand. <b>Min segment length</b> filters what is <i>drawn</i> ' +
+    '(never what was computed): low reveals the repeat fabric, high shows clean structure — drag ' +
+    'the slider, type an exact value, or press <kbd>[</kbd>/<kbd>]</kbd> from the plot. Dense ' +
+    'results pick a sane starting value automatically. <b>Refine view</b> lives below, with ' +
+    '<b>auto</b> to refine as you go.',
   refine:
     'Recomputes the <i>visible window</i> at full density and merges it into the plot in place ' +
-    '— axes, zoom, and the aligner overlay stay put. The way to work: coarse whole-chromosome ' +
-    'pass, zoom to a region of interest, refine, repeat. Needs the FASTA inputs still loaded.',
+    '— axes, zoom, and the aligner overlay stay put. Press <kbd>F</kbd> or the ✦ button by the ' +
+    'zoom controls. With <b>auto</b> checked, resting a moment at a zoomed view refines it by ' +
+    'itself. The way to work: coarse whole-chromosome pass, zoom in, refine, repeat. Needs the ' +
+    'FASTA inputs still loaded.',
   minident:
     'Hide segments below this identity (matched fraction after gap bridging; for aligner PAFs, ' +
     'nmatch/alnlen). Instant — nothing recomputes.',
-  minlen:
-    '<b>The</b> dial at genome scale: low reveals the repeat fabric, high shows clean chromosome ' +
-    'structure. Type anything ("off", "750", "2kb") — it applies live as you type. Dense results ' +
-    'pick a sane starting value automatically.',
   strands:
     'Forward matches are blue; reverse-complement matches are orange — inversions appear as ' +
     'orange anti-diagonals. Toggle with keys <kbd>1</kbd> and <kbd>2</kbd>.',
