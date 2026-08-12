@@ -28,6 +28,7 @@ self.onmessage = (ev) => {
       bucketStarts: new Uint32Array(s.bucketsSab),
       ...s.indexMeta,
       occSumSq: new Float64Array(0),
+      occCount: new Float64Array(0),
     };
     const qCodes = new Uint8Array(s.qSab);
     const rcCodes = new Uint8Array(s.rcSab);

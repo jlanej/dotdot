@@ -692,3 +692,103 @@ input.combo:focus,
 #btn-zoom-refine {
   font-size: 13px;
 }
+
+/* ---- stats widget + distributions popup ---------------------------------- */
+#stats dt .swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+  display: inline-block;
+  margin-right: 5px;
+  vertical-align: -1px;
+}
+#btn-stats-detail {
+  width: 100%;
+  margin-top: 8px;
+}
+#stats-pop {
+  position: fixed;
+  inset: 0;
+  background: color-mix(in srgb, var(--page) 55%, transparent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 40;
+}
+#stats-pop[hidden] {
+  display: none;
+}
+.stats-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px 20px 20px;
+  width: min(540px, calc(100vw - 40px));
+  max-height: calc(100vh - 60px);
+  overflow-y: auto;
+  box-shadow: 0 12px 40px rgb(0 0 0 / 0.35);
+}
+.stats-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.stats-head h3 {
+  margin: 0;
+  font-size: 14px;
+  color: var(--ink);
+}
+.stats-close {
+  background: none;
+  border: 0;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 6px;
+}
+.stats-close:hover {
+  color: var(--ink);
+}
+.stats-sum {
+  font-size: 12px;
+  color: var(--ink-2);
+  line-height: 1.45;
+  margin: 8px 0 0;
+}
+.stats-chart {
+  margin-top: 16px;
+}
+.stats-chart h4 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: var(--ink);
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+.stats-chart .axis-note {
+  font-weight: 400;
+  color: var(--muted);
+  font-size: 10px;
+}
+.stats-chart svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+.chip-leg {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--ink-2);
+}
+.chip-leg .swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+  display: inline-block;
+}

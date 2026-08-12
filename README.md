@@ -77,7 +77,11 @@ the HPRC Release 2 NA19240 assembly, from minimap2 PAF. Reproduce it with
   `G` region box, `1`/`2` strand toggles, `P` fps meter) — and a clickable
   **?** popover on every control,
   with the header **?** as the full cheat-sheet. All matching/display fields
-  take free values (`1kb`, `2,500`, `off`) with presets as suggestions.
+  take free values (`1kb`, `2,500`, `off`) with presets as suggestions. A
+  live **composition widget** shows segments, aligned bp by strand, and
+  compute throughput, with a one-click **Distributions** popup: segment
+  lengths and identity by strand plus the index's **k-mer occurrence
+  spectrum** — the repeat structure of the target at a glance.
 - **Region jump** (`G`) — type `chr17:18.3M-19.4M` (or a sequence name, or a
   `?region=` URL parameter) and the view frames that target range with the
   query side derived from what actually maps there; when a region maps to

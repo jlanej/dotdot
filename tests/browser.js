@@ -8,6 +8,7 @@ import './kmer.test.js';
 import './transform.test.js';
 import './grid.test.js';
 import './catalog.test.js';
+import './charts.test.js';
 import './colormap.test.js';
 import './compress.test.js';
 import './format.test.js';

@@ -44,6 +44,8 @@
  * @property {number} prefDiv      wide path: bucket id = floor(kmer / prefDiv)
  * @property {number} stride       target subsampling the index was built with (1 = every k-mer)
  * @property {Float64Array} occSumSq  sum of occ^2 per occurrence class (index 1..1024)
+ * @property {Float64Array} occCount  distinct k-mer groups per occurrence class
+ *   (1..1023 exact; index 1024 = everything ≥1024) — the occurrence spectrum
  */
 
 /**
@@ -204,6 +206,7 @@ export function buildIndex(codes, starts, k, stride, onProgress, tLo = 0, tHi = 
   // caller choose a repeat cutoff that meets an anchor budget instead of
   // guessing (Alu-family k-mers otherwise flood genome-scale plots).
   const occSumSq = new Float64Array(1025);
+  const occCount = new Float64Array(1025);
   for (let b = 0; b < nBuckets; b++) {
     const hiB = bucketStarts[b + 1];
     let g = bucketStarts[b];
@@ -212,12 +215,14 @@ export function buildIndex(codes, starts, k, stride, onProgress, tLo = 0, tHi = 
       let e = g + 1;
       while (e < hiB && kmers[e] === kv) e++;
       const occ = e - g;
-      occSumSq[occ < 1024 ? occ : 1024] += occ * occ;
+      const cls = occ < 1024 ? occ : 1024;
+      occSumSq[cls] += occ * occ;
+      occCount[cls] += 1;
       g = e;
     }
   }
 
-  return { kmers, pos, bucketStarts, k, wide, shift, mask, top, prefDiv, stride, occSumSq };
+  return { kmers, pos, bucketStarts, k, wide, shift, mask, top, prefDiv, stride, occSumSq, occCount };
 }
 
 /**

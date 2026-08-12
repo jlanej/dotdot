@@ -36,12 +36,26 @@ import { F64Vec, F32Vec, U8Vec } from './vec.js';
  */
 
 /**
+ * Index-side composition summary for the stats popup (alignment-free plots
+ * only): the k-mer occurrence spectrum plus the knobs that shaped it.
+ * @typedef {Object} KmerStats
+ * @property {number} k
+ * @property {number} stride
+ * @property {number} qSample
+ * @property {number} maxOcc effective repeat cutoff, original-occurrence units
+ * @property {number} distinct distinct k-mers in the index
+ * @property {number} entries index entries (post-stride positions)
+ * @property {Float64Array} occCount distinct k-mers per occurrence class
+ *   (1..1023 exact; 1024 = ≥1024)
+ */
+
+/**
  * @typedef {Object} PlotData
  * @property {AxisCatalog} target
  * @property {AxisCatalog} query
  * @property {SegmentStore} segments
  * @property {'kmer'|'paf'} source
- * @property {{elapsedMs:number, note?:string, skippedLines?:number, identMin:number}} stats
+ * @property {{elapsedMs:number, note?:string, skippedLines?:number, identMin:number, kmer?:KmerStats}} stats
  */
 
 /**

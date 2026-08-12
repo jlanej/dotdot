@@ -13,6 +13,7 @@ import { resolveRegion, parseBp } from './core/region.js';
 import { GlRenderer } from './render/gl.js';
 import { drawUnderlay, drawOverlay, LAYOUT } from './render/axes.js';
 import { buildColormap, hexToRgb } from './render/colormap.js';
+import { segmentDistributions, occupancyBins, groupedBarsSVG, ladderLabels } from './render/charts.js';
 import { formatBp, formatInt, formatCount } from './render/format.js';
 import { looksLikePaf } from './io/paf.js';
 import { RemoteTwoBit, regionToFasta } from './io/twobit.js';
@@ -74,6 +75,7 @@ const btnPng = /** @type {HTMLButtonElement} */ ($('btn-png'));
 const btnSvg = /** @type {HTMLButtonElement} */ ($('btn-svg'));
 const btnRefine = /** @type {HTMLButtonElement} */ ($('btn-refine'));
 const btnZoomRefine = /** @type {HTMLButtonElement} */ ($('btn-zoom-refine'));
+const btnStatsDetail = /** @type {HTMLButtonElement} */ ($('btn-stats-detail'));
 
 /** Refine has two homes (Detail panel + the on-plot zoom cluster). */
 function setRefineEnabled(/** @type {boolean} */ on) {
@@ -397,7 +399,12 @@ function finishPool(plan, results, req) {
         query: plan.query,
         segments: assembled.segments,
         source: 'kmer',
-        stats: { elapsedMs: performance.now() - submitAt, identMin: assembled.identMin, note: plan.note },
+        stats: {
+          elapsedMs: performance.now() - submitAt,
+          identMin: assembled.identMin,
+          note: plan.note,
+          kmer: plan.kmerStats,
+        },
       },
       req,
     );
@@ -1864,6 +1871,10 @@ $('btn-clear').addEventListener('click', () => {
   btnSvg.disabled = true;
   setRefineEnabled(false);
   panelDetail.hidden = true;
+  btnStatsDetail.hidden = true;
+  closeStatsPop();
+  segScan = { ref: null, fwd: 0, rev: 0, bpFwd: 0, bpRev: 0 };
+  statsPopCache = { ref: null, mode: '', html: '' };
   btnCompute.disabled = true;
   btnCompute.textContent = 'Compute dot plot';
   legendEl.className = 'empty';
@@ -1948,23 +1959,145 @@ function updateLegend() {
   }
 }
 
+// One cached pass over the store backs the light widget: strand split and
+// aligned bp. ~20 ms at 8M rows, and only when the segments object changes.
+/** @type {{ref: import('./core/types.js').SegmentStore | null, fwd: number, rev: number, bpFwd: number, bpRev: number}} */
+let segScan = { ref: null, fwd: 0, rev: 0, bpFwd: 0, bpRev: 0 };
+
+/** @param {import('./core/types.js').SegmentStore} s */
+function scanSegments(s) {
+  if (segScan.ref === s) return segScan;
+  let fwd = 0;
+  let bpFwd = 0;
+  let bpRev = 0;
+  for (let i = 0; i < s.count; i++) {
+    if (s.strand[i] === 0) {
+      fwd++;
+      bpFwd += s.dx[i];
+    } else {
+      bpRev += s.dx[i];
+    }
+  }
+  segScan = { ref: s, fwd, rev: s.count - fwd, bpFwd, bpRev };
+  return segScan;
+}
+
 function updateStats() {
   const data = state.data;
   if (!data) return;
   const s = data.stats;
-  /** @type {[string, string][]} */
+  const sc = scanSegments(data.segments);
+  const cm = buildColormap(mode);
+  /** @param {string} c */
+  const sw = (c) => `<span class="swatch" style="background:${c}"></span>`;
+  const secs = s.elapsedMs / 1000;
+  const rate = secs > 0 ? `${formatCount(data.segments.count / secs)}/s` : '—';
   const rows = [
-    ['segments', `${formatCount(data.segments.count)} (${formatInt(data.segments.count)})`],
+    ['segments', `${formatCount(data.segments.count)} · ${rate}`],
+    [`${sw(cm.fwdFlat)}forward`, `${formatCount(sc.fwd)} · ${formatBp(sc.bpFwd)}`],
+    [`${sw(cm.revFlat)}reverse`, `${formatCount(sc.rev)} · ${formatBp(sc.bpRev)}`],
     ['target', `${data.target.names.length} seq · ${formatBp(data.target.total)}`],
     ['query', `${data.query.names.length} seq · ${formatBp(data.query.total)}`],
-    ['source', data.source === 'kmer' ? 'alignment-free k-mers' : 'aligner import (PAF)'],
-    ['compute', `${(s.elapsedMs / 1000).toFixed(2)} s`],
+    ['compute', `${secs.toFixed(2)} s · ${data.source === 'kmer' ? 'alignment-free' : 'PAF import'}`],
   ];
-  if (s.skippedLines) rows.push(['skipped lines', formatInt(s.skippedLines)]);
-  statsEl.innerHTML = rows
-    .map(([k, v]) => `<dt>${k}</dt><dd title="${v}">${v}</dd>`)
-    .join('');
+  if (s.skippedLines) rows.push(['skipped lines', String(formatInt(s.skippedLines))]);
+  statsEl.innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd title="${v}">${v}</dd>`).join('');
+  btnStatsDetail.hidden = false;
 }
+
+// ---- distributions popup ---------------------------------------------------
+// The compute-priced tier: whole-store histograms + the index's occurrence
+// spectrum, built on demand and cached per segments object and theme.
+
+const statsPop = document.createElement('div');
+statsPop.id = 'stats-pop';
+statsPop.hidden = true;
+document.body.append(statsPop);
+statsPop.addEventListener('click', (e) => {
+  if (e.target === statsPop) closeStatsPop();
+});
+
+function closeStatsPop() {
+  statsPop.hidden = true;
+}
+
+/** @type {{ref: unknown, mode: string, html: string}} */
+let statsPopCache = { ref: null, mode: '', html: '' };
+
+function openStatsPop() {
+  const d = state.data;
+  if (!d) return;
+  if (statsPopCache.ref !== d.segments || statsPopCache.mode !== mode) {
+    statsPopCache = { ref: d.segments, mode, html: buildStatsPopHtml(d) };
+  }
+  statsPop.innerHTML = statsPopCache.html;
+  statsPop.hidden = false;
+  const x = statsPop.querySelector('.stats-close');
+  if (x) x.addEventListener('click', closeStatsPop);
+}
+
+/** @param {PlotData} d */
+function buildStatsPopHtml(d) {
+  const cm = buildColormap(mode);
+  const sc = scanSegments(d.segments);
+  const dist = segmentDistributions(d.segments);
+  const legend =
+    `<span class="chip-leg"><span class="swatch" style="background:${cm.fwdFlat}"></span>forward</span>` +
+    `<span class="chip-leg"><span class="swatch" style="background:${cm.revFlat}"></span>reverse</span>`;
+  let html =
+    `<div class="stats-card">` +
+    `<div class="stats-head"><h3>Plot composition</h3><button class="stats-close" aria-label="close">×</button></div>` +
+    `<p class="stats-sum">${formatInt(d.segments.count)} segments — ` +
+    `${formatCount(sc.fwd)} forward (${formatBp(sc.bpFwd)}), ` +
+    `${formatCount(sc.rev)} reverse (${formatBp(sc.bpRev)}). ` +
+    `Base layer only; display filters are not applied here.</p>`;
+  if (dist) {
+    const lenLabels = ladderLabels(dist.lengths.edges);
+    html +=
+      `<div class="stats-chart"><h4>segment length <span class="axis-note">log count · bins ≤ label</span>${legend}</h4>` +
+      groupedBarsSVG({
+        binLabels: lenLabels,
+        series: [
+          { name: 'forward', color: cm.fwdFlat, values: dist.lengths.fwd },
+          { name: 'reverse', color: cm.revFlat, values: dist.lengths.rev },
+        ],
+      }) +
+      '</div>';
+    const idLabels = [];
+    for (let i = 0; i < dist.identity.fwd.length; i++) {
+      idLabels.push(`${((dist.identity.lo + i * dist.identity.width) * 100).toFixed(1)}%`);
+    }
+    html +=
+      `<div class="stats-chart"><h4>identity <span class="axis-note">log count</span>${legend}</h4>` +
+      groupedBarsSVG({
+        binLabels: idLabels,
+        series: [
+          { name: 'forward', color: cm.fwdFlat, values: dist.identity.fwd },
+          { name: 'reverse', color: cm.revFlat, values: dist.identity.rev },
+        ],
+      }) +
+      '</div>';
+  }
+  const km = d.stats.kmer;
+  if (km) {
+    const occ = occupancyBins(km.occCount);
+    html +=
+      `<div class="stats-chart"><h4>k-mer occurrence spectrum <span class="axis-note">distinct ${km.k}-mers · log count</span></h4>` +
+      groupedBarsSVG({
+        binLabels: occ.map((o) => o.label),
+        series: [{ name: 'distinct k-mers', color: cm.fwdFlat, values: occ.map((o) => o.count) }],
+      }) +
+      `<p class="stats-sum">${formatCount(km.distinct)} distinct ${km.k}-mers · ` +
+      `${formatCount(km.entries)} indexed positions` +
+      (km.stride > 1 ? ` (1/${km.stride} stride)` : '') +
+      (km.qSample > 1 ? ` · query sampled 1/${km.qSample}` : '') +
+      ` · repeat cutoff ${formatInt(km.maxOcc)}×. The x axis is how often a k-mer occurs in the ` +
+      `target — the right-hand tail is the repeat fraction of the genome.</p></div>`;
+  }
+  html += '</div>';
+  return html;
+}
+btnStatsDetail.addEventListener('click', openStatsPop);
 
 /** @type {ReturnType<typeof setTimeout> | undefined} */
 let toastTimer;
@@ -2115,7 +2248,10 @@ document.addEventListener(
   true,
 );
 window.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') closeHelp();
+  if (e.key === 'Escape') {
+    closeHelp();
+    closeStatsPop();
+  }
 });
 
 // --------------------------------------------------------------------------

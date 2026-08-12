@@ -195,6 +195,20 @@ function computeKmer(id, tParsed, qParsed, optsIn, t0, window = null) {
   const minRunLen =
     sampleSpacing > 1 ? Math.max(opts.minRunLen, opts.k + 3 * sampleSpacing) : opts.minRunLen;
   const effOpts = { ...opts, stride, qSample, maxOcc: maxOccEff, minRunLen };
+  /** @type {import('../core/types.js').KmerStats} */
+  const kmerStats = {
+    k: opts.k,
+    stride,
+    qSample,
+    maxOcc: maxOccEff * stride,
+    entries: index.pos.length,
+    distinct: (() => {
+      let n = 0;
+      for (let o = 1; o < index.occCount.length; o++) n += index.occCount[o];
+      return n;
+    })(),
+    occCount: index.occCount,
+  };
   const samplingNote =
     stride > 1 || qSample > 1 || maxOccEff < userCapEntries
       ? `large input: sampling 1/${stride} target k-mers, 1/${qSample} query positions; ` +
@@ -253,6 +267,7 @@ function computeKmer(id, tParsed, qParsed, optsIn, t0, window = null) {
         },
         target: tParsed.catalog,
         query: qParsed.catalog,
+        kmerStats,
         note: (samplingNote ? samplingNote + ' · ' : '') + `${Math.min(cores, parts.length)} cores`,
       },
     });
@@ -300,6 +315,7 @@ function computeKmer(id, tParsed, qParsed, optsIn, t0, window = null) {
       elapsedMs: performance.now() - t0,
       identMin,
       note: samplingNote || undefined,
+      kmer: kmerStats,
     },
   };
   post({ id, type: 'result', data }, segmentBuffers(data.segments));
