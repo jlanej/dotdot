@@ -62,7 +62,7 @@ body {
 input,
 textarea,
 #hover-card,
-#stats,
+.stats-grid,
 #readout,
 #help-pop {
   -webkit-user-select: text;
@@ -431,18 +431,18 @@ input.combo:focus,
   min-width: 34px;
 }
 
-#stats {
+.stats-grid {
   margin: 0;
   display: grid;
   grid-template-columns: auto 1fr;
   gap: 2px 10px;
 }
 
-#stats dt {
+.stats-grid dt {
   color: var(--muted);
 }
 
-#stats dd {
+.stats-grid dd {
   margin: 0;
   text-align: right;
   font-variant-numeric: tabular-nums;
@@ -694,7 +694,7 @@ input.combo:focus,
 }
 
 /* ---- stats widget + distributions popup ---------------------------------- */
-#stats dt .swatch {
+.stats-grid dt .swatch {
   width: 9px;
   height: 9px;
   border-radius: 3px;
@@ -791,4 +791,33 @@ input.combo:focus,
   height: 9px;
   border-radius: 3px;
   display: inline-block;
+}
+
+/* ---- On-plot stats scoreboard (top-left, over usually-empty space) ------- */
+#plot-stats {
+  position: absolute;
+  left: 106px;
+  top: 22px;
+  z-index: 6;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px 7px;
+  opacity: 0.92;
+  font-size: 11px;
+  line-height: 1.45;
+  max-width: 270px;
+  pointer-events: none;
+}
+#plot-stats .linklike {
+  pointer-events: auto;
+  margin-top: 3px;
+  font-size: 11px;
+}
+#plot-stats .stats-grid dd {
+  max-width: 170px;
+}
+
+#empty-state .starters {
+  margin-top: 10px;
 }

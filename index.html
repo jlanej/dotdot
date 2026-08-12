@@ -77,21 +77,15 @@
           <input type="file" id="file-query" accept=".fa,.fasta,.fna,.gz,.txt" multiple />
           <span class="chip" id="chip-query">= target</span>
         </div>
-        <p class="hint">Drop files anywhere. One FASTA → self plot; a second becomes the query; three or more — the first is the target, the rest stack on the query axis. The buttons multi-select. dotdot computes the plot itself — alignment-free, no aligner in the loop, chromosome scale included.</p>
-        <div class="btn-row">
-          <button id="btn-demo" class="btn" title="Real chr17 slices (17p11.2 + the 10.9 Mb ROI) vs both NA19240 haplotypes, alignment-free">Demo: chr17 loci</button>
-          <button id="btn-demo-real" class="btn" title="Whole chr17 vs both NA19240 haplotypes — alignment-free when the fetched FASTAs are present">Full chr17</button>
-          <button id="btn-clear" class="btn subtle">Clear</button>
-        </div>
+        <p class="hint">Drop files anywhere — one FASTA self-plots, a second becomes the query, three or more stack on the query axis. The buttons multi-select.</p>
         <div class="file-row" style="margin-top: 12px">
           <label class="file-btn" for="file-paf">Aligner PAF</label>
           <input type="file" id="file-paf" accept=".paf,.gz,.txt" />
           <span class="chip" id="chip-paf">—</span>
         </div>
-        <p class="hint">Optional: load an aligner's PAF (minimap2 etc., .gz ok). With a plot already on screen it overlays the aligner's calls on the raw k-mer truth; on an empty app it plots standalone.</p>
-        <div class="ctl checks" id="row-overlay" hidden>
-          <label><input type="checkbox" id="chk-overlay" checked />show aligner overlay
-            <button class="help" data-help="overlay">?</button></label>
+        <p class="hint">Optional: an aligner's PAF (.gz ok) overlays its calls on the plot; standalone on an empty app.</p>
+        <div class="btn-row">
+          <button id="btn-clear" class="btn subtle">Clear all</button>
         </div>
       </section>
 
@@ -159,6 +153,10 @@
           <label><input type="checkbox" id="chk-rev" checked /><span class="swatch" id="sw-rev"></span>reverse
             <button class="help" data-help="strands">?</button></label>
         </div>
+        <div class="ctl checks" id="row-overlay" hidden>
+          <label><input type="checkbox" id="chk-overlay" checked />show aligner overlay
+            <button class="help" data-help="overlay">?</button></label>
+        </div>
         <div class="ctl">
           <label for="sel-colormode">color by <button class="help" data-help="colorby">?</button></label>
           <select id="sel-colormode">
@@ -186,7 +184,7 @@
       </section>
 
       <section class="panel">
-        <h2>Plot</h2>
+        <h2>View</h2>
         <div class="ctl">
           <label for="in-region">go to target region <button class="help" data-help="region">?</button> <kbd>G</kbd></label>
           <div class="region-row">
@@ -194,8 +192,6 @@
             <button id="btn-region" class="btn">Go</button>
           </div>
         </div>
-        <dl id="stats"></dl>
-        <button id="btn-stats-detail" class="btn subtle" hidden>Distributions…</button>
         <div class="btn-row">
           <button id="btn-fit" class="btn">Fit <kbd>R</kbd></button>
           <button id="btn-png" class="btn" disabled>PNG</button>
@@ -219,13 +215,19 @@
         <button id="btn-zoom-fit" title="Fit everything (R)">⤢</button>
         <button id="btn-zoom-refine" title="Refine view — full detail in this window (F)" disabled>✦</button>
       </div>
+      <div id="plot-stats" hidden>
+        <dl class="stats-grid" id="plot-stats-body"></dl>
+        <button id="btn-stats-detail" class="linklike">Distributions…</button>
+      </div>
       <div id="tooltip" hidden></div>
       <div id="empty-state">
         <div class="dots" aria-hidden="true">··</div>
         <p><strong>Drop FASTA files</strong> for an alignment-free dot plot<br />
-          (or an aligner's PAF, to audit it) — try real data:
-          <button id="btn-demo2" class="linklike">chr17 loci demo</button> or the
-          <button id="btn-demo-real2" class="linklike">full chr17 × NA19240</button></p>
+          (or an aligner's PAF, to audit it) — or try real data:</p>
+        <p class="starters">
+          <button id="btn-hero" class="linklike" title="Stream chr8:44.2M-46.33M from the T2T reference and self-plot its woven satellite arrays">chr8 centromere</button> ·
+          <button id="btn-demo2" class="linklike" title="Two chr17 loci vs both NA19240 haplotypes, with minimap2's calls as the audit overlay">chr17 loci demo</button> ·
+          <button id="btn-demo-real2" class="linklike" title="Whole chr17 vs both NA19240 haplotypes">full chr17 × NA19240</button></p>
       </div>
       <div id="progress" hidden>
         <div id="progress-panel">

@@ -41,7 +41,8 @@ const readout = $('readout');
 const toastEl = $('toast');
 const hoverCard = $('hover-card');
 const legendEl = $('legend');
-const statsEl = $('stats');
+const statsEl = $('plot-stats-body');
+const plotStats = $('plot-stats');
 
 const inK = /** @type {HTMLInputElement} */ ($('in-k'));
 const inKNum = /** @type {HTMLInputElement} */ ($('in-k-num'));
@@ -1694,10 +1695,16 @@ chkAspect.addEventListener('change', fitView);
 btnCompute.addEventListener('click', () => {
   if (state.fileTarget) computeKmer();
 });
-$('btn-demo').addEventListener('click', () => void loadDemo());
 $('btn-demo2').addEventListener('click', () => void loadDemo());
-$('btn-demo-real').addEventListener('click', () => void loadFullChr17());
 $('btn-demo-real2').addEventListener('click', () => void loadFullChr17());
+$('btn-hero').addEventListener('click', () => {
+  // The README's hero region: select the T2T reference and stream the chr8
+  // centromere's woven satellite arrays as a self-plot.
+  selRef.value = 't2t';
+  applyRefSelection(false);
+  inRefRegion.value = 'chr8:44.2M-46.33M';
+  void loadRefRegion('chr8:44.2M-46.33M');
+});
 chkOverlay.addEventListener('change', () => {
   updateLegend();
   markDirty();
@@ -1889,7 +1896,7 @@ $('btn-clear').addEventListener('click', () => {
   btnSvg.disabled = true;
   setRefineEnabled(false);
   panelDetail.hidden = true;
-  btnStatsDetail.hidden = true;
+  plotStats.hidden = true;
   closeStatsPop();
   segScan = { ref: null, fwd: 0, rev: 0, bpFwd: 0, bpRev: 0 };
   statsPopCache = { ref: null, mode: '', html: '' };
@@ -2020,7 +2027,7 @@ function updateStats() {
   ];
   if (s.skippedLines) rows.push(['skipped lines', String(formatInt(s.skippedLines))]);
   statsEl.innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd title="${v}">${v}</dd>`).join('');
-  btnStatsDetail.hidden = false;
+  plotStats.hidden = false;
 }
 
 // ---- distributions popup ---------------------------------------------------
