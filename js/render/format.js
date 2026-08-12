@@ -6,10 +6,12 @@
  * @param {number} v
  */
 export function formatBp(v) {
+  // Unit thresholds sit at 999.5 so values that would round up to "1000 kb"
+  // promote to "1 Mb" instead.
   const a = Math.abs(v);
-  if (a >= 1e9) return trim(v / 1e9) + ' Gb';
-  if (a >= 1e6) return trim(v / 1e6) + ' Mb';
-  if (a >= 1e3) return trim(v / 1e3) + ' kb';
+  if (a >= 999.5e6) return trim(v / 1e9) + ' Gb';
+  if (a >= 999.5e3) return trim(v / 1e6) + ' Mb';
+  if (a >= 999.5) return trim(v / 1e3) + ' kb';
   return `${Math.round(v)} bp`;
 }
 

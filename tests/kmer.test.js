@@ -1,6 +1,6 @@
 // @ts-check
 import { test, assert, assertEq, assertClose, mulberry32 } from './harness.js';
-import { buildIndex, matchStrand, KMER_DEFAULTS } from '../js/core/kmer.js';
+import { buildIndex, matchStrand, pickMaxOcc, KMER_DEFAULTS } from '../js/core/kmer.js';
 import { reverseComplement } from '../js/core/dna.js';
 import { F64Vec, F32Vec, U8Vec } from '../js/core/vec.js';
 
@@ -273,4 +273,28 @@ test('kmer: wide k respects record boundaries and gap bridging', () => {
   fwd.sort((p, q2) => p.x - q2.x);
   assertEq(fwd[0].len, 200);
   assertEq(fwd[1].len, 220);
+});
+
+test('kmer: pickMaxOcc scales the anchor budget by index stride', () => {
+  /** @param {number} stride */
+  const mk = (stride) => {
+    const occSumSq = new Float64Array(1025);
+    for (let o = 1; o <= 10; o++) occSumSq[o] = 4e6;
+    return /** @type {import('../js/core/kmer.js').KmerIndex} */ (
+      /** @type {any} */ ({ occSumSq, stride })
+    );
+  };
+  const budget = 30e6;
+  // Per-class anchor add is 4e6 at stride 1, 8e6 at stride 2: the same
+  // histogram must pick a tighter cutoff when entries stand for 2× bases.
+  assertEq(pickMaxOcc(mk(1), 1e6, 1e6, 1, 10, budget), 7);
+  assertEq(pickMaxOcc(mk(2), 1e6, 1e6, 1, 10, budget), 4);
+  // Index objects without a stride field behave as stride 1.
+  const legacy = /** @type {any} */ ({ occSumSq: mk(1).occSumSq });
+  assertEq(pickMaxOcc(legacy, 1e6, 1e6, 1, 10, budget), 7);
+});
+
+test('kmer: buildIndex records its stride', () => {
+  const t = randCodes(4000, 77);
+  assertEq(buildIndex(t, starts([4000]), 12, 3).stride, 3);
 });

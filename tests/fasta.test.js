@@ -61,3 +61,17 @@ test('fasta: no offsets array when no tokens', () => {
   const { catalog } = parseFasta(enc.encode('>a\nACGT\n>b\nTTTT\n'));
   assertEq(catalog.offsets, undefined);
 });
+
+test('fasta: @offset must be whitespace-delimited, not a substring', () => {
+  const { catalog } = parseFasta(enc.encode('>c sample@offset=12 assembly=x\nACGT\n'));
+  assertEq(catalog.offsets, undefined);
+  const hit = parseFasta(enc.encode('>c sample @offset=12\nACGT\n'));
+  assertEq(/** @type {Float64Array} */ (hit.catalog.offsets)[0], 12);
+});
+
+test('fasta: ";" comment lines are skipped anywhere, not just before records', () => {
+  const txt = '; leading comment\n>s\nACGT\n; gc cat data — letters must not become bases\n>t\nTTTT\n';
+  const { catalog, codes } = parseFasta(enc.encode(txt));
+  assertArrayEq(Array.from(catalog.starts), [0, 4, 8]);
+  assertEq(codesToString(codes), 'ACGTTTTT');
+});

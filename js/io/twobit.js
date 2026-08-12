@@ -20,6 +20,16 @@ const SIGNATURE = 0x1a412743;
 const BASE_ASCII = new Uint8Array([84, 67, 65, 71]); // T C A G
 const ASCII_N = 78;
 
+// byte -> its 4 decoded bases, built once: turns the per-base shift/mask
+// decode into four table writes per packed byte (matters at 100 Mb regions).
+const BYTE_BASES = (() => {
+  const t = new Uint8Array(256 * 4);
+  for (let b = 0; b < 256; b++) {
+    for (let j = 0; j < 4; j++) t[b * 4 + j] = BASE_ASCII[(b >> ((3 - j) * 2)) & 3];
+  }
+  return t;
+})();
+
 /**
  * @typedef {Object} SeqMeta
  * @property {number} dnaSize
@@ -152,9 +162,25 @@ export class RemoteTwoBit {
     const packed = await this.fetchRange(byteA, byteB);
 
     const out = new Uint8Array(e - s);
-    for (let i = s; i < e; i++) {
-      const b = packed[(i >> 2) - (s >> 2)];
-      out[i - s] = BASE_ASCII[(b >> ((3 - (i & 3)) * 2)) & 3];
+    const b0 = s >> 2;
+    let i = s;
+    // Head: bases before the first whole packed byte.
+    while (i < e && (i & 3) !== 0) {
+      out[i - s] = BASE_ASCII[(packed[(i >> 2) - b0] >> ((3 - (i & 3)) * 2)) & 3];
+      i++;
+    }
+    // Middle: whole bytes, four bases per table hit.
+    let w = i - s;
+    for (const mEnd = e - 3; i < mEnd; i += 4, w += 4) {
+      const o4 = packed[(i >> 2) - b0] * 4;
+      out[w] = BYTE_BASES[o4];
+      out[w + 1] = BYTE_BASES[o4 + 1];
+      out[w + 2] = BYTE_BASES[o4 + 2];
+      out[w + 3] = BYTE_BASES[o4 + 3];
+    }
+    // Tail: the final partial byte.
+    for (; i < e; i++) {
+      out[i - s] = BASE_ASCII[(packed[(i >> 2) - b0] >> ((3 - (i & 3)) * 2)) & 3];
     }
     for (const [bs, size] of meta.nBlocks) {
       const a = Math.max(bs, s);

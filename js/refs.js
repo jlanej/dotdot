@@ -4,6 +4,7 @@
  * (UCSC serves them with CORS + byte ranges) plus showcase regions worth a
  * self-plot. Adding a reference is one entry here.
  */
+import { parseBp } from './core/region.js';
 
 /**
  * @typedef {Object} RefPreset
@@ -59,16 +60,10 @@ export function parseBrowserRegion(text) {
   const range = s.slice(colon + 1);
   const dash = range.split(/[-–]/);
   if (dash.length !== 2 || !chrom) return null;
-  const a = bp(dash[0]);
-  const b = bp(dash[1]);
+  // One bp grammar for the whole app: parseBp also backs the region-jump box
+  // and every free-text length field.
+  const a = Math.round(parseBp(dash[0]));
+  const b = Math.round(parseBp(dash[1]));
   if (!Number.isFinite(a) || !Number.isFinite(b) || a < 1 || b < a) return null;
   return { chrom, start1: a, end1: b };
-}
-
-/** @param {string} t */
-function bp(t) {
-  const m = /^([0-9]*\.?[0-9]+)\s*(bp|k|kb|m|mb|g|gb)?$/.exec(t.trim().toLowerCase().replaceAll(',', ''));
-  if (!m) return NaN;
-  const mult = !m[2] ? 1 : m[2].startsWith('k') ? 1e3 : m[2].startsWith('m') ? 1e6 : m[2].startsWith('g') ? 1e9 : 1;
-  return Math.round(parseFloat(m[1]) * mult);
 }

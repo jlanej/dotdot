@@ -191,7 +191,7 @@ function computeKmer(id, tParsed, qParsed, optsIn, t0, window = null) {
           (stride > 1 || qSample > 1 || maxOccEff < userCapEntries
             ? `large input: sampling 1/${stride} target k-mers, 1/${qSample} query positions; ` +
               `repeat cutoff ${maxOccEff * stride}× (auto) · `
-            : '') + `${parts.length} cores`,
+            : '') + `${Math.min(cores, parts.length)} cores`,
       },
     });
     return;

@@ -36,8 +36,8 @@ export function parseFasta(bytes, fallbackName = 'seq') {
 
   while (i < n) {
     const b = bytes[i];
-    if (b === GT || (b === SEMI && !sawRecord)) {
-      // Header (or leading comment) line
+    if (b === GT || b === SEMI) {
+      // Header line, or a ';' comment line (legal anywhere in old-style FASTA)
       let j = i + 1;
       let nameEnd = -1;
       while (j < n && bytes[j] !== NL) {
@@ -54,7 +54,9 @@ export function parseFasta(bytes, fallbackName = 'seq') {
         let off = 0;
         if (nameEnd >= 0) {
           const desc = td.decode(bytes.subarray(nameEnd, j));
-          const m = /@offset=(\d+)/.exec(desc);
+          // Anchored to whitespace so a description merely containing the
+          // substring (e.g. "sample@offset=3") can't hijack coordinates.
+          const m = /(?:^|\s)@offset=(\d+)(?=\s|$)/.exec(desc);
           if (m) off = Number(m[1]);
         }
         offsetList.push(off);

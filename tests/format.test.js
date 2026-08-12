@@ -9,6 +9,14 @@ test('format: formatBp picks sensible units', () => {
   assertEq(formatBp(3_100_000_000), '3.1 Gb');
 });
 
+test('format: formatBp promotes units at rounding boundaries', () => {
+  assertEq(formatBp(999_999), '1 Mb'); // never "1000 kb"
+  assertEq(formatBp(999_950_000), '1 Gb'); // never "1000 Mb"
+  assertEq(formatBp(999.7), '1 kb'); // never "1000 bp"
+  assertEq(formatBp(999_400), '999 kb');
+  assertEq(formatBp(999), '999 bp');
+});
+
 test('format: tick labels share step-derived decimals', () => {
   assertEq(formatTick(24_500_000, 500_000), '24.5 Mb');
   assertEq(formatTick(0, 500_000), '0');

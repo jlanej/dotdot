@@ -42,6 +42,7 @@
  * @property {number} mask         narrow path: rolling mask
  * @property {number} top          wide path: 4^(k-1), the leading-base place value
  * @property {number} prefDiv      wide path: bucket id = floor(kmer / prefDiv)
+ * @property {number} stride       target subsampling the index was built with (1 = every k-mer)
  * @property {Float64Array} occSumSq  sum of occ^2 per occurrence class (index 1..1024)
  */
 
@@ -208,7 +209,7 @@ export function buildIndex(codes, starts, k, stride, onProgress, tLo = 0, tHi = 
     }
   }
 
-  return { kmers, pos, bucketStarts, k, wide, shift, mask, top, prefDiv, occSumSq };
+  return { kmers, pos, bucketStarts, k, wide, shift, mask, top, prefDiv, stride, occSumSq };
 }
 
 /**
@@ -241,7 +242,7 @@ function sortPairs(kmers, pos, lo, hi) {
       }
       continue;
     }
-    const mid = (l + h) >>> 1;
+    const mid = l + ((h - l) >>> 1); // overflow-safe at 2^31+ entries
     // median-of-three into mid
     if (kmers[l] > kmers[mid]) swap(kmers, pos, l, mid);
     if (kmers[l] > kmers[h]) swap(kmers, pos, l, h);
@@ -322,9 +323,6 @@ export function matchStrand(index, qCodes, qStarts, qTotal, tStarts, tTotal, opt
   // holes up to this size are bookkeeping, not sequence difference.
   const sampleHole = qSample * Math.max(1, opts.stride || 1) - 1;
   const n = qCodes.length;
-  let statAnchors = 0;
-  let statOccSkips = 0;
-  let statEmits = 0;
   if (qTotal + tTotal >= 2 ** 32 - 2) {
     throw new Error('Combined sequence length too large for in-browser matching — import a minimap2 PAF instead.');
   }
@@ -341,16 +339,13 @@ export function matchStrand(index, qCodes, qStarts, qTotal, tStarts, tTotal, opt
   let runQEnd = new Uint32Array(cap); // end of the query record the run lives in
   let runTEnd = new Uint32Array(cap); // end of the target record the run lives in
 
-  let emitted = 0;
-
   /**
    * @param {number} q0 @param {number} q1 @param {number} t0 @param {number} gaps
    */
   const emit = (q0, q1, t0, gaps) => {
-    statEmits++;
     const len = q1 - q0 + k;
     if (len < minRunLen) return;
-    if (++emitted + out.x.n > MAX_SEGMENTS) {
+    if (out.x.n >= MAX_SEGMENTS) {
       throw new Error('Too many match segments — raise k, lower max occurrences, or add a stride.');
     }
     out.x.push(t0);
@@ -477,16 +472,7 @@ export function matchStrand(index, qCodes, qStarts, qTotal, tStarts, tTotal, opt
     } else {
       run = 0;
     }
-    if (onProgress && (i & (PROGRESS_EVERY - 1)) === 0) {
-      onProgress(i - startI, endI - startI);
-      if ((i & ((PROGRESS_EVERY << 2) - 1)) === 0 && i > startI) {
-        console.log(
-          `[kmer ${strandFlag === 0 ? '+' : '-'}] pos=${(i / 1e6).toFixed(0)}M ` +
-            `anchors=${(statAnchors / 1e6).toFixed(1)}M emits=${(statEmits / 1e3).toFixed(0)}k ` +
-            `occSkips=${(statOccSkips / 1e6).toFixed(1)}M table=${cap}`,
-        );
-      }
-    }
+    if (onProgress && (i & (PROGRESS_EVERY - 1)) === 0) onProgress(i - startI, endI - startI);
     if (run >= k) {
       const p = i - k + 1;
       if (p < qLo) continue;
@@ -509,14 +495,9 @@ export function matchStrand(index, qCodes, qStarts, qTotal, tStarts, tTotal, opt
         memoHi = hi;
       }
       const occ = hi - lo;
-      if (occ > 0) {
-        if (occ <= maxOcc) {
-          const qEnd = qStarts[rec];
-          for (let j = lo; j < hi; j++) addAnchor(p, pos[j], qEnd);
-          statAnchors += occ;
-        } else {
-          statOccSkips++;
-        }
+      if (occ > 0 && occ <= maxOcc) {
+        const qEnd = qStarts[rec];
+        for (let j = lo; j < hi; j++) addAnchor(p, pos[j], qEnd);
       }
     }
   }
@@ -529,8 +510,10 @@ export function matchStrand(index, qCodes, qStarts, qTotal, tStarts, tTotal, opt
 
 /**
  * Choose the largest per-group entry cap whose estimated anchor volume fits
- * the budget. Estimate: a group with `occ` entries is hit by ~occ * qLen/tLen
- * sampled query positions, each emitting occ anchors -> occ^2 scaling.
+ * the budget. Estimate: a group with `occ` index entries represents
+ * ~occ*stride true target occurrences, so its k-mer is hit by
+ * ~occ*stride * qLen/tLen sampled query positions, each emitting occ
+ * anchors -> occ^2 * stride scaling (occSumSq counts post-stride entries).
  *
  * @param {KmerIndex} index
  * @param {number} qLen query bases scanned per strand
@@ -540,7 +523,7 @@ export function matchStrand(index, qCodes, qStarts, qTotal, tStarts, tTotal, opt
  * @param {number} [budget] anchors per strand
  */
 export function pickMaxOcc(index, qLen, tLen, qSample, userCapEntries, budget = 60e6) {
-  const scale = qLen / Math.max(tLen, 1) / Math.max(qSample, 1);
+  const scale = (qLen * (index.stride || 1)) / Math.max(tLen, 1) / Math.max(qSample, 1);
   const cap = Math.max(1, Math.floor(userCapEntries));
   let acc = 0;
   let chosen = 1;
@@ -559,7 +542,7 @@ export function pickMaxOcc(index, qLen, tLen, qSample, userCapEntries, budget = 
  */
 function lowerBound(a, lo, hi, x) {
   while (lo < hi) {
-    const mid = (lo + hi) >>> 1;
+    const mid = lo + ((hi - lo) >>> 1);
     if (a[mid] < x) lo = mid + 1;
     else hi = mid;
   }
@@ -572,7 +555,7 @@ function lowerBound(a, lo, hi, x) {
  */
 function upperBound(a, lo, hi, x) {
   while (lo < hi) {
-    const mid = (lo + hi) >>> 1;
+    const mid = lo + ((hi - lo) >>> 1);
     if (a[mid] <= x) lo = mid + 1;
     else hi = mid;
   }
