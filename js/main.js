@@ -18,7 +18,7 @@ import { formatBp, formatInt, formatCount } from './render/format.js';
 import { looksLikePaf } from './io/paf.js';
 import { RemoteTwoBit, regionToFasta } from './io/twobit.js';
 import { REFERENCES, parseBrowserRegion } from './refs.js';
-import { exportPng } from './export/png.js';
+import { exportPng, compositeCanvases } from './export/png.js';
 import { exportSvg } from './export/svg.js';
 
 /** @typedef {import('./core/types.js').PlotData} PlotData */
@@ -1307,6 +1307,24 @@ Object.defineProperty(globalThis, '__dotdotDraw', {
 // so hidden-tab automation can exercise auto-refine deterministically.
 Object.defineProperty(globalThis, '__dotdotAutoTick', {
   value: (/** @type {number} */ now) => autoRefineTick(now),
+});
+
+// Full-quality frame capture for automation/screenshots: renders the plot at
+// the requested pixel density (independent of the window's devicePixelRatio)
+// and returns the composited plot as a PNG data URL.
+Object.defineProperty(globalThis, '__dotdotCapture', {
+  value: (/** @type {number} */ dpr = 2) => {
+    const stashCursor = state.cursor;
+    const stashFps = state.fpsOn;
+    state.cursor = null;
+    state.fpsOn = false;
+    draw(dpr);
+    const url = compositeCanvases({ underlay, glCanvas: glcanvas, overlay, dpr }).toDataURL('image/png');
+    state.cursor = stashCursor;
+    state.fpsOn = stashFps;
+    draw(window.devicePixelRatio || 1);
+    return url;
+  },
 });
 
 // --------------------------------------------------------------------------

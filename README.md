@@ -16,11 +16,15 @@ everything client-side (no server, no upload, no toolchain). Optionally, load
 any aligner's PAF on the same axes to inspect its calls against raw sequence
 structure.
 
-![dotdot rendering T2T-CHM13 chr17 against both haplotypes of the HPRC Release 2 NA19240 assembly](docs/screenshot.png)
+![the chr8 centromere's layered higher-order-repeat architecture, self-compared alignment-free in the browser from a streamed reference window](docs/hero_chr8_cen.png)
 
-*Above: real data — T2T-CHM13v2.0 chr17 (84.3 Mb) vs. both chr17 haplotypes of
-the HPRC Release 2 NA19240 assembly, from minimap2 PAF. Reproduce it with
-`scripts/fetch_realdata.sh`.*
+*Above: the **chr8 centromere** (T2T-CHM13v2.0, chr8:44.2–46.33 Mb) compared
+against itself — ~400,000 match segments computed **alignment-free in your
+browser** from a 2.1 Mb window streamed on demand out of UCSC's 2bit.
+α-satellite higher-order-repeat arrays read as woven blocks, nested domains
+layer the core, and the flanking arrays mirror each other corner to corner —
+no aligner touched any of it. Open the same view live:
+[`?ref=t2t&refregion=chr8:44.2M-46.33M`](https://jlanej.github.io/dotdot/?ref=t2t&refregion=chr8:44.2M-46.33M).*
 
 ## Highlights
 
@@ -121,21 +125,39 @@ rhythm at that scale: let the coarse auto-sampled pass finish, pan the
 overview, zoom into anything interesting, and hit **Refine view** for exact
 local detail.
 
-![the demo's 17p11.2 locus: alignment-free k-mer structure of a heterozygous SV with minimap2's calls overlaid](docs/demo_17p11.png)
+![the demo: both chr17 loci vs all four NA19240 haplotype slices — separators and per-sequence true-coordinate rulers, with minimap2's calls inked on top](docs/demo_17p11.png)
+
+*The demo's 2×4 region lattice: every sequence rules its own true
+coordinates, alternating shading separates regions, and minimap2's calls
+(white ink, diamond breakpoints) ride on top of the alignment-free layer.*
+
+## Showcase: repeat architecture straight from sequence
+
+The regions aligners summarize away are where dot plots come alive. Every
+view below is computed alignment-free in the browser from a streamed
+reference window — open any of them live with one click.
+
+![the DXZ1 α-satellite array on chrX: the ~2 kb higher-order-repeat period as a perfect diagonal weave](docs/satellite_chrX.png)
+
+*chrX **DXZ1** at full detail (chrX:58.10–58.34 Mb, after Refine): the most
+homogeneous satellite array in the genome. Every diagonal stripe is one
+~2 kb higher-order-repeat offset — 657k segments in a 250 kb window, woven
+edge to edge. Live:
+[`?ref=t2t&refregion=chrX:57.82M-60.67M`](https://jlanej.github.io/dotdot/?ref=t2t&refregion=chrX:57.82M-60.67M).*
+
+![chr1's pericentromeric mosaic: satellite blocks with inverted domains in orange](docs/chr1_pericen.png)
+
+*chr1's pericentromere (chr1:121.7–125.1 Mb): 1.55 M segments of α-satellite
+and HSat blocks as a sharp-edged mosaic — including whole **inverted
+domains** standing out in orange around 124.4–124.8 Mb. Live:
+[`?ref=t2t&refregion=chr1:121.7M-125.1M`](https://jlanej.github.io/dotdot/?ref=t2t&refregion=chr1:121.7M-125.1M).*
 
 ### Reference genomes, no downloads
 
 The **Reference** dropdown gives instant material with no files at all:
 selecting **T2T-CHM13v2.0** streams its default showcase window — the DXZ1
-alpha-satellite array in the chrX centromere — and self-plots it:
-
-![the DXZ1 higher-order-repeat lattice at the chrX centromere, self-plotted from a streamed T2T-CHM13v2.0 window](docs/satellite_chrX.png)
-
-*chrX:57,820,000-60,670,000 (T2T-CHM13v2.0): the ~2 kb higher-order repeat
-period of DXZ1 renders as a dense lattice off the main diagonal —
-~550,000 match segments from ~750 kB of streamed 2bit data.*
-
-Type any window (`chr8:44.2M-46.33M`, `chr1:121,700,000-125,100,000` — k/M/G
+alpha-satellite array pictured above — and self-plots it from ~750 kB of
+streamed 2bit data. Type any window (`chr8:44.2M-46.33M`, `chr1:121,700,000-125,100,000` — k/M/G
 units and commas welcome; a bare name loads the whole sequence) or pick a
 showcase preset (chrX DXZ1, chr8 and chr17 centromeres, a chr1
 pericentromere). With a reference window loaded, added FASTAs dot **against
@@ -196,9 +218,11 @@ on an Apple-silicon laptop:
   alignments (19 inversions) that load instantly; compare its breakpoint
   calls and its view of the segdup lattice against the k-mer truth above.
 
-| hap1: 250 kb inversion (aligner PAF) | same window, alignment-free (hap2) |
-|---|---|
-| ![250 kb inversion at 17p11.2 in NA19240 hap1](docs/sv_17p11.png) | ![k-mer engine view of the inverted duplication](docs/sv_17p11_kmer.png) |
+![the full chr17 vs both NA19240 haplotypes from minimap2's PAF: two collinear haplotype bands with their own rulers](docs/screenshot.png)
+
+*The PAF path at chromosome scale: minimap2's 847 chr17 alignments across
+both haplotype bands, loaded standalone in under a second — each band ruled
+in its own coordinates.*
 
 One-click versions of this dataset live on the demo buttons: **Demo: chr17
 loci** (target slices streamed live from the T2T reference, committed
@@ -218,12 +242,14 @@ and exact k-mer structure where you're looking. The **Detail** panel keeps
 the loop at your fingertips: the min-segment-length dial (slider, exact
 value, or `[`/`]` from the plot) sweeps repeat fabric ↔ structure live, `F`
 or the on-plot ✦ refines, and checking **auto** refines by itself whenever
-you rest at a zoomed view. Below, the
-demo's heterozygous ~4.9 kb deletion after refining: hap2's diagonal halts at
-a breakpoint diamond, jumps ~5 kb across reference-only sequence with zero
-query advance, and resumes.
+you rest at a zoomed view. Below, the demo's heterozygous **~4.9 kb
+deletion** at full detail, in true coordinates on both axes: hap2's k-mer
+diagonal halts at chr17:10,895,377, steps ~5 kb sideways across
+reference-only sequence with zero query advance, and resumes — while
+minimap2's deletion-spanning call (white ink) rides the same path, its two
+breakpoint diamonds flanking the gap exactly.
 
-![refined view of the heterozygous deletion: hap2's diagonal steps sideways across the deleted span](docs/roi_deletion_hap2.png)
+![the heterozygous deletion at full detail: hap2's diagonal steps sideways across the deleted span, minimap2's call and breakpoint diamonds riding along](docs/roi_deletion_hap2.png)
 
 ## Auditing an aligner
 
@@ -231,14 +257,21 @@ Load FASTAs (or run a demo), then drop a PAF on top — or use
 `?target=…&query=…&overlay=aln.paf`. The aligner's calls draw as ink lines
 with diamond breakpoint markers over the alignment-free layer:
 
-![minimap2's calls overlaid on the k-mer plot: the deletion-spanning call runs straight across two offset diagonals](docs/overlay_audit.png)
+![minimap2's 250 kb inversion call cutting through the paralog lattice the chained alignment summarizes away](docs/overlay_audit.png)
 
-Even on the synthetic demo pair the overlay earns its keep: minimap2 reports
-the deletion-spanning region as *one* alignment, so its call runs straight
-from end to end while the k-mer layer shows the two offset collinear blocks
-it glued together — exactly the class of aligner summarization a dot plot
-makes visible. Toggle the overlay with **show aligner overlay**; the base
-plot's strand/identity/length filters never touch it.
+*The demo's 17p11.2 locus (chr17:18.54–18.87 Mb vs NA19240 hap1): minimap2
+reports the region as one clean **250 kb inversion** — the white
+anti-diagonal with its two breakpoint diamonds — and the raw k-mer layer
+shows everything that single call summarizes away: a dense woven lattice of
+forward (blue) and inverted (orange) segmental-duplication paralogs the
+inversion actually lives in.*
+
+That is the audit in one picture: the aligner's call is *correct*, and it is
+also a summary — chained alignments compress repeat architecture into single
+lines, and breakpoints land where the chaining says, not always where the
+sequence says. The overlay keeps both truths on screen at once. Toggle it
+with **show aligner overlay**; the base plot's strand/identity/length
+filters never touch it.
 
 A note on the timings in this README: they were measured inside an embedded,
 *background-throttled* browser pane that granted the page a fraction of one
