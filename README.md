@@ -104,9 +104,10 @@ haplotypes, with minimap2's calls arriving as the audit overlay.
 - **17p11.2** (chr17:18.0–19.6 Mb): a heterozygous SV pair — a 250 kb
   inversion on hap1 and an inverted duplication on hap2 (orange
   anti-diagonals).
-- **ROI10.9** (chr17:10.75–11.05 Mb): a heterozygous **~4.9 kb deletion** at
+- **ROI10.9** (chr17:10.6–11.2 Mb): a heterozygous **~4.9 kb deletion** at
   chr17:10.895 Mb — hap2's diagonal steps sideways while hap1 runs straight
-  through. Jump to it with `G` → `chr17_ROI10.9:130k-170k`.
+  through. Jump to it with `G` → `chr17_ROI10.9:10.88M-10.92M` (true
+  coordinates work directly).
 
 **Full chr17** runs the whole-chromosome comparison — alignment-free
 whenever the fetched FASTAs are present (`scripts/fetch_realdata.sh`),
@@ -150,6 +151,7 @@ on all CPU cores; without them it runs the identical single-worker path.
 |---|---|
 | One FASTA | self dot plot (repeats, palindromes, satellite structure) |
 | Two FASTAs | first = target (x), second = query (y) — alignment-free, the primary path |
+| Many FASTAs | file buttons multi-select to stack several files on one axis; dropping 3+ makes the first the target and the rest the query — each sequence keeps its own ruler, with alternating band shading separating regions |
 | PAF / PAF.gz | optional aligner audit: any PAF-emitting aligner's output on the same axes |
 | Reference dropdown | T2T-CHM13v2.0 / GRCh38 windows streamed from UCSC 2bit files — self-plot, or the target for added FASTAs |
 | URL parameters | `?demo=1` · `?ref=t2t&refregion=chrX:57.8M-60.7M` · `?target=<url>&query=<url>[&overlay=<paf-url>]` · `?paf=<url>` · plus `k=`, `gap=`, `occ=`, `region=` |
@@ -294,7 +296,9 @@ open http://127.0.0.1:8420/tests/typecheck.html   # strict typecheck in the brow
   JavaScript runtime at all.
 - `scripts/make_testdata.py` regenerates the synthetic assembly pair
   (`testdata/*.fa`, git-ignored) used to produce `testdata/example.paf` with
-  minimap2; `scripts/fetch_realdata.sh` fetches the chr17 / NA19240 example.
+  minimap2; `scripts/fetch_realdata.sh` fetches the chr17 / NA19240 example;
+  `scripts/make_demo.sh` regenerates the committed demo slices + overlay PAF
+  from it (samtools + minimap2).
 - `testdata/bigcoord.paf` exercises Gb-scale coordinate precision.
 
 ## Credits

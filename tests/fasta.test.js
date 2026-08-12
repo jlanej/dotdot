@@ -1,6 +1,6 @@
 // @ts-check
 import { test, assert, assertEq, assertArrayEq } from './harness.js';
-import { parseFasta, looksLikeFasta } from '../js/io/fasta.js';
+import { parseFasta, mergeParsedFasta, looksLikeFasta } from '../js/io/fasta.js';
 import { codesToString } from '../js/core/dna.js';
 
 const enc = new TextEncoder();
@@ -67,6 +67,21 @@ test('fasta: @offset must be whitespace-delimited, not a substring', () => {
   assertEq(catalog.offsets, undefined);
   const hit = parseFasta(enc.encode('>c sample @offset=12\nACGT\n'));
   assertEq(/** @type {Float64Array} */ (hit.catalog.offsets)[0], 12);
+});
+
+test('fasta: mergeParsedFasta stacks files into one axis', () => {
+  const a = parseFasta(enc.encode('>chr1\nACGT\n>chr2\nTTTT\n'));
+  const b = parseFasta(enc.encode('>ctgA T2T chrX:9-14 @offset=8\nGGGGCC\n'));
+  const m = mergeParsedFasta([a, b]);
+  assertEq(m.catalog.names.join(','), 'chr1,chr2,ctgA');
+  assertArrayEq(Array.from(m.catalog.starts), [0, 4, 8, 14]);
+  assertEq(m.catalog.total, 14);
+  assertEq(codesToString(m.codes), 'ACGTTTTTGGGGCC');
+  // Offsets zero-fill for files without tokens.
+  const off = /** @type {Float64Array} */ (m.catalog.offsets);
+  assertArrayEq(Array.from(off), [0, 0, 8]);
+  // Single-part merge is the identity.
+  assertEq(mergeParsedFasta([a]), a);
 });
 
 test('fasta: ";" comment lines are skipped anywhere, not just before records', () => {

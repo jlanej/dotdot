@@ -43,15 +43,15 @@
         </div>
         <div class="file-row">
           <label class="file-btn" for="file-target">Target FASTA</label>
-          <input type="file" id="file-target" accept=".fa,.fasta,.fna,.gz,.txt" />
+          <input type="file" id="file-target" accept=".fa,.fasta,.fna,.gz,.txt" multiple />
           <span class="chip" id="chip-target">—</span>
         </div>
         <div class="file-row">
           <label class="file-btn" for="file-query">Query FASTA</label>
-          <input type="file" id="file-query" accept=".fa,.fasta,.fna,.gz,.txt" />
+          <input type="file" id="file-query" accept=".fa,.fasta,.fna,.gz,.txt" multiple />
           <span class="chip" id="chip-query">= target</span>
         </div>
-        <p class="hint">Drop files anywhere. One FASTA → self plot; add a second as query. dotdot computes the plot itself — alignment-free, no aligner in the loop, chromosome scale included.</p>
+        <p class="hint">Drop files anywhere. One FASTA → self plot; a second becomes the query; three or more — the first is the target, the rest stack on the query axis. The buttons multi-select. dotdot computes the plot itself — alignment-free, no aligner in the loop, chromosome scale included.</p>
         <div class="btn-row">
           <button id="btn-demo" class="btn" title="Real chr17 slices (17p11.2 + the 10.9 Mb ROI) vs both NA19240 haplotypes, alignment-free">Demo: chr17 loci</button>
           <button id="btn-demo-real" class="btn" title="Whole chr17 vs both NA19240 haplotypes — alignment-free when the fetched FASTAs are present">Full chr17</button>

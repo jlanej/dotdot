@@ -82,9 +82,9 @@ const state = {
   grid: null,
   /** @type {View | null} */
   view: null,
-  /** @type {{name: string, buf: ArrayBuffer} | null} */
+  /** @type {{name: string, bufs: ArrayBuffer[]} | null} */
   fileTarget: null,
-  /** @type {{name: string, buf: ArrayBuffer} | null} */
+  /** @type {{name: string, bufs: ArrayBuffer[]} | null} */
   fileQuery: null,
   computing: false,
   identLo: 0,
@@ -541,8 +541,8 @@ function submitKmer(opts, window = null) {
     gen: dataGen,
     opts,
     window: window ?? undefined,
-    target: sendData ? state.fileTarget.buf : null,
-    query: sendData ? (state.fileQuery ? state.fileQuery.buf : null) : null,
+    target: sendData ? state.fileTarget.bufs : null,
+    query: sendData ? (state.fileQuery ? state.fileQuery.bufs : null) : null,
   });
   workerGen = dataGen;
 }
@@ -558,16 +558,19 @@ function computePaf(buf) {
 
 /**
  * A PAF landing on an existing plot becomes the aligner-audit overlay; on an
- * empty app it loads standalone.
- * @param {{name: string, buf: ArrayBuffer}} f
+ * empty app it loads standalone. (PAFs are always single files — the first
+ * buffer is the file.)
+ * @param {SlotFile} f
  */
 function loadPafFile(f) {
+  const buf = f.buf ?? f.bufs?.[0];
+  if (!buf) return;
   setChip('chip-paf', f);
   if (state.data) {
     overlayName = f.name;
-    submit({ type: 'pafOverlay', buf: f.buf, target: state.data.target, query: state.data.query });
+    submit({ type: 'pafOverlay', buf, target: state.data.target, query: state.data.query });
   } else {
-    computePaf(f.buf);
+    computePaf(buf);
   }
 }
 
@@ -771,9 +774,11 @@ async function loadDemo() {
     let t;
     let source;
     try {
+      // Must match scripts/make_demo.sh LOCI so the streamed target stays
+      // byte-identical to the committed fallback.
       const buf = await streamRefRegions(REFERENCES[0], [
         { chrom: 'chr17', start0: 18_000_000, end0: 19_600_000, name: 'chr17_17p11.2' },
-        { chrom: 'chr17', start0: 10_750_000, end0: 11_050_000, name: 'chr17_ROI10.9' },
+        { chrom: 'chr17', start0: 10_600_000, end0: 11_200_000, name: 'chr17_ROI10.9' },
       ]);
       t = { name: 'chr17 slices · T2T (streamed)', buf: buf.buffer };
       source = 'streamed live from the T2T reference';
@@ -870,28 +875,44 @@ function isPafFile(f) {
 }
 
 /**
+ * A slot entry: one file ({buf}) or several stacked files ({bufs}).
+ * @typedef {{name: string, buf?: ArrayBuffer, bufs?: ArrayBuffer[]}} SlotFile
+ */
+
+/**
  * @param {'target'|'query'} slot
- * @param {{name: string, buf: ArrayBuffer}} f
+ * @param {SlotFile} f
  */
 function setFasta(slot, f) {
   dataGen++; // the worker's parse cache is stale from here on
+  const entry = { name: f.name, bufs: f.bufs ?? [/** @type {ArrayBuffer} */ (f.buf)] };
   if (slot === 'target') {
-    state.fileTarget = f;
-    setChip('chip-target', f);
+    state.fileTarget = entry;
+    setChip('chip-target', entry);
   } else {
-    state.fileQuery = f;
-    setChip('chip-query', f);
+    state.fileQuery = entry;
+    setChip('chip-query', entry);
   }
   btnCompute.disabled = !state.fileTarget || state.computing;
   btnCompute.textContent = 'Compute dot plot';
   scheduleAutoCompute();
 }
 
-/** @param {string} id @param {{name: string, buf: ArrayBuffer} | null} f */
+/** @param {SlotFile} f */
+function slotBytes(f) {
+  if (f.bufs) {
+    let n = 0;
+    for (const b of f.bufs) n += b.byteLength;
+    return n;
+  }
+  return f.buf ? f.buf.byteLength : 0;
+}
+
+/** @param {string} id @param {SlotFile | null} f */
 function setChip(id, f) {
   const el = $(id);
   if (f) {
-    el.textContent = `${f.name} · ${formatBytes(f.buf.byteLength)}`;
+    el.textContent = `${f.name} · ${formatBytes(slotBytes(f))}`;
     el.classList.add('loaded');
     el.title = f.name;
   } else {
@@ -935,24 +956,44 @@ async function handleFiles(files) {
   } else {
     for (const p of pafs) loadPafFile(p);
   }
-  for (const f of fastas) {
-    if (!state.fileTarget) setFasta('target', f);
-    else if (!state.fileQuery) setFasta('query', f);
-    else {
-      setFasta('target', f);
-      state.fileQuery = null;
-      setChip('chip-query', null);
+  if (fastas.length >= 3) {
+    // Many FASTAs at once: the common gesture is one reference plus several
+    // assemblies — first file rules the x axis, the rest stack on the y.
+    setFasta('target', fastas[0]);
+    setFasta('query', {
+      name: `${fastas.length - 1} files`,
+      bufs: fastas.slice(1).map((f) => /** @type {ArrayBuffer} */ (f.buf)),
+    });
+    toast(
+      `${fastas.length} FASTAs — “${fastas[0].name}” is the target; the other ` +
+        `${fastas.length - 1} stack on the query axis.`,
+    );
+  } else {
+    for (const f of fastas) {
+      if (!state.fileTarget) setFasta('target', f);
+      else if (!state.fileQuery) setFasta('query', f);
+      else {
+        setFasta('target', f);
+        state.fileQuery = null;
+        setChip('chip-query', null);
+      }
     }
   }
 }
 
-/** @param {string} id @param {(f: {name: string, buf: ArrayBuffer}) => void} fn */
+/** @param {string} id @param {(f: SlotFile) => void} fn */
 function wireFileInput(id, fn) {
   const input = /** @type {HTMLInputElement} */ ($(id));
   input.addEventListener('change', async () => {
-    const file = input.files?.[0];
+    const files = Array.from(input.files ?? []);
     try {
-      if (file) fn(await readFile(file));
+      if (files.length === 1) {
+        fn(await readFile(files[0]));
+      } else if (files.length > 1) {
+        // Multi-select stacks every chosen file onto this axis.
+        const loaded = await Promise.all(files.map(readFile));
+        fn({ name: `${files.length} files`, bufs: loaded.map((l) => l.buf) });
+      }
     } catch (err) {
       toast(err instanceof Error ? err.message : String(err), true);
     }
@@ -1843,8 +1884,11 @@ const HELP = {
     '<kbd>R</kbd>/<kbd>0</kbd> fit · <kbd>G</kbd> region box · <kbd>+</kbd>/<kbd>−</kbd> zoom · ' +
     'arrows pan · <kbd>1</kbd>/<kbd>2</kbd> strand toggles · <kbd>P</kbd> fps meter',
   data:
-    'Target FASTA = x axis, query FASTA = y axis (one file → self-plot). dotdot computes matches ' +
-    'itself, alignment-free; gzipped files are fine. Multi-sequence files get boundary gridlines.',
+    'Target FASTA = x axis, query FASTA = y axis (one file → self-plot). Each button ' +
+    '<b>multi-selects</b>: several files stack onto that axis as one plot, every sequence keeping ' +
+    'its own ruler, with alternating shading separating regions. Drop 3+ FASTAs at once and the ' +
+    'first becomes the target, the rest the query. dotdot computes matches itself, ' +
+    'alignment-free; gzipped (and bgzip) files are fine.',
   ref:
     'Built-in reference genomes, fetched on demand as <b>byte ranges</b> from UCSC’s 2bit files — ' +
     'the genome itself never downloads. Type any region in genome-browser coordinates ' +

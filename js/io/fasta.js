@@ -109,3 +109,43 @@ export function looksLikeFasta(bytes) {
   }
   return false;
 }
+
+/**
+ * Merge separately parsed FASTAs into one axis — the multi-file axis
+ * feature: sequences from every file lie end to end in one catalog, each
+ * keeping its own name, ruler, and @offset display coordinates.
+ * @param {{catalog: AxisCatalog, codes: Uint8Array}[]} parts
+ * @returns {{catalog: AxisCatalog, codes: Uint8Array}}
+ */
+export function mergeParsedFasta(parts) {
+  if (parts.length === 1) return parts[0];
+  let total = 0;
+  let anyOffsets = false;
+  for (const p of parts) {
+    total += p.codes.length;
+    if (p.catalog.offsets) anyOffsets = true;
+  }
+  const codes = new Uint8Array(total);
+  /** @type {string[]} */
+  const names = [];
+  /** @type {number[]} */
+  const startList = [];
+  /** @type {number[]} */
+  const offsetList = [];
+  let base = 0;
+  for (const p of parts) {
+    codes.set(p.codes, base);
+    const c = p.catalog;
+    for (let i = 0; i < c.names.length; i++) {
+      names.push(c.names[i]);
+      startList.push(base + c.starts[i]);
+      offsetList.push(c.offsets ? c.offsets[i] : 0);
+    }
+    base += p.codes.length;
+  }
+  startList.push(base);
+  /** @type {AxisCatalog} */
+  const catalog = { names, starts: Float64Array.from(startList), total: base };
+  if (anyOffsets) catalog.offsets = Float64Array.from(offsetList);
+  return { catalog, codes };
+}

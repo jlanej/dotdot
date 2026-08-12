@@ -4,7 +4,7 @@
  * capped at 60k visible segments — beyond that the file would be unusable
  * anyway and PNG is the right tool.
  */
-import { LAYOUT, computeTicks, boundaryLines, bandLabels } from '../render/axes.js';
+import { LAYOUT, computeTicks, boundaryLines, bandLabels, bandStripes, STRIPE_ALPHA } from '../render/axes.js';
 import { buildColormap } from '../render/colormap.js';
 import { segmentEndpoints, segmentVisible } from '../core/types.js';
 import { downloadBlob } from './download.js';
@@ -69,8 +69,20 @@ export function exportSvg(p) {
   }
 
   // Chrome geometry comes from the same functions the screen uses, so the
-  // export inherits its density gates, per-band offset-aware rulers, and
-  // label collision rules — the file matches the screen by construction.
+  // export inherits its density gates, per-band offset-aware rulers, label
+  // collision rules, and region separators — the file matches the screen
+  // by construction.
+  const stripes = [];
+  for (const st of bandStripes(data.target, b.x0, b.x1, pw)) {
+    const xa = LAYOUT.l + view.worldToPxX(st.a, pw);
+    const xb = LAYOUT.l + view.worldToPxX(st.b, pw);
+    stripes.push(`<rect x="${r2(xa)}" y="${LAYOUT.t}" width="${r2(xb - xa)}" height="${ph}"/>`);
+  }
+  for (const st of bandStripes(data.query, b.y0, b.y1, ph)) {
+    const ya = LAYOUT.t + view.worldToPxY(st.b, ph);
+    const yb = LAYOUT.t + view.worldToPxY(st.a, ph);
+    stripes.push(`<rect x="${LAYOUT.l}" y="${r2(ya)}" width="${pw}" height="${r2(yb - ya)}"/>`);
+  }
   const gridLines = [];
   for (const v of boundaryLines(data.target, b.x0, b.x1, pw)) {
     const x = LAYOUT.l + view.worldToPxX(v, pw);
@@ -114,6 +126,7 @@ export function exportSvg(p) {
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${p.vpW} ${p.vpH}" width="${p.vpW}" height="${p.vpH}" font-family="system-ui, sans-serif" font-size="11">
   <rect width="${p.vpW}" height="${p.vpH}" fill="${theme.page}"/>
   <rect x="${LAYOUT.l}" y="${LAYOUT.t}" width="${pw}" height="${ph}" fill="${theme.surface}"/>
+  <g fill="${theme.ink}" fill-opacity="${STRIPE_ALPHA}">${stripes.join('')}</g>
   <g stroke="${theme.grid}" stroke-width="1">${gridLines.join('')}</g>
   <clipPath id="plot"><rect x="${LAYOUT.l}" y="${LAYOUT.t}" width="${pw}" height="${ph}"/></clipPath>
   <g clip-path="url(#plot)" stroke-width="${opts.widthPx}" stroke-linecap="round">${lines.join('')}</g>

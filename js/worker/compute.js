@@ -6,7 +6,7 @@
  * stays valid across requests. Cancellation is handled by the main thread
  * terminating and respawning the worker — no cooperative flags needed.
  */
-import { parseFasta } from '../io/fasta.js';
+import { parseFasta, mergeParsedFasta } from '../io/fasta.js';
 import { maybeGunzip } from '../io/compress.js';
 import { parsePaf, parsePafOnto } from '../io/paf.js';
 import { buildIndex, matchStrand, pickMaxOcc, KMER_DEFAULTS } from '../core/kmer.js';
@@ -64,7 +64,7 @@ self.onmessage = async (ev) => {
  */
 let parsedCache = null;
 
-/** @param {{id:number, gen?:number, target:ArrayBuffer|null, query:ArrayBuffer|null, opts:object, window?:RefineWindow}} req */
+/** @param {{id:number, gen?:number, target:ArrayBuffer[]|ArrayBuffer|null, query:ArrayBuffer[]|ArrayBuffer|null, opts:object, window?:RefineWindow}} req */
 async function handleKmer(req) {
   const t0 = performance.now();
   /** @type {{catalog: any, codes: Uint8Array}} */
@@ -81,17 +81,27 @@ async function handleKmer(req) {
     }
   } else {
     progress(req.id, 'Reading files', 0);
-    const tBytes = await maybeGunzip(new Uint8Array(req.target));
-    tParsed = parseFasta(tBytes, 'target');
-    qBase = null;
-    if (req.query) {
-      const qBytes = await maybeGunzip(new Uint8Array(req.query));
-      qBase = parseFasta(qBytes, 'query');
-    }
+    tParsed = await parseSlot(req.target, 'target');
+    qBase = req.query ? await parseSlot(req.query, 'query') : null;
     parsedCache = { gen: req.gen ?? -1, tParsed, qParsed: qBase };
   }
   const qParsed = qBase ?? selfPlotView(tParsed);
   computeKmer(req.id, tParsed, qParsed, req.opts, t0, req.window ?? null);
+}
+
+/**
+ * Parse one axis slot: one or many FASTA buffers (multi-file axes), each
+ * gunzipped and parsed independently, merged into a single catalog.
+ * @param {ArrayBuffer[] | ArrayBuffer} bufs @param {string} slot
+ */
+async function parseSlot(bufs, slot) {
+  const list = Array.isArray(bufs) ? bufs : [bufs];
+  const parts = [];
+  for (let i = 0; i < list.length; i++) {
+    const bytes = await maybeGunzip(new Uint8Array(list[i]));
+    parts.push(parseFasta(bytes, list.length > 1 ? `${slot}${i + 1}` : slot));
+  }
+  return mergeParsedFasta(parts);
 }
 
 /**

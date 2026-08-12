@@ -70,6 +70,22 @@ export function drawUnderlay(canvas, cssW, cssH, dpr, view, data, theme) {
   ctx.lineWidth = 1;
 
   const b = view.bounds(pw, ph);
+
+  // Region separators: alternating band tints (under the data layer).
+  ctx.fillStyle = theme.ink;
+  ctx.globalAlpha = STRIPE_ALPHA;
+  for (const s of bandStripes(data.target, b.x0, b.x1, pw)) {
+    const xa = LAYOUT.l + view.worldToPxX(s.a, pw);
+    const xb = LAYOUT.l + view.worldToPxX(s.b, pw);
+    ctx.fillRect(xa, LAYOUT.t, xb - xa, ph);
+  }
+  for (const s of bandStripes(data.query, b.y0, b.y1, ph)) {
+    const ya = LAYOUT.t + view.worldToPxY(s.b, ph); // flipped: high coord is the top edge
+    const yb = LAYOUT.t + view.worldToPxY(s.a, ph);
+    ctx.fillRect(LAYOUT.l, ya, pw, yb - ya);
+  }
+  ctx.globalAlpha = 1;
+
   ctx.beginPath();
   for (const v of boundaryLines(data.target, b.x0, b.x1, pw)) {
     const px = LAYOUT.l + view.worldToPxX(v, pw);
@@ -286,6 +302,34 @@ export function boundaryLines(cat, w0, w1, px) {
   for (let i = Math.max(first, 1); i <= last; i++) out.push(cat.starts[i]);
   return out;
 }
+
+/**
+ * Alternating-band extents for the region separators: every odd-index band
+ * carries a whisper of ink so distinct sequences read as distinct panels.
+ * Empty when there is nothing to separate (<2 sequences) or bands are
+ * denser than the boundary-line gate. Parity is by absolute band index, so
+ * a band keeps its shade while panning.
+ * @param {import('../core/types.js').AxisCatalog} cat
+ * @param {number} w0 @param {number} w1 @param {number} px
+ * @returns {{a: number, b: number}[]} world extents clipped to [w0, w1]
+ */
+export function bandStripes(cat, w0, w1, px) {
+  /** @type {{a: number, b: number}[]} */
+  const out = [];
+  if (cat.names.length < 2) return out;
+  const { first, last } = bandsInRange(cat, w0, w1);
+  if (last < first || px / (last - first + 1) <= 6) return out;
+  for (let i = first; i <= last; i++) {
+    if ((i & 1) === 0) continue;
+    out.push({ a: Math.max(w0, cat.starts[i]), b: Math.min(w1, cat.starts[i + 1]) });
+  }
+  return out;
+}
+
+/** The separators' ink opacity — recessive by design (background structure,
+ * never competing with data marks); overlapping x/y stripes deepen slightly
+ * into the 2D region lattice. */
+export const STRIPE_ALPHA = 0.04;
 
 /**
  * Visible band-name labels with the shared placement rules (≤60 bands,
