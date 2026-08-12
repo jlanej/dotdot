@@ -54,6 +54,9 @@
  * @property {import('./vec.js').F32Vec} dy
  * @property {import('./vec.js').U8Vec} strand
  * @property {import('./vec.js').F32Vec} identity
+ * @property {import('./vec.js').U8Vec} [edge] 1 = run touched a [qLo,qHi)
+ *   cut and may continue in a neighboring chunk (pool workers only; such
+ *   pieces bypass minRunLen here and are stitched + re-filtered on assembly)
  */
 
 export const KMER_DEFAULTS = Object.freeze({
@@ -80,9 +83,12 @@ const PROGRESS_EVERY = 1 << 21;
  * @param {(done: number, total: number) => void} [onProgress]
  * @param {number} [tLo] first k-mer start position to index (inclusive)
  * @param {number} [tHi] end of k-mer start positions (exclusive)
+ * @param {(kind: 'kmers'|'pos'|'buckets', len: number) => Uint32Array|Float64Array} [alloc]
+ *   custom array allocator — the pool path passes SharedArrayBuffer-backed
+ *   arrays so the index is born shared instead of built then copied
  * @returns {KmerIndex}
  */
-export function buildIndex(codes, starts, k, stride, onProgress, tLo = 0, tHi = codes.length) {
+export function buildIndex(codes, starts, k, stride, onProgress, tLo = 0, tHi = codes.length, alloc) {
   if (k < 4 || k > 26) throw new Error(`k must be 4..26 (got ${k})`);
   if (stride < 1) throw new Error('stride must be >= 1');
   const n = codes.length;
@@ -107,7 +113,9 @@ export function buildIndex(codes, starts, k, stride, onProgress, tLo = 0, tHi = 
   while (recInit < starts.length - 1 && starts[recInit] <= startI) recInit++;
 
   // Pass 1: bucket occupancy.
-  const bucketStarts = new Uint32Array(nBuckets + 1);
+  const bucketStarts = /** @type {Uint32Array} */ (
+    alloc ? alloc('buckets', nBuckets + 1) : new Uint32Array(nBuckets + 1)
+  );
   {
     let kmer = 0;
     let run = 0;
@@ -142,8 +150,8 @@ export function buildIndex(codes, starts, k, stride, onProgress, tLo = 0, tHi = 
 
   for (let b = 0; b < nBuckets; b++) bucketStarts[b + 1] += bucketStarts[b];
   const total = bucketStarts[nBuckets];
-  const kmers = wide ? new Float64Array(total) : new Uint32Array(total);
-  const pos = new Uint32Array(total);
+  const kmers = alloc ? alloc('kmers', total) : wide ? new Float64Array(total) : new Uint32Array(total);
+  const pos = /** @type {Uint32Array} */ (alloc ? alloc('pos', total) : new Uint32Array(total));
 
   // Pass 2: fill buckets.
   {
@@ -327,6 +335,16 @@ export function matchStrand(index, qCodes, qStarts, qTotal, tStarts, tTotal, opt
     throw new Error('Combined sequence length too large for in-browser matching — import a minimap2 PAF instead.');
   }
 
+  // Chunk-cut awareness, active only when the caller tracks edge flags
+  // (pool workers): a run near enough to a cut that its continuation may
+  // live in the neighboring chunk is emitted even below minRunLen and
+  // flagged, so the assembler can stitch across cuts and re-filter — the
+  // assembled result is then segment-for-segment faithful to one core.
+  const edgeVec = out.edge;
+  const edgeBridge = maxGap + sampleHole;
+  const edgeLo = edgeVec && qLo > 0 ? qLo + edgeBridge : -1;
+  const edgeHi = edgeVec && qHi < n ? qHi - 1 - edgeBridge : Infinity;
+
   // Active-run table: open-addressed, keyed by diagonal (p - t + tTotal + 1; 0 = empty).
   let cap = 1 << 16;
   let capMask = cap - 1;
@@ -344,7 +362,8 @@ export function matchStrand(index, qCodes, qStarts, qTotal, tStarts, tTotal, opt
    */
   const emit = (q0, q1, t0, gaps) => {
     const len = q1 - q0 + k;
-    if (len < minRunLen) return;
+    const atEdge = q0 <= edgeLo || q1 >= edgeHi;
+    if (len < minRunLen && !atEdge) return;
     if (out.x.n >= MAX_SEGMENTS) {
       throw new Error('Too many match segments — raise k, lower max occurrences, or add a stride.');
     }
@@ -354,6 +373,7 @@ export function matchStrand(index, qCodes, qStarts, qTotal, tStarts, tTotal, opt
     out.dy.push(len);
     out.strand.push(strandFlag);
     out.identity.push((len - gaps) / len);
+    if (edgeVec) edgeVec.push(atEdge ? 1 : 0);
   };
 
   const grow = () => {

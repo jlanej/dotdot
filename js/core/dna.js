@@ -23,11 +23,12 @@ export const BASE_CHAR = 'ACGTN';
 /**
  * Reverse complement of a code array (complement of NBASE stays NBASE).
  * @param {Uint8Array} codes
+ * @param {Uint8Array} [out] optional destination (e.g. a SharedArrayBuffer
+ *   view, so the pool path writes shared memory directly instead of copying)
  * @returns {Uint8Array}
  */
-export function reverseComplement(codes) {
+export function reverseComplement(codes, out = new Uint8Array(codes.length)) {
   const n = codes.length;
-  const out = new Uint8Array(n);
   for (let i = 0; i < n; i++) {
     const c = codes[n - 1 - i];
     out[i] = c < 4 ? 3 - c : NBASE;

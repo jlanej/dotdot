@@ -6,7 +6,8 @@
  */
 import { View } from './core/transform.js';
 import { SegmentGrid } from './core/grid.js';
-import { segmentEndpoints } from './core/types.js';
+import { segmentEndpoints, allocSegments, copySegmentRow, blitSegments, segmentVisible } from './core/types.js';
+import { assemblePool } from './worker/assemble.js';
 import { locate } from './core/catalog.js';
 import { resolveRegion, parseBp } from './core/region.js';
 import { GlRenderer } from './render/gl.js';
@@ -160,7 +161,13 @@ let reqId = 0;
 /** @type {number} */
 let activeReq = -1;
 
+let dataGen = 0; // bumped whenever the target/query file slots change
+let workerGen = -1; // the generation the compute worker has parsed & cached
+/** @type {{opts: object, window: {tx0:number,tx1:number,qy0:number,qy1:number} | null} | null} */
+let lastKmer = null;
+
 function spawnWorker() {
+  workerGen = -1;
   worker = new Worker(new URL('./worker/compute.js', import.meta.url), { type: 'module' });
   worker.onmessage = (ev) => {
     const msg = ev.data;
@@ -172,13 +179,23 @@ function spawnWorker() {
       runPool(msg.plan);
     } else if (msg.type === 'result') {
       setComputing(false);
-      onData(msg.data);
+      onData(msg.data, msg.id);
     } else if (msg.type === 'overlayResult') {
       setComputing(false);
       onOverlay(msg);
     } else if (msg.type === 'regionResult') {
       setComputing(false);
       onRegionRefined(msg);
+    } else if (msg.type === 'needData') {
+      // The worker's parse cache missed (e.g. fresh spawn) — resend with
+      // full buffers, carrying any bound post-load actions forward.
+      workerGen = -1;
+      if (boundActions && boundActions.req === msg.id) {
+        queuedActions = { overlay: boundActions.overlay, region: boundActions.region };
+        boundActions = null;
+      }
+      if (lastKmer) submitKmer(lastKmer.opts, lastKmer.window);
+      else setComputing(false);
     } else if (msg.type === 'error') {
       setComputing(false);
       toast(msg.message, true);
@@ -194,21 +211,37 @@ spawnWorker();
 let submitAt = 0;
 
 /**
- * @param {object} payload
+ * A new submit supersedes whatever ran before it: terminate the busy
+ * compute worker and stop any matcher pool, so superseded jobs never grind
+ * on in the background pinning CPU cores and shared memory.
+ */
+function supersede() {
+  if (!state.computing) return;
+  worker.terminate();
+  spawnWorker();
+  stopPool();
+  setComputing(false);
+}
+
+/**
+ * @param {{type: string, window?: object, [key: string]: unknown}} payload
  */
 function submit(payload) {
+  supersede();
   activeReq = ++reqId;
   submitAt = performance.now();
   setComputing(true);
+  // Post-load actions bind to base-plot requests only (never refine).
+  if (queuedActions && (payload.type === 'paf' || (payload.type === 'kmer' && !payload.window))) {
+    boundActions = { req: activeReq, ...queuedActions };
+    queuedActions = null;
+  }
   worker.postMessage({ id: activeReq, ...payload });
 }
 
 function cancelCompute() {
-  worker.terminate();
-  spawnWorker();
-  stopPool();
+  supersede();
   activeReq = -1;
-  setComputing(false);
   toast('Canceled.');
 }
 
@@ -247,23 +280,9 @@ function runPool(plan) {
   const dispatch = (w) => {
     const i = next++;
     active.set(w, { part: i, frac: 0 });
-    w.postMessage({
-      part: i,
-      qLo: parts[i].qLo,
-      qHi: parts[i].qHi,
-      qSab: plan.qSab,
-      rcSab: plan.rcSab,
-      kmersSab: plan.kmersSab,
-      posSab: plan.posSab,
-      bucketsSab: plan.bucketsSab,
-      indexMeta: plan.indexMeta,
-      opts: plan.opts,
-      qStarts: plan.qStarts,
-      rcStarts: plan.rcStarts,
-      tStarts: plan.tStarts,
-      qTotal: plan.qTotal,
-      tTotal: plan.tTotal,
-    });
+    // The shared bundle is forwarded wholesale — new fields can't be
+    // dropped between the coordinator and the matchers.
+    w.postMessage({ part: i, qLo: parts[i].qLo, qHi: parts[i].qHi, shared: plan.shared });
   };
 
   const updateBar = () => {
@@ -289,7 +308,7 @@ function runPool(plan) {
           dispatch(w);
         } else {
           w.terminate();
-          if (completed === parts.length) assemblePool(plan, results);
+          if (completed === parts.length) finishPool(plan, results, req);
         }
         updateBar();
       } else if (m.type === 'error') {
@@ -310,44 +329,38 @@ function runPool(plan) {
 }
 
 /**
+ * All parts are in: stitch and merge them (chunk-cut faithful), then route
+ * to the base-plot or refine path depending on the plan's window.
  * @param {any} plan
  * @param {any[]} results
+ * @param {number} req
  */
-function assemblePool(plan, results) {
+function finishPool(plan, results, req) {
   poolWorkers = [];
-  let total = 0;
-  for (const r of results) total += r.count;
-  const segments = {
-    count: total,
-    x: new Float64Array(total),
-    y: new Float64Array(total),
-    dx: new Float32Array(total),
-    dy: new Float32Array(total),
-    strand: new Uint8Array(total),
-    identity: new Float32Array(total),
-  };
-  let o = 0;
-  for (const r of results) {
-    segments.x.set(r.x, o);
-    segments.y.set(r.y, o);
-    segments.dx.set(r.dx, o);
-    segments.dy.set(r.dy, o);
-    segments.strand.set(r.strand, o);
-    segments.identity.set(r.identity, o);
-    o += r.count;
-  }
-  let identMin = 1;
-  for (let i = 0; i < total; i++) {
-    if (segments.identity[i] < identMin) identMin = segments.identity[i];
+  /** @type {{segments: import('./core/types.js').SegmentStore, identMin: number}} */
+  let assembled;
+  try {
+    assembled = assemblePool(plan, results);
+  } catch (err) {
+    setComputing(false);
+    toast(err instanceof Error ? err.message : String(err), true);
+    return;
   }
   setComputing(false);
-  onData({
-    target: plan.target,
-    query: plan.query,
-    segments,
-    source: 'kmer',
-    stats: { elapsedMs: performance.now() - submitAt, identMin, note: plan.note },
-  });
+  if (plan.window) {
+    onRegionRefined({ segments: assembled.segments, window: plan.window, identMin: assembled.identMin });
+  } else {
+    onData(
+      {
+        target: plan.target,
+        query: plan.query,
+        segments: assembled.segments,
+        source: 'kmer',
+        stats: { elapsedMs: performance.now() - submitAt, identMin: assembled.identMin, note: plan.note },
+      },
+      req,
+    );
+  }
 }
 
 /** @param {boolean} on */
@@ -378,9 +391,11 @@ function parseLenOff(text, fallback = 0) {
   return Number.isFinite(v) && v >= 0 ? Math.round(v) : fallback;
 }
 
-/** Current k, clamped to the engine's 4..26 range. */
+/** Current k, clamped to the engine's 4..26 range; empty/garbage = 15. */
 function currentK() {
-  const v = Math.round(Number(inKNum.value));
+  const t = inKNum.value.trim();
+  if (t === '') return 15; // Number('') is 0 — don't let a cleared box mean k=4
+  const v = Math.round(Number(t));
   return Number.isFinite(v) ? Math.min(26, Math.max(4, v)) : 15;
 }
 
@@ -424,8 +439,14 @@ function displayOpts() {
 // --------------------------------------------------------------------------
 // Data pipeline
 
-/** @param {PlotData} data */
-function onData(data) {
+/**
+ * @param {PlotData} data
+ * @param {number} [reqId] the request this result answers — post-load
+ *   actions (overlay, region jump) apply only when they were bound to it
+ */
+function onData(data, reqId = -1) {
+  const act = boundActions && boundActions.req === reqId ? boundActions : null;
+  if (act) boundActions = null;
   state.data = data;
   state.grid = null;
   state.hoverIndex = null;
@@ -460,10 +481,7 @@ function onData(data) {
   setTimeout(() => {
     if (state.data === data) {
       state.grid = new SegmentGrid(data.segments, data.target.total, data.query.total);
-      if (pendingRegion) {
-        jumpToRegion(pendingRegion);
-        pendingRegion = null;
-      }
+      if (act && act.region) jumpToRegion(act.region);
     }
   }, 30);
 
@@ -496,26 +514,41 @@ function onData(data) {
   } else if (data.stats.note) {
     toast(data.stats.note);
   }
-  if (data.source === 'kmer' && pendingOverlayBuf) {
-    const buf = pendingOverlayBuf;
-    pendingOverlayBuf = null;
-    setChip('chip-paf', { name: overlayName, buf });
-    submit({ type: 'pafOverlay', buf, target: data.target, query: data.query });
+  if (data.source === 'kmer' && act && act.overlay) {
+    overlayName = act.overlay.name;
+    setChip('chip-paf', act.overlay);
+    submit({ type: 'pafOverlay', buf: act.overlay.buf, target: data.target, query: data.query });
   }
   markDirty();
 }
 
-function computeKmer() {
+/**
+ * Submit a k-mer compute. The request carries the data generation; when the
+ * worker's parse cache already holds this generation the FASTA buffers are
+ * not re-sent (Recompute and Refine become options-only messages).
+ * @param {object} opts
+ * @param {{tx0:number,tx1:number,qy0:number,qy1:number} | null} [window]
+ */
+function submitKmer(opts, window = null) {
   if (!state.fileTarget) {
     toast('Load a target FASTA first.');
     return;
   }
+  lastKmer = { opts, window };
+  const sendData = workerGen !== dataGen;
   submit({
     type: 'kmer',
-    target: state.fileTarget.buf,
-    query: state.fileQuery ? state.fileQuery.buf : null,
-    opts: matchOpts(),
+    gen: dataGen,
+    opts,
+    window: window ?? undefined,
+    target: sendData ? state.fileTarget.buf : null,
+    query: sendData ? (state.fileQuery ? state.fileQuery.buf : null) : null,
   });
+  workerGen = dataGen;
+}
+
+function computeKmer() {
+  submitKmer(matchOpts());
 }
 
 /** @param {ArrayBuffer} buf */
@@ -540,8 +573,26 @@ function loadPafFile(f) {
 
 /** @type {string} */
 let overlayName = '';
-/** @type {ArrayBuffer | null} */
-let pendingOverlayBuf = null;
+/**
+ * Post-load intents (audit overlay to attach, region to frame) travel with
+ * the request they belong to instead of ambient globals: load flows queue
+ * them, submit() binds them to its request id, and only that exact result
+ * consumes them — a superseded or failed load can never leak its overlay
+ * onto an unrelated plot.
+ * @type {{overlay?: {name: string, buf: ArrayBuffer}, region?: string} | null}
+ */
+let queuedActions = null;
+/** @type {{req: number, overlay?: {name: string, buf: ArrayBuffer}, region?: string} | null} */
+let boundActions = null;
+
+/** Reference/demo fetch generation: bumping it invalidates pending installs. */
+let refLoadGen = 0;
+
+/** The user pivoted to new data — stale intents must not fire. */
+function newLoadIntent() {
+  refLoadGen++;
+  queuedActions = null;
+}
 
 /** @param {{segments: import('./core/types.js').SegmentStore, skipped: number, unknown: number}} msg */
 function onOverlay(msg) {
@@ -627,6 +678,10 @@ async function loadRefRegion(text) {
     toast(`Could not parse region “${text}” — try chrX:57.8M-60.7M (1-based).`, true);
     return;
   }
+  // Anything the user does after this (own FASTA, another selection, Clear)
+  // bumps the generation; a slow fetch must then discard itself instead of
+  // clobbering the newer data.
+  const gen = ++refLoadGen;
   try {
     const tb = getTwoBit(ref);
     const meta = await tb.seqMeta(parsed.chrom).catch(async (err) => {
@@ -636,6 +691,7 @@ async function loadRefRegion(text) {
           (names.length ? ` Available: ${names.slice(0, 8).join(', ')}…` : ''),
       );
     });
+    if (gen !== refLoadGen) return;
     const start0 = parsed.start1 !== null ? parsed.start1 - 1 : 0;
     const end0 = Math.min(parsed.end1 ?? meta.dnaSize, meta.dnaSize);
     const len = end0 - start0;
@@ -647,17 +703,42 @@ async function loadRefRegion(text) {
       toast('Region too large — 300 Mb max.', true);
       return;
     }
-    toast(
-      `Fetching ${parsed.chrom}:${formatInt(start0 + 1)}-${formatInt(end0)} (${formatBp(len)}) ` +
-        `from ${ref.label}…` + (len > 33e6 ? ' Large region — this will take a while.' : ''),
-    );
-    const bases = await tb.fetchRegion(parsed.chrom, start0, end0);
     const label1 = `${parsed.chrom}:${formatInt(start0 + 1)}-${formatInt(end0)}`;
-    const fasta = regionToFasta(parsed.chrom, `${ref.label} ${label1}`, start0, bases);
-    setFasta('target', { name: `${label1} · ${ref.label}`, buf: fasta.buffer });
+    toast(
+      `Fetching ${label1} (${formatBp(len)}) from ${ref.label}…` +
+        (len > 33e6 ? ' Large region — this will take a while.' : ''),
+    );
+    const buf = await streamRefRegions(ref, [{ chrom: parsed.chrom, start0, end0 }]);
+    if (gen !== refLoadGen) return;
+    setFasta('target', { name: `${label1} · ${ref.label}`, buf: buf.buffer });
   } catch (err) {
     toast(err instanceof Error ? err.message : String(err), true);
   }
+}
+
+/**
+ * Stream reference windows (0-based half-open) and wrap them as one FASTA.
+ * Record labels and @offset tokens derive from the same numbers, so the
+ * displayed coordinates can never drift from what was fetched.
+ * @param {import('./refs.js').ReferenceGenome} ref
+ * @param {{chrom: string, start0: number, end0: number, name?: string}[]} regions
+ */
+async function streamRefRegions(ref, regions) {
+  const tb = getTwoBit(ref);
+  const parts = await Promise.all(regions.map((r) => tb.fetchRegion(r.chrom, r.start0, r.end0)));
+  const fastas = regions.map((r, i) => {
+    const label = `${r.chrom}:${formatInt(r.start0 + 1)}-${formatInt(r.end0)}`;
+    return regionToFasta(r.name ?? r.chrom, `${ref.label} ${label}`, r.start0, parts[i]);
+  });
+  let total = 0;
+  for (const f of fastas) total += f.length;
+  const out = new Uint8Array(total);
+  let w = 0;
+  for (const f of fastas) {
+    out.set(f, w);
+    w += f.length;
+  }
+  return out;
 }
 
 selRef.addEventListener('change', () => applyRefSelection(true));
@@ -677,38 +758,37 @@ inRefRegion.addEventListener('keydown', (e) => {
  * offline or if UCSC is unreachable, the committed copy steps in.
  */
 async function loadDemo() {
+  const gen = ++refLoadGen;
+  const carriedRegion = queuedActions?.region;
+  queuedActions = null;
   try {
     const [q, o] = await Promise.all([
       fetchAsFile('testdata/demo/query.fa.gz'),
       fetchAsFile('testdata/demo/minimap2_demo.paf'),
     ]);
-    pendingOverlayBuf = o.buf;
-    overlayName = o.name;
-    // Open on structure (17p11.2 is segdup-dense); the length slider
-    // reveals the full repeat fabric live.
-    inMinLen.value = '500';
-    setFasta('query', q);
+    if (gen !== refLoadGen) return;
     /** @type {{name: string, buf: ArrayBuffer}} */
     let t;
     let source;
     try {
-      const ref = REFERENCES[0];
-      const tb = getTwoBit(ref);
-      const [r1, r2] = await Promise.all([
-        tb.fetchRegion('chr17', 18_000_000, 19_600_000),
-        tb.fetchRegion('chr17', 10_750_000, 11_050_000),
+      const buf = await streamRefRegions(REFERENCES[0], [
+        { chrom: 'chr17', start0: 18_000_000, end0: 19_600_000, name: 'chr17_17p11.2' },
+        { chrom: 'chr17', start0: 10_750_000, end0: 11_050_000, name: 'chr17_ROI10.9' },
       ]);
-      const f1 = regionToFasta('chr17_17p11.2', `${ref.label} chr17:18,000,001-19,600,000`, 18_000_000, r1);
-      const f2 = regionToFasta('chr17_ROI10.9', `${ref.label} chr17:10,750,001-11,050,000`, 10_750_000, r2);
-      const buf = new Uint8Array(f1.length + f2.length);
-      buf.set(f1, 0);
-      buf.set(f2, f1.length);
       t = { name: 'chr17 slices · T2T (streamed)', buf: buf.buffer };
       source = 'streamed live from the T2T reference';
     } catch {
       t = await fetchAsFile('testdata/demo/target.fa.gz');
       source = 'from the committed offline copy';
     }
+    if (gen !== refLoadGen) return;
+    // Open on structure (17p11.2 is segdup-dense); the length slider
+    // reveals the full repeat fabric live.
+    inMinLen.value = '500';
+    // Both slots land in the same tick so the debounced autocompute runs
+    // exactly once, on the demo pair — and the overlay binds to that request.
+    queuedActions = { overlay: o, region: carriedRegion };
+    setFasta('query', q);
     setFasta('target', t);
     toast(
       `Real chr17 loci vs both NA19240 haplotypes, alignment-free — target ${source}. ` +
@@ -727,6 +807,9 @@ async function loadDemo() {
  * pointer to the script.
  */
 async function loadFullChr17() {
+  const gen = ++refLoadGen;
+  const carriedRegion = queuedActions?.region;
+  queuedActions = null;
   const T = 'testdata/real/chr17.fa';
   const Q = 'testdata/real/NA19240_chr17.fa';
   try {
@@ -734,23 +817,25 @@ async function loadFullChr17() {
       fetch(T, { method: 'HEAD' }).catch(() => null),
       fetch(Q, { method: 'HEAD' }).catch(() => null),
     ]);
+    if (gen !== refLoadGen) return;
     if (tHead?.ok && qHead?.ok) {
       inK.value = '16';
       inKNum.value = '16';
       const o = await fetchAsFile('testdata/real/NA19240_vs_chm13_chr17.paf');
-      pendingOverlayBuf = o.buf;
-      overlayName = o.name;
       toast(
         'Computing the full 84 Mb × 170 Mb chr17 comparison alignment-free — this takes minutes ' +
           '(Cancel anytime). minimap2’s calls will overlay when it finishes.',
       );
       const t = await fetchAsFile(T);
       const q = await fetchAsFile(Q);
+      if (gen !== refLoadGen) return;
+      queuedActions = { overlay: o, region: carriedRegion };
       setFasta('query', q);
       setFasta('target', t);
     } else {
       const f = await fetchAsFile('testdata/real/NA19240_vs_chm13_chr17.paf');
-      pendingRegion = 'chr17:18.3M-19.4M';
+      if (gen !== refLoadGen) return;
+      queuedActions = { region: carriedRegion ?? 'chr17:18.3M-19.4M' };
       setChip('chip-paf', f);
       computePaf(f.buf);
       toast(
@@ -789,6 +874,7 @@ function isPafFile(f) {
  * @param {{name: string, buf: ArrayBuffer}} f
  */
 function setFasta(slot, f) {
+  dataGen++; // the worker's parse cache is stale from here on
   if (slot === 'target') {
     state.fileTarget = f;
     setChip('chip-target', f);
@@ -834,15 +920,25 @@ function scheduleAutoCompute() {
 
 /** @param {File[]} files */
 async function handleFiles(files) {
-  for (const file of files) {
-    const f = await readFile(file);
-    if (isPafFile(f)) {
-      loadPafFile(f);
-    } else if (!state.fileTarget) {
-      setFasta('target', f);
-    } else if (!state.fileQuery) {
-      setFasta('query', f);
-    } else {
+  const loaded = await Promise.all(files.map(readFile));
+  /** @type {{name: string, buf: ArrayBuffer}[]} */
+  const pafs = [];
+  /** @type {{name: string, buf: ArrayBuffer}[]} */
+  const fastas = [];
+  for (const f of loaded) (isPafFile(f) ? pafs : fastas).push(f);
+  newLoadIntent();
+  if (fastas.length > 0 && pafs.length > 0) {
+    // FASTAs and a PAF in one drop: the PAF is the audit overlay for the
+    // plot those FASTAs are about to produce, not a standalone plot.
+    queuedActions = { overlay: pafs[0] };
+    if (pafs.length > 1) toast('Multiple PAFs in one drop — using the first as the overlay.');
+  } else {
+    for (const p of pafs) loadPafFile(p);
+  }
+  for (const f of fastas) {
+    if (!state.fileTarget) setFasta('target', f);
+    else if (!state.fileQuery) setFasta('query', f);
+    else {
       setFasta('target', f);
       state.fileQuery = null;
       setChip('chip-query', null);
@@ -855,13 +951,23 @@ function wireFileInput(id, fn) {
   const input = /** @type {HTMLInputElement} */ ($(id));
   input.addEventListener('change', async () => {
     const file = input.files?.[0];
-    if (file) fn(await readFile(file));
+    try {
+      if (file) fn(await readFile(file));
+    } catch (err) {
+      toast(err instanceof Error ? err.message : String(err), true);
+    }
     input.value = '';
   });
 }
 
-wireFileInput('file-target', (f) => setFasta('target', f));
-wireFileInput('file-query', (f) => setFasta('query', f));
+wireFileInput('file-target', (f) => {
+  newLoadIntent();
+  setFasta('target', f);
+});
+wireFileInput('file-query', (f) => {
+  newLoadIntent();
+  setFasta('query', f);
+});
 wireFileInput('file-paf', loadPafFile);
 
 plotRoot.addEventListener('dragover', (e) => {
@@ -873,7 +979,9 @@ plotRoot.addEventListener('drop', (e) => {
   e.preventDefault();
   plotRoot.classList.remove('dragover');
   const files = Array.from(e.dataTransfer?.files ?? []);
-  if (files.length > 0) void handleFiles(files);
+  if (files.length > 0) {
+    handleFiles(files).catch((err) => toast(err instanceof Error ? err.message : String(err), true));
+  }
 });
 document.addEventListener('dragover', (e) => e.preventDefault());
 document.addEventListener('drop', (e) => e.preventDefault());
@@ -890,9 +998,6 @@ function fitView() {
   state.view.fit(pw, ph, chkAspect.checked);
   markDirty();
 }
-
-/** @type {string | null} */
-let pendingRegion = null;
 
 /** Cycle state: repeating the same jump steps through the mapping clusters. */
 let lastJump = { expr: '', idx: -1 };
@@ -1272,12 +1377,8 @@ setInterval(() => {
   const d = displayOpts();
   const hit = state.grid.nearest(state.view, pw, ph, p.x, p.y, 7);
   if (hit) {
-    const s = state.data.segments;
     const i = hit.index;
-    const visible =
-      (s.strand[i] === 0 ? d.showFwd : d.showRev) &&
-      s.identity[i] >= d.minIdentity &&
-      s.dx[i] >= d.minLenBp;
+    const visible = segmentVisible(state.data.segments, i, d);
     setHover(visible ? i : null, /** @type {PointerEvent} */ (e));
   } else {
     setHover(null, null);
@@ -1455,13 +1556,6 @@ for (const el of [chkFwd, chkRev, chkMinPx]) {
   el.addEventListener('change', markDirty);
 }
 chkAspect.addEventListener('change', fitView);
-for (const el of [inK, inKNum, inGap, inMaxOcc, inMinRun]) {
-  el.addEventListener('change', () => {
-    if (state.data?.source === 'kmer' || state.fileTarget) {
-      btnCompute.disabled = state.computing || (!state.fileTarget && state.data?.source !== 'kmer');
-    }
-  });
-}
 
 btnCompute.addEventListener('click', () => {
   if (state.fileTarget) computeKmer();
@@ -1512,13 +1606,7 @@ function refineView() {
     toast('Zoom into a region first — Refine recomputes the visible window at full detail.');
     return;
   }
-  submit({
-    type: 'kmer',
-    target: state.fileTarget.buf,
-    query: state.fileQuery ? state.fileQuery.buf : null,
-    opts: { ...matchOpts(), sample: 1 },
-    window: { tx0, tx1, qy0, qy1 },
-  });
+  submitKmer({ ...matchOpts(), sample: 1 }, { tx0, tx1, qy0, qy1 });
 }
 
 /**
@@ -1544,30 +1632,9 @@ function onRegionRefined(msg) {
     toast('Refining this window would exceed the segment budget — narrow the view or raise min match length.', true);
     return;
   }
-  const merged = {
-    count: total,
-    x: new Float64Array(total),
-    y: new Float64Array(total),
-    dx: new Float32Array(total),
-    dy: new Float32Array(total),
-    strand: new Uint8Array(total),
-    identity: new Float32Array(total),
-  };
-  for (let j = 0; j < keep.length; j++) {
-    const i = keep[j];
-    merged.x[j] = s.x[i];
-    merged.y[j] = s.y[i];
-    merged.dx[j] = s.dx[i];
-    merged.dy[j] = s.dy[i];
-    merged.strand[j] = s.strand[i];
-    merged.identity[j] = s.identity[i];
-  }
-  merged.x.set(ns.x, keep.length);
-  merged.y.set(ns.y, keep.length);
-  merged.dx.set(ns.dx, keep.length);
-  merged.dy.set(ns.dy, keep.length);
-  merged.strand.set(ns.strand, keep.length);
-  merged.identity.set(ns.identity, keep.length);
+  const merged = allocSegments(total);
+  for (let j = 0; j < keep.length; j++) copySegmentRow(merged, j, s, keep[j]);
+  blitSegments(merged, keep.length, ns);
 
   d.segments = merged;
   renderer.setData(merged);
@@ -1619,6 +1686,17 @@ window.visualViewport?.addEventListener('resize', () => {
   );
 });
 $('btn-clear').addEventListener('click', () => {
+  // Kill in-flight work first: without this, a compute finishing later
+  // passes the id gate and repopulates the app the UI says is empty (and
+  // the worker keeps holding its parse cache).
+  worker.terminate();
+  spawnWorker();
+  stopPool();
+  activeReq = -1;
+  setComputing(false);
+  newLoadIntent();
+  boundActions = null;
+  lastKmer = null;
   state.data = null;
   state.grid = null;
   state.view = null;
@@ -1646,19 +1724,24 @@ $('btn-clear').addEventListener('click', () => {
 btnPng.addEventListener('click', () => {
   const stashCursor = state.cursor;
   const stashFps = state.fpsOn;
-  state.cursor = null;
-  state.fpsOn = false;
-  draw(window.devicePixelRatio || 1);
-  exportPng({
-    underlay,
-    glCanvas: glcanvas,
-    overlay,
-    dpr: window.devicePixelRatio || 1,
-    filename: 'dotdot.png',
-  });
-  state.cursor = stashCursor;
-  state.fpsOn = stashFps;
-  markDirty();
+  try {
+    state.cursor = null;
+    state.fpsOn = false;
+    draw(window.devicePixelRatio || 1);
+    exportPng({
+      underlay,
+      glCanvas: glcanvas,
+      overlay,
+      dpr: window.devicePixelRatio || 1,
+      filename: 'dotdot.png',
+    });
+  } catch (err) {
+    toast(err instanceof Error ? err.message : String(err), true);
+  } finally {
+    state.cursor = stashCursor;
+    state.fpsOn = stashFps;
+    markDirty();
+  }
 });
 
 btnSvg.addEventListener('click', () => {
@@ -1887,7 +1970,8 @@ async function initFromUrl() {
   }
   if (p.has('gap')) inGap.value = p.get('gap') ?? inGap.value;
   if (p.has('occ')) inMaxOcc.value = p.get('occ') ?? inMaxOcc.value;
-  if (p.has('region')) pendingRegion = p.get('region');
+  const urlRegion = p.get('region');
+  if (urlRegion) queuedActions = { ...(queuedActions ?? {}), region: urlRegion };
   try {
     if (p.has('ref')) {
       if (p.has('query')) {
@@ -1913,16 +1997,12 @@ async function initFromUrl() {
     } else if (p.has('target')) {
       if (p.has('overlay')) {
         const o = await fetchAsFile(/** @type {string} */ (p.get('overlay')));
-        pendingOverlayBuf = o.buf;
-        overlayName = o.name;
-        setChip('chip-paf', o);
+        queuedActions = { ...(queuedActions ?? {}), overlay: o };
       }
       const t = await fetchAsFile(/** @type {string} */ (p.get('target')));
+      const q = p.has('query') ? await fetchAsFile(/** @type {string} */ (p.get('query'))) : null;
+      if (q) setFasta('query', q);
       setFasta('target', t);
-      if (p.has('query')) {
-        const q = await fetchAsFile(/** @type {string} */ (p.get('query')));
-        setFasta('query', q);
-      }
     }
   } catch (err) {
     toast(err instanceof Error ? err.message : String(err), true);
