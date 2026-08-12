@@ -70,27 +70,18 @@ export function drawUnderlay(canvas, cssW, cssH, dpr, view, data, theme) {
   ctx.lineWidth = 1;
 
   const b = view.bounds(pw, ph);
-  // Interior sequence boundaries, skipped when bands get denser than 6 px.
-  const tb = bandsInRange(data.target, b.x0, b.x1);
-  if (tb.last >= tb.first && pw / (tb.last - tb.first + 1) > 6) {
-    ctx.beginPath();
-    for (let i = Math.max(tb.first, 1); i <= tb.last; i++) {
-      const px = LAYOUT.l + view.worldToPxX(data.target.starts[i], pw);
-      ctx.moveTo(Math.round(px) + 0.5, LAYOUT.t);
-      ctx.lineTo(Math.round(px) + 0.5, LAYOUT.t + ph);
-    }
-    ctx.stroke();
+  ctx.beginPath();
+  for (const v of boundaryLines(data.target, b.x0, b.x1, pw)) {
+    const px = LAYOUT.l + view.worldToPxX(v, pw);
+    ctx.moveTo(Math.round(px) + 0.5, LAYOUT.t);
+    ctx.lineTo(Math.round(px) + 0.5, LAYOUT.t + ph);
   }
-  const qb = bandsInRange(data.query, b.y0, b.y1);
-  if (qb.last >= qb.first && ph / (qb.last - qb.first + 1) > 6) {
-    ctx.beginPath();
-    for (let i = Math.max(qb.first, 1); i <= qb.last; i++) {
-      const py = LAYOUT.t + view.worldToPxY(data.query.starts[i], ph);
-      ctx.moveTo(LAYOUT.l, Math.round(py) + 0.5);
-      ctx.lineTo(LAYOUT.l + pw, Math.round(py) + 0.5);
-    }
-    ctx.stroke();
+  for (const v of boundaryLines(data.query, b.y0, b.y1, ph)) {
+    const py = LAYOUT.t + view.worldToPxY(v, ph);
+    ctx.moveTo(LAYOUT.l, Math.round(py) + 0.5);
+    ctx.lineTo(LAYOUT.l + pw, Math.round(py) + 0.5);
   }
+  ctx.stroke();
   ctx.restore();
 }
 
@@ -120,48 +111,33 @@ export function drawOverlay(p) {
   const font = '11px ui-sans-serif, system-ui, -apple-system, sans-serif';
   ctx.font = font;
 
-  // --- X ticks (target axis)
+  // --- X ticks (target axis) — shared offset-aware per-band geometry
   const bx = view.bounds(pw, ph);
-  const xt = niceTicks(bx.x0, bx.x1, pw, 90);
   ctx.fillStyle = theme.muted;
   ctx.strokeStyle = theme.baseline;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
-  let lastRight = -Infinity;
   ctx.beginPath();
-  for (let v = xt.start; v <= bx.x1 + 1e-9; v += xt.step) {
-    if (v < 0 || v > data.target.total) continue;
-    const px = LAYOUT.l + view.worldToPxX(v, pw);
-    if (px < LAYOUT.l - 0.5 || px > LAYOUT.l + pw + 0.5) continue;
+  for (const tk of computeTicks(data.target, bx.x0, bx.x1, pw, 90, (s) => ctx.measureText(s).width)) {
+    const px = LAYOUT.l + view.worldToPxX(tk.v, pw);
     ctx.moveTo(Math.round(px) + 0.5, LAYOUT.t + ph);
     ctx.lineTo(Math.round(px) + 0.5, LAYOUT.t + ph + 4);
-    const label = formatTick(v, xt.step);
-    const w = ctx.measureText(label).width;
-    if (px - w / 2 > lastRight + 6) {
-      ctx.fillText(label, px, LAYOUT.t + ph + 7);
-      lastRight = px + w / 2;
-    }
+    if (tk.labeled) ctx.fillText(tk.label, px, LAYOUT.t + ph + 7);
   }
   ctx.stroke();
 
   // --- Y ticks (query axis)
-  const yt = niceTicks(bx.y0, bx.y1, ph, 60);
   ctx.textAlign = 'right';
   ctx.textBaseline = 'middle';
-  let lastTop = Infinity;
   let maxYLabelW = 0;
   ctx.beginPath();
-  for (let v = yt.start; v <= bx.y1 + 1e-9; v += yt.step) {
-    if (v < 0 || v > data.query.total) continue;
-    const py = LAYOUT.t + view.worldToPxY(v, ph);
-    if (py < LAYOUT.t - 0.5 || py > LAYOUT.t + ph + 0.5) continue;
+  for (const tk of computeTicks(data.query, bx.y0, bx.y1, ph, 60, () => 12, 0)) {
+    const py = LAYOUT.t + view.worldToPxY(tk.v, ph);
     ctx.moveTo(LAYOUT.l - 4, Math.round(py) + 0.5);
     ctx.lineTo(LAYOUT.l, Math.round(py) + 0.5);
-    if (py + 12 < lastTop) {
-      const label = formatTick(v, yt.step);
-      maxYLabelW = Math.max(maxYLabelW, ctx.measureText(label).width);
-      ctx.fillText(label, LAYOUT.l - 7, py);
-      lastTop = py;
+    if (tk.labeled) {
+      maxYLabelW = Math.max(maxYLabelW, ctx.measureText(tk.label).width);
+      ctx.fillText(tk.label, LAYOUT.l - 7, py);
     }
   }
   ctx.stroke();
@@ -244,6 +220,100 @@ export function niceTicks(lo, hi, px, targetSpacing) {
 }
 
 /**
+ * Offset-aware per-band axis ticks — the ONE tick geometry for the canvas
+ * chrome and the SVG export. Each visible band is ruled in its own display
+ * coordinates (local position plus its @offset when present), so the ruler
+ * always agrees with hover/readout — streamed reference slices show true
+ * genomic coordinates, multi-record axes restart per sequence. Steps never
+ * go below 1 bp (sub-bp steps at max zoom produced runs of identical
+ * rounded labels). Ticks come back in axis order with collision-deduped
+ * `labeled` flags; `v` is the global axis coordinate for positioning.
+ *
+ * @param {import('../core/types.js').AxisCatalog} cat
+ * @param {number} w0 @param {number} w1 visible world range
+ * @param {number} px plot extent along this axis in CSS px
+ * @param {number} targetSpacing desired px between ticks
+ * @param {(label: string) => number} measure label extent along the axis in
+ *   px (text width for x, line height for y; SVG passes estimates)
+ * @param {number} [gapPx] minimum px between label edges
+ * @returns {{v: number, label: string, labeled: boolean}[]}
+ */
+export function computeTicks(cat, w0, w1, px, targetSpacing, measure, gapPx = 6) {
+  /** @type {{v: number, label: string, labeled: boolean}[]} */
+  const out = [];
+  const span = Math.max(w1 - w0, 1e-9);
+  const pxPerBp = px / span;
+  const { first, last } = bandsInRange(cat, w0, w1);
+  if (last < first) return out;
+  let lastEnd = -Infinity;
+  for (let i = first; i <= last; i++) {
+    const b0 = cat.starts[i];
+    const off = cat.offsets ? cat.offsets[i] : 0;
+    const lo = Math.max(w0, b0);
+    const hi = Math.min(w1, cat.starts[i + 1]);
+    if ((hi - lo) * pxPerBp < 24) continue; // sliver bands keep names only
+    // The tick grid lives in display space so labels land on round values.
+    const d0 = lo - b0 + off;
+    const d1 = hi - b0 + off;
+    const t = niceTicks(d0, d1, (hi - lo) * pxPerBp, targetSpacing);
+    const step = Math.max(1, t.step);
+    for (let dv = Math.ceil(d0 / step) * step; dv <= d1 + 1e-9; dv += step) {
+      const v = b0 + (dv - off);
+      if (v < lo - 1e-9 || v > hi + 1e-9) continue;
+      const label = formatTick(dv, step);
+      const along = (v - w0) * pxPerBp;
+      const ext = measure(label);
+      const labeled = along - ext / 2 > lastEnd + gapPx;
+      if (labeled) lastEnd = along + ext / 2;
+      out.push({ v, label, labeled });
+    }
+  }
+  return out;
+}
+
+/**
+ * Interior sequence-boundary positions, with the same density gate the
+ * screen applies (hidden when bands average under 6 px).
+ * @param {import('../core/types.js').AxisCatalog} cat
+ * @param {number} w0 @param {number} w1 @param {number} px
+ * @returns {number[]} global axis coordinates
+ */
+export function boundaryLines(cat, w0, w1, px) {
+  /** @type {number[]} */
+  const out = [];
+  const { first, last } = bandsInRange(cat, w0, w1);
+  if (last < first || px / (last - first + 1) <= 6) return out;
+  for (let i = Math.max(first, 1); i <= last; i++) out.push(cat.starts[i]);
+  return out;
+}
+
+/**
+ * Visible band-name labels with the shared placement rules (≤60 bands,
+ * ≥34 px per band, centered midpoints). `worldToPx` maps a global axis
+ * coordinate to px along the axis; the y axis passes its flipped mapper.
+ * @param {import('../core/types.js').AxisCatalog} cat
+ * @param {number} w0 @param {number} w1 @param {number} plotPx
+ * @param {(v: number) => number} worldToPx
+ * @returns {{mid: number, name: string, maxW: number}[]}
+ */
+export function bandLabels(cat, w0, w1, plotPx, worldToPx) {
+  /** @type {{mid: number, name: string, maxW: number}[]} */
+  const out = [];
+  const { first, last } = bandsInRange(cat, w0, w1);
+  if (last < first || last - first > 60) return out;
+  for (let i = first; i <= last; i++) {
+    const pa = worldToPx(cat.starts[i]);
+    const pb = worldToPx(cat.starts[i + 1]);
+    const a = Math.max(Math.min(pa, pb), 0);
+    const b = Math.min(Math.max(pa, pb), plotPx);
+    const w = b - a;
+    if (w < 34) continue;
+    out.push({ mid: (a + b) / 2, name: cat.names[i], maxW: w - 10 });
+  }
+  return out;
+}
+
+/**
  * @param {CanvasRenderingContext2D} ctx @param {string} s @param {number} maxW
  */
 function elide(ctx, s, maxW) {
@@ -261,14 +331,8 @@ function elide(ctx, s, maxW) {
  * @param {(midPx: number, name: string, maxW: number) => void} draw
  */
 function drawBandNames(ctx, view, cat, w0, w1, plotPx, draw) {
-  const { first, last } = bandsInRange(cat, w0, w1);
-  if (last < first || last - first > 60) return;
-  for (let i = first; i <= last; i++) {
-    const a = Math.max(view.worldToPxX(cat.starts[i], plotPx), 0);
-    const b = Math.min(view.worldToPxX(cat.starts[i + 1], plotPx), plotPx);
-    const w = b - a;
-    if (w < 34) continue;
-    draw((a + b) / 2, cat.names[i], w - 10);
+  for (const bl of bandLabels(cat, w0, w1, plotPx, (v) => view.worldToPxX(v, plotPx))) {
+    draw(bl.mid, bl.name, bl.maxW);
   }
 }
 
@@ -280,20 +344,14 @@ function drawBandNames(ctx, view, cat, w0, w1, plotPx, draw) {
  * @param {number} w0 @param {number} w1 @param {number} plotPx
  */
 function drawBandNamesY(ctx, view, cat, w0, w1, plotPx) {
-  const { first, last } = bandsInRange(cat, w0, w1);
-  if (last < first || last - first > 60) return;
-  for (let i = first; i <= last; i++) {
-    // worldToPxY is flipped: band start (low coord) is the *bottom* edge.
-    const bot = Math.min(view.worldToPxY(cat.starts[i], plotPx), plotPx);
-    const top = Math.max(view.worldToPxY(cat.starts[i + 1], plotPx), 0);
-    const h = bot - top;
-    if (h < 34) continue;
+  // worldToPxY is flipped; bandLabels handles the min/max ordering.
+  for (const bl of bandLabels(cat, w0, w1, plotPx, (v) => view.worldToPxY(v, plotPx))) {
     ctx.save();
-    ctx.translate(14, LAYOUT.t + (top + bot) / 2);
+    ctx.translate(14, LAYOUT.t + bl.mid);
     ctx.rotate(-Math.PI / 2);
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(elide(ctx, cat.names[i], h - 10), 0, 0);
+    ctx.fillText(elide(ctx, bl.name, bl.maxW), 0, 0);
     ctx.restore();
   }
 }

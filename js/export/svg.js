@@ -4,11 +4,9 @@
  * capped at 60k visible segments — beyond that the file would be unusable
  * anyway and PNG is the right tool.
  */
-import { LAYOUT, niceTicks } from '../render/axes.js';
+import { LAYOUT, computeTicks, boundaryLines, bandLabels } from '../render/axes.js';
 import { buildColormap } from '../render/colormap.js';
-import { segmentEndpoints } from '../core/types.js';
-import { formatTick } from '../render/format.js';
-import { bandsInRange } from '../core/catalog.js';
+import { segmentEndpoints, segmentVisible } from '../core/types.js';
 import { downloadBlob } from './download.js';
 
 /** @typedef {import('../core/types.js').PlotData} PlotData */
@@ -38,11 +36,7 @@ export function exportSvg(p) {
   const visible = [];
   const s = data.segments;
   grid.query(b.x0, b.y0, b.x1, b.y1, (i) => {
-    if (s.strand[i] === 0 && !opts.showFwd) return;
-    if (s.strand[i] === 1 && !opts.showRev) return;
-    if (s.identity[i] < opts.minIdentity) return;
-    if (s.dx[i] < opts.minLenBp) return;
-    visible.push(i);
+    if (segmentVisible(s, i, opts)) visible.push(i);
   });
   if (visible.length > CAP) {
     throw new Error(
@@ -74,53 +68,45 @@ export function exportSvg(p) {
     );
   }
 
+  // Chrome geometry comes from the same functions the screen uses, so the
+  // export inherits its density gates, per-band offset-aware rulers, and
+  // label collision rules — the file matches the screen by construction.
   const gridLines = [];
-  const tb = bandsInRange(data.target, b.x0, b.x1);
-  for (let i = Math.max(tb.first, 1); i <= tb.last; i++) {
-    const x = LAYOUT.l + view.worldToPxX(data.target.starts[i], pw);
+  for (const v of boundaryLines(data.target, b.x0, b.x1, pw)) {
+    const x = LAYOUT.l + view.worldToPxX(v, pw);
     gridLines.push(`<line x1="${r2(x)}" y1="${LAYOUT.t}" x2="${r2(x)}" y2="${LAYOUT.t + ph}"/>`);
   }
-  const qb = bandsInRange(data.query, b.y0, b.y1);
-  for (let i = Math.max(qb.first, 1); i <= qb.last; i++) {
-    const y = LAYOUT.t + view.worldToPxY(data.query.starts[i], ph);
+  for (const v of boundaryLines(data.query, b.y0, b.y1, ph)) {
+    const y = LAYOUT.t + view.worldToPxY(v, ph);
     gridLines.push(`<line x1="${LAYOUT.l}" y1="${r2(y)}" x2="${LAYOUT.l + pw}" y2="${r2(y)}"/>`);
   }
 
   const ticks = [];
   const labels = [];
-  const xt = niceTicks(b.x0, b.x1, pw, 90);
-  for (let v = xt.start; v <= b.x1; v += xt.step) {
-    if (v < 0 || v > data.target.total) continue;
-    const x = LAYOUT.l + view.worldToPxX(v, pw);
+  const estimate = (/** @type {string} */ t) => t.length * 6.2; // ~11px system font
+  for (const tk of computeTicks(data.target, b.x0, b.x1, pw, 90, estimate)) {
+    const x = LAYOUT.l + view.worldToPxX(tk.v, pw);
     ticks.push(`<line x1="${r2(x)}" y1="${LAYOUT.t + ph}" x2="${r2(x)}" y2="${LAYOUT.t + ph + 4}"/>`);
-    labels.push(
-      `<text x="${r2(x)}" y="${LAYOUT.t + ph + 16}" text-anchor="middle">${esc(formatTick(v, xt.step))}</text>`,
-    );
+    if (tk.labeled) {
+      labels.push(`<text x="${r2(x)}" y="${LAYOUT.t + ph + 16}" text-anchor="middle">${esc(tk.label)}</text>`);
+    }
   }
-  const yt = niceTicks(b.y0, b.y1, ph, 60);
-  for (let v = yt.start; v <= b.y1; v += yt.step) {
-    if (v < 0 || v > data.query.total) continue;
-    const y = LAYOUT.t + view.worldToPxY(v, ph);
+  for (const tk of computeTicks(data.query, b.y0, b.y1, ph, 60, () => 12, 0)) {
+    const y = LAYOUT.t + view.worldToPxY(tk.v, ph);
     ticks.push(`<line x1="${LAYOUT.l - 4}" y1="${r2(y)}" x2="${LAYOUT.l}" y2="${r2(y)}"/>`);
+    if (tk.labeled) {
+      labels.push(`<text x="${LAYOUT.l - 7}" y="${r2(y + 3.5)}" text-anchor="end">${esc(tk.label)}</text>`);
+    }
+  }
+  for (const bl of bandLabels(data.target, b.x0, b.x1, pw, (v) => view.worldToPxX(v, pw))) {
     labels.push(
-      `<text x="${LAYOUT.l - 7}" y="${r2(y + 3.5)}" text-anchor="end">${esc(formatTick(v, yt.step))}</text>`,
+      `<text x="${r2(LAYOUT.l + bl.mid)}" y="${p.vpH - 8}" text-anchor="middle" fill="${theme.inkSecondary}">${esc(bl.name)}</text>`,
     );
   }
-  for (let i = Math.max(tb.first, 0); i <= tb.last; i++) {
-    const a = Math.max(view.worldToPxX(data.target.starts[i], pw), 0);
-    const bb = Math.min(view.worldToPxX(data.target.starts[i + 1], pw), pw);
-    if (bb - a < 34) continue;
+  for (const bl of bandLabels(data.query, b.y0, b.y1, ph, (v) => view.worldToPxY(v, ph))) {
+    const cy = LAYOUT.t + bl.mid;
     labels.push(
-      `<text x="${r2(LAYOUT.l + (a + bb) / 2)}" y="${p.vpH - 8}" text-anchor="middle" fill="${theme.inkSecondary}">${esc(data.target.names[i])}</text>`,
-    );
-  }
-  for (let i = Math.max(qb.first, 0); i <= qb.last; i++) {
-    const bot = Math.min(view.worldToPxY(data.query.starts[i], ph), ph);
-    const top = Math.max(view.worldToPxY(data.query.starts[i + 1], ph), 0);
-    if (bot - top < 34) continue;
-    const cy = LAYOUT.t + (top + bot) / 2;
-    labels.push(
-      `<text x="14" y="${r2(cy)}" text-anchor="middle" fill="${theme.inkSecondary}" transform="rotate(-90 14 ${r2(cy)})">${esc(data.query.names[i])}</text>`,
+      `<text x="14" y="${r2(cy)}" text-anchor="middle" fill="${theme.inkSecondary}" transform="rotate(-90 14 ${r2(cy)})">${esc(bl.name)}</text>`,
     );
   }
 

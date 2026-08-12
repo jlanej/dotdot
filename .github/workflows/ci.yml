@@ -15,5 +15,7 @@ jobs:
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
-      - run: deno check js/main.js js/worker/compute.js js/worker/match.js
-      - run: deno test tests/
+      # Task bodies live in deno.json — the one source of truth for what
+      # gets typechecked and tested (tests/typecheck.html mirrors it).
+      - run: deno task check
+      - run: deno task test

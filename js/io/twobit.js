@@ -57,9 +57,13 @@ export class RemoteTwoBit {
    * @returns {Promise<Uint8Array>}
    */
   async httpRange(start, endEx) {
+    // Bounded wait: when the reference host is unreachable, callers (demo
+    // fallback, error toasts) should find out in seconds, not after the
+    // browser's multi-minute connect timeout.
     const res = await fetch(this.url, {
       headers: { Range: `bytes=${start}-${endEx - 1}` },
       mode: 'cors',
+      signal: AbortSignal.timeout(20_000),
     });
     if (!(res.status === 206 || res.status === 200)) {
       throw new Error(`Reference server answered HTTP ${res.status} for ${this.url}`);

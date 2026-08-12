@@ -71,6 +71,8 @@ export class GlRenderer {
     /** @type {WebGLTexture | null} */
     this.colormapTex = null;
     this.highlightScratch = new Float32Array(FLOATS_PER_INSTANCE);
+    /** @type {Float32Array | null} */
+    this.chunkScratch = null;
     this.overlayCount = 0;
     /** @type {SegmentStore | null} */
     this.overlayStore = null;
@@ -124,15 +126,15 @@ export class GlRenderer {
     this.overlayVao = this.makeVao(this.overlayBuf);
     this.overlayEndBuf = gl.createBuffer();
     this.overlayEndVao = this.makeVao(this.overlayEndBuf);
-    this.overlayCount = 0;
-    /** @type {SegmentStore | null} */
-    this.overlayStore = null;
+    // NOTE: this.overlayStore/overlayCount deliberately survive init() —
+    // the context-restore handler re-uploads via setOverlay(this.overlayStore)
+    // right after init(), which used to find them wiped (base data survived,
+    // the overlay silently vanished).
 
     this.highlightBuf = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, this.highlightBuf);
     gl.bufferData(gl.ARRAY_BUFFER, BYTES_PER_INSTANCE, gl.DYNAMIC_DRAW);
     this.highlightVao = this.makeVao(this.highlightBuf);
-    this.highlightScratch = new Float32Array(FLOATS_PER_INSTANCE);
 
     this.colormapTex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, this.colormapTex);
@@ -186,7 +188,24 @@ export class GlRenderer {
     this.count = store.count;
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuf);
-    gl.bufferData(gl.ARRAY_BUFFER, buildInstanceData(store), gl.STATIC_DRAW);
+    // Size the GPU store, then fill through a reused ~10 MB staging chunk:
+    // interleaving 8M+ segments into one giant Float32Array spiked the JS
+    // heap by hundreds of MB exactly when overall memory already peaks.
+    gl.bufferData(gl.ARRAY_BUFFER, store.count * BYTES_PER_INSTANCE, gl.STATIC_DRAW);
+    const CHUNK = 262_144; // instances per staging fill
+    const scratchLen = Math.min(Math.max(store.count, 1), CHUNK) * FLOATS_PER_INSTANCE;
+    if (!this.chunkScratch || this.chunkScratch.length < scratchLen) {
+      this.chunkScratch = new Float32Array(scratchLen);
+    }
+    for (let i0 = 0; i0 < store.count; i0 += CHUNK) {
+      const n = Math.min(CHUNK, store.count - i0);
+      fillInstanceChunk(store, i0, n, this.chunkScratch);
+      gl.bufferSubData(
+        gl.ARRAY_BUFFER,
+        i0 * BYTES_PER_INSTANCE,
+        this.chunkScratch.subarray(0, n * FLOATS_PER_INSTANCE),
+      );
+    }
   }
 
   /**
@@ -304,6 +323,8 @@ export class GlRenderer {
       gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, this.overlayCount * 2);
       gl.uniform4f(this.u.forceColor, 0, 0, 0, 0);
       gl.uniform1f(this.u.alpha, opts.alpha);
+      gl.uniform1f(this.u.widthPx, opts.widthPx * opts.dpr);
+      gl.uniform1f(this.u.minLenPx, opts.minLenPx * opts.dpr);
       gl.uniform2f(this.u.strandVisible, opts.showFwd ? 1 : 0, opts.showRev ? 1 : 0);
       gl.uniform1f(this.u.minIdentity, opts.minIdentity);
       gl.uniform1f(this.u.minLenBp, opts.minLenBp);
@@ -337,16 +358,17 @@ export class GlRenderer {
 }
 
 /**
- * Interleave a SegmentStore into per-instance floats: split-precision
- * endpoints (hi/lo pairs) plus identity/strand meta.
- * @param {SegmentStore} store
+ * Interleave segments [i0, i0+n) into per-instance floats at the start of
+ * `buf`: split-precision endpoints (hi/lo pairs) plus identity/strand meta.
+ * @param {SegmentStore} store @param {number} i0 @param {number} n
+ * @param {Float32Array} buf
  */
-function buildInstanceData(store) {
-  const buf = new Float32Array(store.count * FLOATS_PER_INSTANCE);
+function fillInstanceChunk(store, i0, n, buf) {
   const ep = new Float64Array(4);
-  for (let i = 0; i < store.count; i++) {
+  for (let j = 0; j < n; j++) {
+    const i = i0 + j;
     segmentEndpoints(store, i, ep);
-    const o = i * FLOATS_PER_INSTANCE;
+    const o = j * FLOATS_PER_INSTANCE;
     const x0h = Math.fround(ep[0]);
     const y0h = Math.fround(ep[1]);
     const x1h = Math.fround(ep[2]);
@@ -362,6 +384,15 @@ function buildInstanceData(store) {
     buf[o + 8] = store.identity[i];
     buf[o + 9] = store.strand[i];
   }
+}
+
+/**
+ * One-shot interleave (overlay-sized inputs).
+ * @param {SegmentStore} store
+ */
+function buildInstanceData(store) {
+  const buf = new Float32Array(store.count * FLOATS_PER_INSTANCE);
+  fillInstanceChunk(store, 0, store.count, buf);
   return buf;
 }
 

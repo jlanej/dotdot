@@ -36,10 +36,10 @@ the HPRC Release 2 NA19240 assembly, from minimap2 PAF. Reproduce it with
   headers (the bundled dev server does).
 - **Progressive detail: coarse → zoom → Refine** — sampling is automatic by
   default but fully user-controllable (`auto`, `off`, or any pinned value),
-  and **Refine view** recomputes the *visible window* at full density and
-  merges it into the plot in place: whole-chromosome context stays coarse,
-  the region you're inspecting becomes exact, and axes/zoom/overlay never
-  move. Measured: refining a 108 kb window took it from 834 to 34,096
+  and **Refine view** recomputes the *visible window* at full density —
+  fanned out across CPU cores like any other compute — and merges it into
+  the plot in place: whole-chromosome context stays coarse, the region
+  you're inspecting becomes exact, and axes/zoom/overlay never move. Measured: refining a 108 kb window took it from 834 to 34,096
   segments while the rest of the plot stayed put.
 - **Aligner audit via PAF** — load any PAF-emitting aligner's output
   (minimap2 etc., optionally gzipped; numbers parsed straight from bytes).
@@ -84,7 +84,8 @@ the HPRC Release 2 NA19240 assembly, from minimap2 PAF. Reproduce it with
   through them.
 - **Exports** — composite PNG at device resolution, and true-vector SVG of the
   current view for figures (capped at 60 k visible segments).
-- Transparent **gzip** support everywhere via native `DecompressionStream`.
+- Transparent **gzip** support everywhere via native `DecompressionStream` —
+  including multi-member **BGZF** (`bgzip`) files, walked block by block.
 
 ## Quick start
 
@@ -132,9 +133,10 @@ Type any window (`chr8:44.2M-46.33M`, `chr1:121,700,000-125,100,000` — k/M/G
 units and commas welcome; a bare name loads the whole sequence) or pick a
 showcase preset (chrX DXZ1, chr8 and chr17 centromeres, a chr1
 pericentromere). With a reference window loaded, added FASTAs dot **against
-it** — the demo above is exactly that pattern. Hover, the readout, and `G`
-region jumps all accept and report true genomic coordinates
-(`chrX:58,000,000-58,200,000` works directly).
+it** — the demo above is exactly that pattern. The axis rulers, hover, the
+readout, and `G` region jumps all speak true genomic coordinates
+(`chrX:58,000,000-58,200,000` works directly), and multi-sequence axes rule
+each sequence in its own coordinates.
 
 Any static file server hosts dotdot as-is (GitHub Pages included). The
 bundled server also sends `Cross-Origin-Opener-Policy: same-origin` and
@@ -279,11 +281,12 @@ open http://127.0.0.1:8420/tests/typecheck.html   # strict typecheck in the brow
 ```
 
 - Tests are dependency-free dual-runtime suites: the same files run in the
-  browser page and under `deno test tests/` in CI (80 tests: engine
+  browser page and under `deno test tests/` in CI (102 tests: engine
   coordinates on both strands and all k, reverse-complement mapping, gap
-  bridging, boundary discipline, range-restricted indexing/matching, parsers,
-  2bit decoding against in-memory fixtures, camera math, picking, region
-  expressions with true-coordinate offsets, colormap monotonicity,
+  bridging, boundary discipline, range-restricted indexing/matching,
+  multicore chunk-stitch parity against single-core, parsers, BGZF/gzip
+  fixtures, 2bit decoding against in-memory fixtures, camera math, picking,
+  region expressions with true-coordinate offsets, colormap monotonicity,
   formatting).
 - `tests/typecheck.html` runs the real TypeScript compiler (fetched from a
   CDN at dev time — nothing installs) over the same entry points CI checks

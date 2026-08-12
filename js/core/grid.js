@@ -49,21 +49,28 @@ export class SegmentGrid {
 
     const G2 = this.G * this.G;
     const cellStarts = new Uint32Array(G2 + 1);
-    // Count per cell.
+    // Hoisted visitors: a fresh closure per segment (twice, at 8M+
+    // segments) is pure nursery-GC churn inside a synchronous build.
+    /** @param {number} cx @param {number} cy */
+    const countVisit = (cx, cy) => {
+      cellStarts[cy * this.G + cx + 1]++;
+    };
     for (let i = 0; i < store.count; i++) {
       segmentEndpoints(store, i, ep);
-      this.walk(ep[0], ep[1], ep[2], ep[3], (cx, cy) => {
-        cellStarts[cy * this.G + cx + 1]++;
-      });
+      this.walk(ep[0], ep[1], ep[2], ep[3], countVisit);
     }
     for (let c = 0; c < G2; c++) cellStarts[c + 1] += cellStarts[c];
     const items = new Uint32Array(cellStarts[G2]);
     const cur = cellStarts.slice(0, G2);
+    let fillIndex = 0;
+    /** @param {number} cx @param {number} cy */
+    const fillVisit = (cx, cy) => {
+      items[cur[cy * this.G + cx]++] = fillIndex;
+    };
     for (let i = 0; i < store.count; i++) {
+      fillIndex = i;
       segmentEndpoints(store, i, ep);
-      this.walk(ep[0], ep[1], ep[2], ep[3], (cx, cy) => {
-        items[cur[cy * this.G + cx]++] = i;
-      });
+      this.walk(ep[0], ep[1], ep[2], ep[3], fillVisit);
     }
     this.cellStarts = cellStarts;
     this.items = items;
