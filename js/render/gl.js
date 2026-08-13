@@ -22,8 +22,10 @@ export class GlRenderer {
     this.canvas = canvas;
     const gl = canvas.getContext('webgl2', {
       antialias: true,
-      alpha: false,
-      premultipliedAlpha: true,
+      // Transparent over the underlay: the 2D chrome (surface fill, region
+      // stripes, the identity heatmap) is the background; GL draws only data.
+      alpha: true,
+      premultipliedAlpha: false,
       powerPreference: 'high-performance',
       // Keeps the frame readable for PNG export and screenshots at any time,
       // not just in the same task as the draw. The blit cost is negligible
@@ -271,7 +273,7 @@ export class GlRenderer {
       this.canvas.height = H;
     }
     gl.viewport(0, 0, W, H);
-    gl.clearColor(opts.clear[0], opts.clear[1], opts.clear[2], 1);
+    gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
     if (this.count === 0 && this.overlayCount === 0 && !opts.highlight) return;
 

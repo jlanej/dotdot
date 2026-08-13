@@ -9,6 +9,7 @@ import { SegmentGrid } from './core/grid.js';
 import { segmentEndpoints, allocSegments, copySegmentRow, blitSegments, segmentVisible } from './core/types.js';
 import { assemblePool } from './worker/assemble.js';
 import { locate, bandsInRange } from './core/catalog.js';
+import { binIdentity, paintHeatmap, heatAt } from './render/heatmap.js';
 import { resolveRegion, parseBp } from './core/region.js';
 import { GlRenderer } from './render/gl.js';
 import { drawUnderlay, drawOverlay, LAYOUT, setAnnotationLanes } from './render/axes.js';
@@ -61,6 +62,7 @@ const inSample = /** @type {HTMLInputElement} */ ($('in-sample'));
 const chkFwd = /** @type {HTMLInputElement} */ ($('chk-fwd'));
 const chkRev = /** @type {HTMLInputElement} */ ($('chk-rev'));
 const selColorMode = /** @type {HTMLSelectElement} */ ($('sel-colormode'));
+const selDrawMode = /** @type {HTMLSelectElement} */ ($('sel-drawmode'));
 const inWidth = /** @type {HTMLInputElement} */ ($('in-width'));
 const outWidth = $('out-width');
 const chkMinPx = /** @type {HTMLInputElement} */ ($('chk-minpx'));
@@ -530,6 +532,8 @@ function onData(data, reqId = -1) {
   annoLanes = { x: [], y: [] };
   syncAnnoLayout();
   lastAnnoSig = '';
+  heatBin = null;
+  lastHeatSig = '';
   btnCompute.textContent = data.source === 'kmer' ? 'Recompute' : 'Compute dot plot';
 
   // Build the picking grid after the first frame so the plot appears
@@ -975,6 +979,65 @@ async function refreshAnnotations() {
   }
   annoBusy = false;
 }
+
+// --------------------------------------------------------------------------
+// Identity-heatmap draw mode: visible segments bin into world-anchored tiles
+// colored by best identity (StainedGlass-style). Rebinned when the view
+// settles; between rebins the anchored image pans/zooms like a map tile.
+
+/** @type {import('./render/heatmap.js').HeatBin | null} */
+let heatBin = null;
+/** @type {HTMLCanvasElement | null} */
+let heatCanvas = null;
+let lastHeatSig = '';
+
+function heatMode() {
+  return selDrawMode.value === 'heat';
+}
+
+function rebuildHeatmap() {
+  const d = state.data;
+  if (!d || !state.view || !heatMode()) return;
+  const { pw, ph } = state.sizes;
+  const vb = state.view.bounds(pw, ph);
+  const b = {
+    x0: Math.max(0, vb.x0),
+    x1: Math.min(d.target.total, vb.x1),
+    y0: Math.max(0, vb.y0),
+    y1: Math.min(d.query.total, vb.y1),
+  };
+  if (b.x1 <= b.x0 || b.y1 <= b.y0) return;
+  const nx = Math.min(512, Math.max(64, Math.round(pw / 2)));
+  const ny = Math.min(512, Math.max(64, Math.round(ph / 2)));
+  const bin = binIdentity(d.segments, b, nx, ny, { showFwd: chkFwd.checked, showRev: chkRev.checked });
+  const cm = buildColormap(mode);
+  const img = paintHeatmap(bin, cm.data, 0, state.identLo);
+  if (!heatCanvas) heatCanvas = document.createElement('canvas');
+  heatCanvas.width = nx;
+  heatCanvas.height = ny;
+  /** @type {CanvasRenderingContext2D} */ (heatCanvas.getContext('2d')).putImageData(img, 0, 0);
+  heatBin = bin;
+  markDirty();
+}
+
+/** Settle watcher for heatmap rebins. @param {number} now */
+function heatmapTick(now) {
+  if (!heatMode() || !state.data) return;
+  if (now - viewSettledAt < 250 || lastViewSig === lastHeatSig || lastViewSig === '') return;
+  lastHeatSig = lastViewSig;
+  rebuildHeatmap();
+}
+
+selDrawMode.addEventListener('change', () => {
+  if (heatMode()) {
+    rebuildHeatmap();
+  } else {
+    heatBin = null;
+  }
+  setHover(null, null);
+  updateLegend();
+  markDirty();
+});
 
 /** Settle watcher for annotation fetches (rides the frame loop). @param {number} now */
 function annotationTick(now) {
@@ -1449,6 +1512,7 @@ function frame() {
   }
   autoRefineTick(performance.now());
   annotationTick(performance.now());
+  heatmapTick(performance.now());
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
@@ -1458,10 +1522,11 @@ function draw(dpr) {
   const { cssW, cssH, pw, ph } = state.sizes;
   const d = displayOpts();
 
+  const heat = heatMode() && heatBin && heatCanvas;
   if (state.view && state.data) {
     /** @type {Float64Array | null} */
     let highlightEp = null;
-    if (state.hoverIndex != null) {
+    if (!heat && state.hoverIndex != null) {
       highlightEp = new Float64Array(4);
       segmentEndpoints(state.data.segments, state.hoverIndex, highlightEp);
     }
@@ -1476,8 +1541,10 @@ function draw(dpr) {
       alpha: 0.85,
       colorMode: d.colorMode,
       identLo: d.identLo,
-      showFwd: d.showFwd,
-      showRev: d.showRev,
+      // Heatmap mode hides the base segment layer with the strand uniforms
+      // (zero GPU churn); the aligner overlay still draws on top.
+      showFwd: heat ? false : d.showFwd,
+      showRev: heat ? false : d.showRev,
       minIdentity: d.minIdentity,
       minLenBp: d.minLenBp,
       highlight: highlightEp,
@@ -1486,7 +1553,10 @@ function draw(dpr) {
       overlayRgb: hexToRgb(cssHexOrFallback(theme.ink)),
     });
   }
-  drawUnderlay(underlay, cssW, cssH, dpr, state.view, state.data, theme);
+  drawUnderlay(
+    underlay, cssW, cssH, dpr, state.view, state.data, theme,
+    heat && heatBin && heatCanvas ? { canvas: heatCanvas, x0: heatBin.x0, x1: heatBin.x1, y0: heatBin.y0, y1: heatBin.y1 } : null,
+  );
   drawOverlay({
     canvas: overlay,
     cssW,
@@ -1598,10 +1668,73 @@ overlay.addEventListener('pointermove', (e) => {
     state.selection.y1 = p.y;
   } else {
     pendingHover = e;
+    laneHover(p, e);
   }
   updateReadout(p);
   markDirty();
 });
+
+let laneTipOn = false;
+
+/**
+ * Hover info for annotation-lane items in the margins; no-ops (and cleans
+ * up its tooltip) when the cursor is over the plot itself.
+ * @param {{x: number, y: number}} p plot-relative px
+ * @param {PointerEvent} e
+ */
+function laneHover(p, e) {
+  const { pw, ph } = state.sizes;
+  /** @type {import('./render/axes.js').AnnoLane | null} */
+  let lane = null;
+  let world = 0;
+  /** @type {import('./core/types.js').AxisCatalog | null} */
+  let cat = null;
+  if (state.view && state.data) {
+    if (p.y > ph + 6 && p.x >= 0 && p.x <= pw && annoLanes.x.length > 0) {
+      const li = Math.floor((p.y - ph - 20) / 16);
+      if (li >= 0 && li < annoLanes.x.length) {
+        lane = annoLanes.x[li];
+        world = state.view.pxToWorldX(p.x, pw);
+        cat = state.data.target;
+      }
+    } else if (p.x < 0 && p.y >= 0 && p.y <= ph && annoLanes.y.length > 0) {
+      const cssX = p.x + LAYOUT.l;
+      const li = Math.floor((cssX - 28) / 16);
+      if (cssX >= 28 && li >= 0 && li < annoLanes.y.length) {
+        lane = annoLanes.y[li];
+        world = state.view.pxToWorldY(p.y, ph);
+        cat = state.data.query;
+      }
+    }
+  }
+  if (lane && cat) {
+    const it = lane.items.find((n) => world >= n.w0 && world < n.w1);
+    if (it) {
+      const a = locate(cat, it.w0);
+      const z = locate(cat, Math.max(it.w0, it.w1 - 1));
+      const span = a && z ? `${escapeHtml(a.name)}:${formatInt(a.local + 1)}–${formatInt(z.local + 1)}` : '';
+      const arrow = it.strand === '-' ? ' (−)' : it.strand === '+' ? ' (+)' : '';
+      tooltip.innerHTML =
+        `<div class="line"><b>${escapeHtml(it.name)}</b>${arrow}</div>` +
+        (span ? `<div class="line"><span>${span}</span></div>` : '') +
+        `<div class="line"><span>${escapeHtml(lane.label)}</span></div>`;
+      const r = plotRoot.getBoundingClientRect();
+      let tx = e.clientX - r.left + 14;
+      let ty = e.clientY - r.top - 34;
+      tooltip.hidden = false;
+      const tw = tooltip.offsetWidth;
+      if (tx + tw > r.width - 8) tx = e.clientX - r.left - tw - 14;
+      tooltip.style.left = `${Math.max(4, tx)}px`;
+      tooltip.style.top = `${Math.max(4, ty)}px`;
+      laneTipOn = true;
+      return;
+    }
+  }
+  if (laneTipOn) {
+    tooltip.hidden = true;
+    laneTipOn = false;
+  }
+}
 
 overlay.addEventListener('pointerup', (e) => {
   if (!state.view) return;
@@ -1634,6 +1767,7 @@ overlay.addEventListener('pointerup', (e) => {
 overlay.addEventListener('pointerleave', () => {
   state.cursor = null;
   pendingHover = null;
+  laneTipOn = false;
   setHover(null, null);
   readout.textContent = '—';
   markDirty();
@@ -1707,6 +1841,18 @@ setInterval(() => {
   const { pw, ph } = state.sizes;
   if (p.x < 0 || p.y < 0 || p.x > pw || p.y > ph) {
     setHover(null, null);
+    return;
+  }
+  if (heatMode()) {
+    // Cell readout instead of segment picking.
+    setHover(null, null);
+    if (heatBin) {
+      const wx = state.view.pxToWorldX(p.x, pw);
+      const wy = state.view.pxToWorldY(p.y, ph);
+      const v = heatAt(heatBin, wx, wy);
+      hoverCard.className = v > 0 ? '' : 'empty';
+      hoverCard.textContent = v > 0 ? `tile identity ≥ ${(v * 100).toFixed(1)}%` : 'empty tile';
+    }
     return;
   }
   const d = displayOpts();
@@ -1905,7 +2051,10 @@ inMinLen.addEventListener('input', () => setMinLen(parseLenOff(inMinLen.value, 0
 inMinLenRange.addEventListener('input', () => setMinLen(minLenFromSlider(Number(inMinLenRange.value))));
 inMinLenRange.addEventListener('change', updateLegend);
 for (const el of [chkFwd, chkRev, chkMinPx]) {
-  el.addEventListener('change', markDirty);
+  el.addEventListener('change', () => {
+    if (el !== chkMinPx && heatMode()) rebuildHeatmap();
+    markDirty();
+  });
 }
 chkAspect.addEventListener('change', fitView);
 
@@ -2035,6 +2184,7 @@ function onRegionRefined(msg) {
   renderer.setData(merged);
   state.grid = null;
   state.hoverIndex = null;
+  lastHeatSig = ''; // refined data: rebin on next settle
   setTimeout(() => {
     if (state.data === d) {
       state.grid = new SegmentGrid(merged, d.target.total, d.query.total);
@@ -2091,6 +2241,8 @@ $('btn-clear').addEventListener('click', () => {
   worker.terminate();
   spawnWorker();
   stopPool();
+  heatBin = null;
+  lastHeatSig = '';
   activeReq = -1;
   setComputing(false);
   newLoadIntent();
@@ -2153,6 +2305,10 @@ btnPng.addEventListener('click', () => {
 
 btnSvg.addEventListener('click', () => {
   if (!state.data || !state.view) return;
+  if (heatMode()) {
+    toast('SVG exports the segment view — switch “draw as” to segments (PNG captures the heatmap).');
+    return;
+  }
   if (!state.grid) {
     toast('Still indexing for export — try again in a second.');
     return;
@@ -2416,8 +2572,16 @@ const HELP = {
     'the track files never download. Lanes appear in the axis margins for any sequence named ' +
     'like a chromosome of the annotation genome (the selected reference, else T2T) — including ' +
     'reference slices like <b>chr17_ROI10.9</b>, placed by their true coordinates. Fetches ' +
-    'follow the view: pan or zoom and the lanes update when you settle. CenSat colors are the ' +
-    'satellite-family colors from the track itself.',
+    'follow the view: pan or zoom and the lanes update when you settle. <b>Hover a lane item</b> ' +
+    'for its name, span, and strand. CenSat colors are the satellite-family colors from the ' +
+    'track itself.',
+  drawmode:
+    '<b>segments</b> draws every match as a line — the exact view. <b>identity heatmap</b> bins ' +
+    'the visible matches into tiles colored by the best identity seen in each (the ' +
+    'StainedGlass-style satellite figure): dense repeat fabric becomes a readable identity ' +
+    'landscape. Tiles re-bin when you rest; strand checkboxes choose what is binned; hover ' +
+    'reads a tile; the aligner overlay still draws on top. PNG captures it (SVG stays ' +
+    'segment-only).',
   detail:
     'The exploration dial, always at hand. <b>Min segment length</b> filters what is <i>drawn</i> ' +
     '(never what was computed): low reveals the repeat fabric, high shows clean structure — drag ' +

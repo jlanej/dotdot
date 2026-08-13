@@ -1,0 +1,110 @@
+// @ts-check
+/**
+ * Identity-heatmap draw mode (the StainedGlass-style view): visible
+ * segments bin into a world-anchored tile grid colored by the best identity
+ * seen in each tile — the standard way satellite architecture is figured,
+ * made interactive. Pure functions here; the caller owns scheduling and
+ * the canvas.
+ */
+
+/**
+ * @typedef {Object} HeatBin
+ * @property {Float32Array} grid max identity per cell (0 = empty)
+ * @property {number} nx @property {number} ny
+ * @property {number} x0 @property {number} x1 world bounds of the grid
+ * @property {number} y0 @property {number} y1
+ */
+
+/**
+ * Bin segments into an nx×ny max-identity grid over [x0,x1)×[y0,y1).
+ * Each segment walks its diagonal cellwise so long matches paint their
+ * whole path, strand-aware endpoints included.
+ *
+ * @param {import('../core/types.js').SegmentStore} s
+ * @param {{x0:number, x1:number, y0:number, y1:number}} b
+ * @param {number} nx @param {number} ny
+ * @param {{showFwd: boolean, showRev: boolean}} opts
+ * @returns {HeatBin}
+ */
+export function binIdentity(s, b, nx, ny, opts) {
+  const grid = new Float32Array(nx * ny);
+  const spanX = Math.max(b.x1 - b.x0, 1e-9);
+  const spanY = Math.max(b.y1 - b.y0, 1e-9);
+  const fx = nx / spanX;
+  const fy = ny / spanY;
+  for (let i = 0; i < s.count; i++) {
+    const strand = s.strand[i];
+    if (strand === 0 ? !opts.showFwd : !opts.showRev) continue;
+    const x = s.x[i];
+    const dx = s.dx[i];
+    if (x >= b.x1 || x + dx <= b.x0) continue;
+    const y = s.y[i];
+    const dy = s.dy[i];
+    if (y >= b.y1 || y + dy <= b.y0) continue;
+    // Strand-aware endpoints: forward runs (x,y)->(x+dx,y+dy), reverse
+    // runs (x,y+dy)->(x+dx,y).
+    const ax = x;
+    const ay = strand === 0 ? y : y + dy;
+    const bx = x + dx;
+    const by = strand === 0 ? y + dy : y;
+    const ident = s.identity[i];
+    const cax = (ax - b.x0) * fx;
+    const cay = (ay - b.y0) * fy;
+    const cbx = (bx - b.x0) * fx;
+    const cby = (by - b.y0) * fy;
+    const steps = Math.min(4096, Math.max(Math.abs(cbx - cax), Math.abs(cby - cay), 1) | 0) + 1;
+    for (let t = 0; t < steps; t++) {
+      const f = t / (steps - 1 || 1);
+      const cx = Math.floor(cax + (cbx - cax) * f);
+      const cy = Math.floor(cay + (cby - cay) * f);
+      if (cx < 0 || cx >= nx || cy < 0 || cy >= ny) continue;
+      const at = cy * nx + cx;
+      if (ident > grid[at]) grid[at] = ident;
+    }
+  }
+  return { grid, nx, ny, x0: b.x0, x1: b.x1, y0: b.y0, y1: b.y1 };
+}
+
+/**
+ * Paint a HeatBin into ImageData using an identity ramp (one-hue sequential
+ * scale; empty cells stay transparent). The colormap is already built for
+ * the active theme; its rows are 0 = forward identity ramp, 1 = reverse —
+ * the heatmap uses the forward (blue) ramp as THE identity scale.
+ *
+ * @param {HeatBin} bin
+ * @param {Uint8Array | Uint8ClampedArray} cmData 256×4-row colormap pixels (RGBA)
+ * @param {number} rampRow colormap row (0 = forward identity ramp)
+ * @param {number} identLo ramp floor (identities at/below map to ramp start)
+ * @returns {ImageData}
+ */
+export function paintHeatmap(bin, cmData, rampRow, identLo) {
+  const img = new ImageData(bin.nx, bin.ny);
+  const denom = Math.max(1 - identLo, 1e-6);
+  for (let cy = 0; cy < bin.ny; cy++) {
+    for (let cx = 0; cx < bin.nx; cx++) {
+      const v = bin.grid[cy * bin.nx + cx];
+      if (v <= 0) continue;
+      const t = Math.min(1, Math.max(0, (v - identLo) / denom));
+      const texel = (rampRow * 256 + Math.round(t * 255)) * 4;
+      // ImageData rows run top-down; world y runs bottom-up — flip here so
+      // the caller can draw the image directly.
+      const o = ((bin.ny - 1 - cy) * bin.nx + cx) * 4;
+      img.data[o] = cmData[texel];
+      img.data[o + 1] = cmData[texel + 1];
+      img.data[o + 2] = cmData[texel + 2];
+      img.data[o + 3] = 255;
+    }
+  }
+  return img;
+}
+
+/**
+ * Max identity at a world point, or 0 when empty/outside.
+ * @param {HeatBin} bin @param {number} wx @param {number} wy
+ */
+export function heatAt(bin, wx, wy) {
+  const cx = Math.floor(((wx - bin.x0) / Math.max(bin.x1 - bin.x0, 1e-9)) * bin.nx);
+  const cy = Math.floor(((wy - bin.y0) / Math.max(bin.y1 - bin.y0, 1e-9)) * bin.ny);
+  if (cx < 0 || cx >= bin.nx || cy < 0 || cy >= bin.ny) return 0;
+  return bin.grid[cy * bin.nx + cx];
+}

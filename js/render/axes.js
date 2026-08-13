@@ -110,8 +110,10 @@ function ctx2d(canvas, cssW, cssH, dpr) {
  * @param {View | null} view
  * @param {PlotData | null} data
  * @param {Theme} theme
+ * @param {{canvas: HTMLCanvasElement, x0:number, x1:number, y0:number, y1:number} | null} [heat]
+ *   identity-heatmap tile image with its world bounds (drawn under gridlines)
  */
-export function drawUnderlay(canvas, cssW, cssH, dpr, view, data, theme) {
+export function drawUnderlay(canvas, cssW, cssH, dpr, view, data, theme, heat = null) {
   const ctx = ctx2d(canvas, cssW, cssH, dpr);
   const pw = cssW - LAYOUT.l - LAYOUT.r;
   const ph = cssH - LAYOUT.t - LAYOUT.b;
@@ -146,6 +148,18 @@ export function drawUnderlay(canvas, cssW, cssH, dpr, view, data, theme) {
     ctx.fillRect(LAYOUT.l, ya, pw, yb - ya);
   }
   ctx.globalAlpha = 1;
+
+  // Identity-heatmap tiles: world-anchored, so panning between rebins just
+  // translates the image.
+  if (heat) {
+    const xA = LAYOUT.l + view.worldToPxX(heat.x0, pw);
+    const xB = LAYOUT.l + view.worldToPxX(heat.x1, pw);
+    const yT = LAYOUT.t + view.worldToPxY(heat.y1, ph);
+    const yB = LAYOUT.t + view.worldToPxY(heat.y0, ph);
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(heat.canvas, xA, yT, xB - xA, yB - yT);
+    ctx.imageSmoothingEnabled = true;
+  }
 
   ctx.beginPath();
   for (const v of boundaryLines(data.target, b.x0, b.x1, pw)) {

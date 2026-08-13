@@ -8,6 +8,7 @@ import './paf.test.js';
 import './kmer.test.js';
 import './transform.test.js';
 import './grid.test.js';
+import './heatmap.test.js';
 import './catalog.test.js';
 import './charts.test.js';
 import './colormap.test.js';
