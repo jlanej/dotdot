@@ -4,7 +4,7 @@
  * capped at 60k visible segments — beyond that the file would be unusable
  * anyway and PNG is the right tool.
  */
-import { LAYOUT, computeTicks, boundaryLines, bandLabels, bandStripes, STRIPE_ALPHA } from '../render/axes.js';
+import { LAYOUT, LANE_H, computeTicks, boundaryLines, bandLabels, bandStripes, STRIPE_ALPHA, laneRects } from '../render/axes.js';
 import { buildColormap } from '../render/colormap.js';
 import { segmentEndpoints, segmentVisible } from '../core/types.js';
 import { downloadBlob } from './download.js';
@@ -24,6 +24,8 @@ const CAP = 60_000;
  * @param {'light'|'dark'} p.mode
  * @param {{showFwd:boolean, showRev:boolean, minIdentity:number, minLenBp:number,
  *          identLo:number, colorMode:0|1, widthPx:number}} p.opts
+ * @param {import('../render/axes.js').AnnoLane[]} [p.annoX]
+ * @param {import('../render/axes.js').AnnoLane[]} [p.annoY]
  * @param {string} p.filename
  */
 export function exportSvg(p) {
@@ -122,6 +124,30 @@ export function exportSvg(p) {
     );
   }
 
+  // Annotation lanes — the same shared geometry the canvas margins use.
+  const laneParts = [];
+  const annoX = p.annoX ?? [];
+  for (let li = 0; li < annoX.length; li++) {
+    const yTop = LAYOUT.t + ph + 20 + li * LANE_H;
+    for (const r of laneRects(annoX[li], b.x0, b.x1, pw, theme.accent)) {
+      laneParts.push(
+        `<rect x="${r2(LAYOUT.l + r.a)}" y="${yTop}" width="${r2(Math.max(r.b - r.a, 1))}" height="11" fill="${r.fill}"/>`,
+      );
+    }
+    laneParts.push(
+      `<text x="${LAYOUT.l + pw}" y="${yTop + 9}" text-anchor="end" fill="${theme.muted}" font-size="9">${esc(annoX[li].label)}</text>`,
+    );
+  }
+  const annoY = p.annoY ?? [];
+  for (let li = 0; li < annoY.length; li++) {
+    const xLeft = 28 + li * LANE_H;
+    for (const r of laneRects(annoY[li], b.y0, b.y1, ph, theme.accent)) {
+      laneParts.push(
+        `<rect x="${xLeft}" y="${r2(LAYOUT.t + ph - r.b)}" width="11" height="${r2(Math.max(r.b - r.a, 1))}" fill="${r.fill}"/>`,
+      );
+    }
+  }
+
   const svg = `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${p.vpW} ${p.vpH}" width="${p.vpW}" height="${p.vpH}" font-family="system-ui, sans-serif" font-size="11">
   <rect width="${p.vpW}" height="${p.vpH}" fill="${theme.page}"/>
@@ -133,6 +159,7 @@ export function exportSvg(p) {
   <rect x="${LAYOUT.l}" y="${LAYOUT.t}" width="${pw}" height="${ph}" fill="none" stroke="${theme.baseline}"/>
   <g stroke="${theme.baseline}">${ticks.join('')}</g>
   <g fill="${theme.muted}">${labels.join('')}</g>
+  <g>${laneParts.join('')}</g>
 </svg>
 `;
   downloadBlob(new Blob([svg], { type: 'image/svg+xml' }), p.filename);

@@ -23,7 +23,10 @@ against itself — ~400,000 match segments computed **alignment-free in your
 browser** from a 2.1 Mb window streamed on demand out of UCSC's 2bit.
 α-satellite higher-order-repeat arrays read as woven blocks, nested domains
 layer the core, and the flanking arrays mirror each other corner to corner —
-no aligner touched any of it. Open the same view live:
+no aligner touched any of it. The margin lanes are live **UCSC annotation
+tracks** (also streamed, as bigBed byte ranges): CenSat names the structure
+— the red band is the `hor_8_2(S2C8H1L)` α-satellite array itself. Open the
+same view live:
 [`?ref=t2t&refregion=chr8:44.2M-46.33M`](https://jlanej.github.io/dotdot/?ref=t2t&refregion=chr8:44.2M-46.33M).*
 
 ## Highlights
@@ -63,6 +66,12 @@ no aligner touched any of it. Open the same view live:
   load a FASTA afterwards and it dots against the reference window. Axes,
   hover, and region jumps all speak **true genomic coordinates**, and that
   bookkeeping survives Refine view.
+- **Annotation lanes from UCSC tracks** — CenSat satellite families (in the
+  track's own colors), CAT/Liftoff genes, and SEDEF segmental duplications
+  stream on demand as **bigBed byte ranges** into lanes along both axes, for
+  any sequence named like a reference chromosome — streamed slices included,
+  placed by their true coordinates. Fetches follow the view as you pan and
+  zoom; the track files themselves never download.
 - **True genome-scale precision** — coordinates are carried as split float
   pairs into WebGL (relative-to-center, Sterbenz-exact), so the view stays
   sub-bp crisp at position 2,950,000,000 as at position 100. Axis ticks switch
@@ -293,7 +302,7 @@ CPU core — treat them as generous upper bounds on what a foreground tab does.
 ```
 js/
 ├── core/        dna packing · k-mer index+matcher · camera · picking grid · catalogs · regions
-├── io/          FASTA and PAF parsers (byte-level) · remote 2bit reader · gzip
+├── io/          FASTA and PAF parsers (byte-level) · remote 2bit + bigBed readers · gzip
 ├── worker/      compute coordinator (parse → index → match/plan) · pooled matcher
 ├── render/      WebGL2 instanced renderer · shaders · OKLab colormaps · 2D axes chrome
 ├── export/      PNG compositor · SVG builder
@@ -325,13 +334,13 @@ open http://127.0.0.1:8420/tests/typecheck.html   # strict typecheck in the brow
 ```
 
 - Tests are dependency-free dual-runtime suites: the same files run in the
-  browser page and under `deno test tests/` in CI (102 tests: engine
+  browser page and under `deno test tests/` in CI (113 tests: engine
   coordinates on both strands and all k, reverse-complement mapping, gap
   bridging, boundary discipline, range-restricted indexing/matching,
   multicore chunk-stitch parity against single-core, parsers, BGZF/gzip
-  fixtures, 2bit decoding against in-memory fixtures, camera math, picking,
-  region expressions with true-coordinate offsets, colormap monotonicity,
-  formatting).
+  fixtures, 2bit and bigBed decoding against in-memory fixtures, camera
+  math, picking, region expressions with true-coordinate offsets, colormap
+  monotonicity, formatting).
 - `tests/typecheck.html` runs the real TypeScript compiler (fetched from a
   CDN at dev time — nothing installs) over the same entry points CI checks
   with `deno check`, so type errors surface locally on a machine with no

@@ -14,7 +14,66 @@ import { bandsInRange } from '../core/catalog.js';
 /** @typedef {import('../core/transform.js').View} View */
 /** @typedef {import('../core/types.js').PlotData} PlotData */
 
-export const LAYOUT = Object.freeze({ l: 96, r: 14, t: 14, b: 46 });
+// Mutable on purpose: annotation lanes widen the margins via
+// setAnnotationLanes; every consumer reads the fields at draw time.
+export const LAYOUT = { l: 96, r: 14, t: 14, b: 46 };
+const BASE_L = 96;
+const BASE_B = 46;
+/** Height of one annotation lane in the margins. */
+export const LANE_H = 16;
+
+/**
+ * Reserve margin space for annotation lanes (0 = none). The caller re-runs
+ * its layout (resize) after a change.
+ * @param {number} nx lanes under the x axis @param {number} ny lanes left of the y axis
+ */
+export function setAnnotationLanes(nx, ny) {
+  LAYOUT.b = BASE_B + nx * LANE_H;
+  LAYOUT.l = BASE_L + ny * LANE_H;
+}
+
+/**
+ * @typedef {Object} AnnoItem
+ * @property {number} w0 world-coordinate start on this axis
+ * @property {number} w1 world-coordinate end
+ * @property {string | null} rgb itemRgb "r,g,b" or null
+ * @property {string} name
+ * @property {string} strand
+ */
+/**
+ * @typedef {Object} AnnoLane
+ * @property {string} label
+ * @property {boolean} colored
+ * @property {AnnoItem[]} items
+ */
+
+/**
+ * Shared lane geometry for the canvas chrome and the SVG export: visible
+ * items clipped to [w0,w1], mapped to px along the axis, sub-pixel items
+ * dropped, adjacent same-fill slivers NOT merged (they are real records).
+ * @param {AnnoLane} lane
+ * @param {number} w0 @param {number} w1 @param {number} px
+ * @param {string} accent fallback fill for tracks without itemRgb
+ * @returns {{a: number, b: number, fill: string, name: string, strand: string}[]}
+ */
+export function laneRects(lane, w0, w1, px, accent) {
+  /** @type {{a: number, b: number, fill: string, name: string, strand: string}[]} */
+  const out = [];
+  const pxPerBp = px / Math.max(w1 - w0, 1e-9);
+  for (const it of lane.items) {
+    const a = Math.max(0, (Math.max(it.w0, w0) - w0) * pxPerBp);
+    const b = Math.min(px, (Math.min(it.w1, w1) - w0) * pxPerBp);
+    if (b - a < 0.75) continue;
+    out.push({
+      a,
+      b,
+      fill: lane.colored && it.rgb ? `rgb(${it.rgb})` : accent,
+      name: it.name,
+      strand: it.strand,
+    });
+  }
+  return out;
+}
 
 /**
  * @typedef {Object} Theme
@@ -113,6 +172,8 @@ export function drawUnderlay(canvas, cssW, cssH, dpr, view, data, theme) {
  * @param {{x: number, y: number} | null} p.cursor plot-area CSS px
  * @param {{x0:number,y0:number,x1:number,y1:number} | null} p.selection
  * @param {number | null} p.fps
+ * @param {AnnoLane[]} [p.annoX] annotation lanes under the x axis
+ * @param {AnnoLane[]} [p.annoY] annotation lanes left of the y axis
  */
 export function drawOverlay(p) {
   const { canvas, cssW, cssH, dpr, view, data, theme } = p;
@@ -169,8 +230,57 @@ export function drawOverlay(p) {
   });
   // Deep zoom writes exact positions that fill the left margin — skip the
   // rotated names rather than colliding with them.
-  if (maxYLabelW <= LAYOUT.l - 26) {
+  const yLaneW = (p.annoY?.length ?? 0) * LANE_H;
+  if (maxYLabelW <= LAYOUT.l - 26 - yLaneW) {
     drawBandNamesY(ctx, view, data.query, bx.y0, bx.y1, ph);
+  }
+
+  // --- Annotation lanes (margins)
+  if (p.annoX && p.annoX.length > 0) {
+    for (let li = 0; li < p.annoX.length; li++) {
+      const yTop = LAYOUT.t + ph + 20 + li * LANE_H;
+      const rects = laneRects(p.annoX[li], bx.x0, bx.x1, pw, theme.accent);
+      for (const r of rects) {
+        ctx.fillStyle = r.fill;
+        ctx.fillRect(LAYOUT.l + r.a, yTop, Math.max(r.b - r.a, 1), 11);
+      }
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.font = '9px ui-sans-serif, system-ui, sans-serif';
+      for (const r of rects) {
+        const w = r.b - r.a;
+        if (w < 44 || !r.name) continue;
+        ctx.fillStyle = p.annoX[li].colored ? '#111' : '#fff';
+        const label = r.strand === '-' ? `< ${r.name}` : r.strand === '+' ? `${r.name} >` : r.name;
+        ctx.fillText(label.length > w / 5.4 ? label.slice(0, Math.floor(w / 5.4)) : label, LAYOUT.l + r.a + 3, yTop + 6);
+      }
+      ctx.fillStyle = theme.muted;
+      ctx.textAlign = 'right';
+      ctx.fillText(p.annoX[li].label, LAYOUT.l + pw, yTop + 6 + 0.5);
+      ctx.font = font;
+    }
+  }
+  if (p.annoY && p.annoY.length > 0) {
+    for (let li = 0; li < p.annoY.length; li++) {
+      const xLeft = 28 + li * LANE_H;
+      const rects = laneRects(p.annoY[li], bx.y0, bx.y1, ph, theme.accent);
+      for (const r of rects) {
+        ctx.fillStyle = r.fill;
+        // y axis is flipped: along-axis px a..b measure from the bottom.
+        const yA = LAYOUT.t + ph - r.b;
+        ctx.fillRect(xLeft, yA, 11, Math.max(r.b - r.a, 1));
+      }
+      ctx.save();
+      ctx.fillStyle = theme.muted;
+      ctx.font = '9px ui-sans-serif, system-ui, sans-serif';
+      ctx.translate(xLeft + 6, LAYOUT.t + 2);
+      ctx.rotate(-Math.PI / 2);
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(p.annoY[li].label, 0, 0);
+      ctx.restore();
+      ctx.font = font;
+    }
   }
 
   // --- Crosshair

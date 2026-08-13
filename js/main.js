@@ -8,15 +8,16 @@ import { View } from './core/transform.js';
 import { SegmentGrid } from './core/grid.js';
 import { segmentEndpoints, allocSegments, copySegmentRow, blitSegments, segmentVisible } from './core/types.js';
 import { assemblePool } from './worker/assemble.js';
-import { locate } from './core/catalog.js';
+import { locate, bandsInRange } from './core/catalog.js';
 import { resolveRegion, parseBp } from './core/region.js';
 import { GlRenderer } from './render/gl.js';
-import { drawUnderlay, drawOverlay, LAYOUT } from './render/axes.js';
+import { drawUnderlay, drawOverlay, LAYOUT, setAnnotationLanes } from './render/axes.js';
 import { buildColormap, hexToRgb } from './render/colormap.js';
 import { segmentDistributions, occupancyBins, groupedBarsSVG, ladderLabels } from './render/charts.js';
 import { formatBp, formatInt, formatCount } from './render/format.js';
 import { looksLikePaf } from './io/paf.js';
 import { RemoteTwoBit, regionToFasta } from './io/twobit.js';
+import { RemoteBigBed } from './io/bigbed.js';
 import { REFERENCES, parseBrowserRegion } from './refs.js';
 import { exportPng, compositeCanvases } from './export/png.js';
 import { exportSvg } from './export/svg.js';
@@ -526,6 +527,9 @@ function onData(data, reqId = -1) {
   panelDetail.hidden = false;
   setMinLen(parseLenOff(inMinLen.value, 0), { skipText: true });
   autoRefinedSig = '';
+  annoLanes = { x: [], y: [] };
+  syncAnnoLayout();
+  lastAnnoSig = '';
   btnCompute.textContent = data.source === 'kmer' ? 'Recompute' : 'Compute dot plot';
 
   // Build the picking grid after the first frame so the plot appears
@@ -705,6 +709,8 @@ for (const r of REFERENCES) {
 function applyRefSelection(autoload) {
   const ref = currentRef();
   refBox.hidden = !ref;
+  renderAnnoTracks();
+  lastAnnoSig = '';
   if (!ref) return;
   inRefRegion.value = ref.defaultRegion;
   selRefPreset.innerHTML = '';
@@ -805,6 +811,209 @@ $('btn-refload').addEventListener('click', () => void loadRefRegion(inRefRegion.
 inRefRegion.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') void loadRefRegion(inRefRegion.value);
 });
+
+// --------------------------------------------------------------------------
+// Annotation tracks: remote bigBeds (CenSat, genes, segdups) drawn as lanes
+// in the axis margins for any sequence that resolves to a reference
+// chromosome — record names match directly ('chr8') or as a slice prefix
+// ('chr17_ROI10.9' → chr17), with @offset display coordinates mapping lane
+// items into the right place. Fetches are viewport-driven (on view settle),
+// tile-cached, and cost only ranged reads of the remote index.
+
+/** @type {Map<string, RemoteBigBed>} */
+const bigbeds = new Map();
+/** @param {string} url */
+function getBigBed(url) {
+  let bb = bigbeds.get(url);
+  if (!bb) {
+    bb = new RemoteBigBed(url);
+    bigbeds.set(url, bb);
+  }
+  return bb;
+}
+
+/** The genome annotations resolve against (the selected reference, else T2T). */
+function annoGenome() {
+  return currentRef() ?? REFERENCES[0];
+}
+
+/** @type {Map<string, boolean>} trackId -> enabled */
+const annoEnabled = new Map();
+/** @type {Map<string, import('./io/bigbed.js').BedItem[]>} `${url}|${chrom}|${tile}` -> items */
+const annoTiles = new Map();
+const ANNO_TILE = 1_000_000;
+/** @type {{x: import('./render/axes.js').AnnoLane[], y: import('./render/axes.js').AnnoLane[]}} */
+let annoLanes = { x: [], y: [] };
+let lastAnnoSig = '';
+let annoBusy = false;
+let annoLaneCounts = { x: 0, y: 0 };
+
+function activeTracks() {
+  return annoGenome().tracks.filter((t) => annoEnabled.get(t.id) ?? t.on);
+}
+
+/**
+ * Resolve an axis record name to a chromosome of the annotation genome.
+ * @param {string} name @param {Map<string, {id:number, size:number}>} chroms
+ */
+function resolveChrom(name, chroms) {
+  if (chroms.has(name)) return name;
+  const prefix = name.split('_', 1)[0];
+  return chroms.has(prefix) ? prefix : null;
+}
+
+/**
+ * Query one track with 1 Mb tile caching (items spanning tiles dedupe).
+ * @param {import('./refs.js').RefTrack} track
+ * @param {string} chrom @param {number} s @param {number} e
+ */
+async function tileQuery(track, chrom, s, e) {
+  const bb = getBigBed(track.url);
+  const t0 = Math.max(0, Math.floor(s / ANNO_TILE));
+  const t1 = Math.max(t0, Math.floor(Math.max(s, e - 1) / ANNO_TILE));
+  /** @type {import('./io/bigbed.js').BedItem[]} */
+  const out = [];
+  const seen = new Set();
+  for (let t = t0; t <= t1; t++) {
+    const key = `${track.url}|${chrom}|${t}`;
+    let arr = annoTiles.get(key);
+    if (!arr) {
+      arr = await bb.query(chrom, t * ANNO_TILE, (t + 1) * ANNO_TILE);
+      annoTiles.set(key, arr);
+      if (annoTiles.size > 400) {
+        const oldest = annoTiles.keys().next().value;
+        if (oldest !== undefined) annoTiles.delete(oldest);
+      }
+    }
+    for (const it of arr) {
+      if (it.end <= s || it.start >= e) continue;
+      const k = `${it.start}:${it.end}:${it.name}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(it);
+    }
+  }
+  return out;
+}
+
+/**
+ * Build world-coordinate lanes for one axis, or null when no visible record
+ * resolves to a chromosome of the annotation genome.
+ * @param {import('./core/types.js').AxisCatalog} cat
+ * @param {number} w0 @param {number} w1
+ * @param {import('./refs.js').RefTrack[]} tracks
+ */
+async function buildAxisLanes(cat, w0, w1, tracks) {
+  /** @type {import('./render/axes.js').AnnoLane[]} */
+  const lanes = tracks.map((t) => ({ label: t.label, colored: !!t.colored, items: [] }));
+  const { first, last } = bandsInRange(cat, w0, w1);
+  if (last < first) return null;
+  let resolvedAny = false;
+  for (let i = first; i <= last; i++) {
+    for (let k = 0; k < tracks.length; k++) {
+      const chroms = await getBigBed(tracks[k].url).chroms();
+      const chrom = resolveChrom(cat.names[i], chroms);
+      if (!chrom) continue;
+      resolvedAny = true;
+      const off = cat.offsets ? cat.offsets[i] : 0;
+      const bandStart = cat.starts[i];
+      const bandEnd = cat.starts[i + 1];
+      const visS = Math.max(w0, bandStart) - bandStart + off;
+      const visE = Math.min(w1, bandEnd) - bandStart + off;
+      if (visE <= visS) continue;
+      const items = await tileQuery(tracks[k], chrom, Math.floor(visS), Math.ceil(visE));
+      for (const it of items) {
+        lanes[k].items.push({
+          w0: Math.max(bandStart, bandStart + (it.start - off)),
+          w1: Math.min(bandEnd, bandStart + (it.end - off)),
+          rgb: it.rgb,
+          name: it.name,
+          strand: it.strand,
+        });
+      }
+    }
+  }
+  return resolvedAny ? lanes : null;
+}
+
+/** Apply lane reservations to the margins; relayout when counts change. */
+function syncAnnoLayout() {
+  const nx = annoLanes.x.length;
+  const ny = annoLanes.y.length;
+  if (nx !== annoLaneCounts.x || ny !== annoLaneCounts.y) {
+    annoLaneCounts = { x: nx, y: ny };
+    setAnnotationLanes(nx, ny);
+    resize();
+  }
+}
+
+async function refreshAnnotations() {
+  const d = state.data;
+  if (!d || !state.view) return;
+  const tracks = activeTracks();
+  if (tracks.length === 0) {
+    annoLanes = { x: [], y: [] };
+    syncAnnoLayout();
+    markDirty();
+    return;
+  }
+  const { pw, ph } = state.sizes;
+  const b = state.view.bounds(pw, ph);
+  annoBusy = true;
+  try {
+    const [lx, ly] = await Promise.all([
+      buildAxisLanes(d.target, Math.max(0, b.x0), Math.min(d.target.total, b.x1), tracks),
+      buildAxisLanes(d.query, Math.max(0, b.y0), Math.min(d.query.total, b.y1), tracks),
+    ]);
+    if (state.data === d) {
+      annoLanes = { x: lx ?? [], y: ly ?? [] };
+      syncAnnoLayout();
+      markDirty();
+    }
+  } catch (err) {
+    console.warn('annotations:', err);
+  }
+  annoBusy = false;
+}
+
+/** Settle watcher for annotation fetches (rides the frame loop). @param {number} now */
+function annotationTick(now) {
+  if (!state.data || annoBusy) return;
+  if (activeTracks().length === 0) {
+    if (annoLanes.x.length || annoLanes.y.length) {
+      annoLanes = { x: [], y: [] };
+      syncAnnoLayout();
+      markDirty();
+    }
+    return;
+  }
+  if (now - viewSettledAt < 400 || lastViewSig === lastAnnoSig || lastViewSig === '') return;
+  lastAnnoSig = lastViewSig;
+  void refreshAnnotations();
+}
+
+/** Populate the sidebar track checkboxes for the current annotation genome. */
+function renderAnnoTracks() {
+  const box = $('anno-tracks');
+  const ref = annoGenome();
+  if (ref.tracks.length === 0) {
+    box.innerHTML = '<p class="hint" style="margin:0">no tracks for this reference yet</p>';
+    return;
+  }
+  box.innerHTML = '';
+  for (const t of ref.tracks) {
+    const label = document.createElement('label');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = annoEnabled.get(t.id) ?? t.on;
+    cb.addEventListener('change', () => {
+      annoEnabled.set(t.id, cb.checked);
+      lastAnnoSig = '';
+    });
+    label.append(cb, document.createTextNode(t.label));
+    box.append(label);
+  }
+}
 
 /**
  * Default demo: two slices of real chr17 vs both NA19240 haplotypes,
@@ -1210,6 +1419,7 @@ function resize() {
   }
   underlay.style.width = overlay.style.width = `${cssW}px`;
   underlay.style.height = overlay.style.height = `${cssH}px`;
+  plotStats.style.left = `${LAYOUT.l + 10}px`;
   glcanvas.style.left = `${LAYOUT.l}px`;
   glcanvas.style.top = `${LAYOUT.t}px`;
   glcanvas.style.width = `${pw}px`;
@@ -1238,6 +1448,7 @@ function frame() {
     if (dt > 0 && dt < 1000) state.fps = state.fps * 0.85 + (1000 / dt) * 0.15;
   }
   autoRefineTick(performance.now());
+  annotationTick(performance.now());
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
@@ -1287,6 +1498,8 @@ function draw(dpr) {
     cursor: state.cursor,
     selection: state.selection,
     fps: state.fpsOn ? state.fps : null,
+    annoX: annoLanes.x,
+    annoY: annoLanes.y,
   });
 }
 
@@ -1304,10 +1517,14 @@ Object.defineProperty(globalThis, '__dotdotDraw', {
   },
 });
 
-// The settle watcher rides the same rAF loop — this drives one tick manually
-// so hidden-tab automation can exercise auto-refine deterministically.
+// The settle watchers ride the rAF loop — these drive one tick manually so
+// hidden-tab automation can exercise auto-refine and annotation fetches
+// deterministically.
 Object.defineProperty(globalThis, '__dotdotAutoTick', {
   value: (/** @type {number} */ now) => autoRefineTick(now),
+});
+Object.defineProperty(globalThis, '__dotdotAnnoTick', {
+  value: (/** @type {number} */ now) => annotationTick(now),
 });
 
 // Full-quality frame capture for automation/screenshots: renders the plot at
@@ -1898,6 +2115,9 @@ $('btn-clear').addEventListener('click', () => {
   panelDetail.hidden = true;
   plotStats.hidden = true;
   closeStatsPop();
+  annoLanes = { x: [], y: [] };
+  syncAnnoLayout();
+  lastAnnoSig = '';
   segScan = { ref: null, fwd: 0, rev: 0, bpFwd: 0, bpRev: 0 };
   statsPopCache = { ref: null, mode: '', html: '' };
   btnCompute.disabled = true;
@@ -1947,6 +2167,8 @@ btnSvg.addEventListener('click', () => {
       theme,
       mode,
       opts: displayOpts(),
+      annoX: annoLanes.x,
+      annoY: annoLanes.y,
       filename: 'dotdot.svg',
     });
   } catch (err) {
@@ -2189,6 +2411,13 @@ const HELP = {
     'data) so chromosomes compute in minutes. Set a number to pin it, or <b>off</b> for full ' +
     'density — exact but slow at chromosome scale. Tip: keep auto for the overview, zoom in, ' +
     'then hit <b>Refine view</b> to recompute just the window at full detail.',
+  annotations:
+    'Reference annotation tracks, streamed on demand from UCSC bigBeds as <b>byte ranges</b> — ' +
+    'the track files never download. Lanes appear in the axis margins for any sequence named ' +
+    'like a chromosome of the annotation genome (the selected reference, else T2T) — including ' +
+    'reference slices like <b>chr17_ROI10.9</b>, placed by their true coordinates. Fetches ' +
+    'follow the view: pan or zoom and the lanes update when you settle. CenSat colors are the ' +
+    'satellite-family colors from the track itself.',
   detail:
     'The exploration dial, always at hand. <b>Min segment length</b> filters what is <i>drawn</i> ' +
     '(never what was computed): low reveals the repeat fabric, high shows clean structure — drag ' +
@@ -2338,4 +2567,5 @@ async function fetchAsFile(url) {
   return { name, buf };
 }
 
+renderAnnoTracks();
 void initFromUrl();

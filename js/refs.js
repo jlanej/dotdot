@@ -13,12 +13,22 @@ import { parseBp } from './core/region.js';
  */
 
 /**
+ * @typedef {Object} RefTrack
+ * @property {string} id
+ * @property {string} label
+ * @property {string} url remote bigBed (CORS + byte ranges)
+ * @property {boolean} on drawn by default
+ * @property {boolean} [colored] items carry meaningful itemRgb (CenSat)
+ */
+
+/**
  * @typedef {Object} ReferenceGenome
  * @property {string} id
  * @property {string} label
  * @property {string} twobit
  * @property {string} defaultRegion
  * @property {RefPreset[]} presets
+ * @property {RefTrack[]} tracks annotation bigBeds for this genome
  */
 
 /** @type {ReferenceGenome[]} */
@@ -34,6 +44,27 @@ export const REFERENCES = [
       { label: 'chr17 centromere — D17Z1 α-satellite', region: 'chr17:23,900,000-27,000,000' },
       { label: 'chr1 pericentromere — αSat/HSat mosaic', region: 'chr1:121,700,000-125,100,000' },
     ],
+    tracks: [
+      {
+        id: 'censat',
+        label: 'CenSat — satellite families',
+        url: 'https://hgdownload.soe.ucsc.edu/gbdb/hs1/censat/censat.bb',
+        on: true,
+        colored: true,
+      },
+      {
+        id: 'genes',
+        label: 'genes — CAT/Liftoff',
+        url: 'https://hgdownload.soe.ucsc.edu/gbdb/hs1/catLiftOffGenesV1/catLiftOffGenesV1.bb',
+        on: true,
+      },
+      {
+        id: 'segdup',
+        label: 'segmental duplications — SEDEF',
+        url: 'https://hgdownload.soe.ucsc.edu/gbdb/hs1/sedefSegDups/sedefSegDups.bb',
+        on: false,
+      },
+    ],
   },
   {
     id: 'hg38',
@@ -41,6 +72,7 @@ export const REFERENCES = [
     twobit: 'https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/latest/hg38.2bit',
     defaultRegion: 'chr1:145,000,000-146,000,000',
     presets: [],
+    tracks: [],
   },
 ];
 

@@ -16,6 +16,8 @@
  *           byte's high bits)
  */
 
+import { makeRangeFetcher } from './ranged.js';
+
 const SIGNATURE = 0x1a412743;
 const BASE_ASCII = new Uint8Array([84, 67, 65, 71]); // T C A G
 const ASCII_N = 78;
@@ -45,35 +47,11 @@ export class RemoteTwoBit {
    */
   constructor(url, io = {}) {
     this.url = url;
-    this.fetchRange = io.fetchRange ?? this.httpRange.bind(this);
+    this.fetchRange = io.fetchRange ?? makeRangeFetcher(url);
     /** @type {Map<string, number> | null} name -> record offset */
     this.offsets = null;
     /** @type {Map<string, SeqMeta>} */
     this.meta = new Map();
-  }
-
-  /**
-   * @param {number} start @param {number} endEx
-   * @returns {Promise<Uint8Array>}
-   */
-  async httpRange(start, endEx) {
-    // Bounded wait: when the reference host is unreachable, callers (demo
-    // fallback, error toasts) should find out in seconds, not after the
-    // browser's multi-minute connect timeout.
-    const res = await fetch(this.url, {
-      headers: { Range: `bytes=${start}-${endEx - 1}` },
-      mode: 'cors',
-      signal: AbortSignal.timeout(20_000),
-    });
-    if (!(res.status === 206 || res.status === 200)) {
-      throw new Error(`Reference server answered HTTP ${res.status} for ${this.url}`);
-    }
-    const buf = new Uint8Array(await res.arrayBuffer());
-    // A 200 means the server ignored Range — protect against pulling 800 MB.
-    if (res.status === 200 && buf.length > endEx - start) {
-      return buf.subarray(start, endEx);
-    }
-    return buf;
   }
 
   /** Parse the header + sequence index (cached). */
