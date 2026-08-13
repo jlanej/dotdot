@@ -821,3 +821,33 @@ input.combo:focus,
 #empty-state .starters {
   margin-top: 10px;
 }
+
+/* Scoreboard collapse: one click shrinks it to a tiny pill. */
+#plot-stats button {
+  pointer-events: auto;
+}
+#btn-stats-min {
+  position: absolute;
+  top: 3px;
+  right: 6px;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font: 600 12px/1 system-ui, sans-serif;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+#btn-stats-min:hover {
+  color: var(--accent);
+}
+#plot-stats.min {
+  padding: 4px 9px;
+}
+#plot-stats.min .stats-grid,
+#plot-stats.min .linklike {
+  display: none;
+}
+#plot-stats.min #btn-stats-min {
+  position: static;
+  padding: 0;
+}

@@ -80,6 +80,25 @@ const btnPng = /** @type {HTMLButtonElement} */ ($('btn-png'));
 const btnSvg = /** @type {HTMLButtonElement} */ ($('btn-svg'));
 const btnRefine = /** @type {HTMLButtonElement} */ ($('btn-refine'));
 const btnShare = /** @type {HTMLButtonElement} */ ($('btn-share'));
+const btnStatsMin = /** @type {HTMLButtonElement} */ ($('btn-stats-min'));
+
+/** Collapse/expand the on-plot scoreboard; the choice is remembered. */
+function setStatsMin(/** @type {boolean} */ min) {
+  plotStats.classList.toggle('min', min);
+  btnStatsMin.textContent = min ? '▤ stats' : '−';
+  btnStatsMin.title = min ? 'Expand stats' : 'Collapse stats';
+  try {
+    localStorage.setItem('dotdot.statsMin', min ? '1' : '');
+  } catch {
+    // Private mode etc. — the toggle still works for the session.
+  }
+}
+btnStatsMin.addEventListener('click', () => setStatsMin(!plotStats.classList.contains('min')));
+try {
+  if (localStorage.getItem('dotdot.statsMin') === '1') setStatsMin(true);
+} catch {
+  // ignore
+}
 const btnZoomRefine = /** @type {HTMLButtonElement} */ ($('btn-zoom-refine'));
 const btnStatsDetail = /** @type {HTMLButtonElement} */ ($('btn-stats-detail'));
 
