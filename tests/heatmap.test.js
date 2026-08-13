@@ -1,6 +1,6 @@
 // @ts-check
 import { test, assert, assertEq } from './harness.js';
-import { binIdentity, paintHeatmap, heatAt } from '../js/render/heatmap.js';
+import { binIdentity, paintHeatmap, heatAt, binStretch } from '../js/render/heatmap.js';
 
 /**
  * @param {[number, number, number, number, number, number][]} rows [x, y, dx, dy, strand, identity]
@@ -61,6 +61,21 @@ test('heatmap: heatAt reads the cell under a world point', () => {
   assertEq(heatAt(bin, -5, 5), 0);
 });
 
+test('heatmap: binStretch spans the observed tile range', () => {
+  const s = store([
+    [0, 0, 10, 10, 0, 0.92],
+    [20, 20, 10, 10, 0, 0.99],
+  ]);
+  const bin = binIdentity(s, B, 4, 4, BOTH);
+  const r = binStretch(bin);
+  assert(Math.abs(r.lo - 0.92) < 1e-6, `lo ${r.lo}`);
+  assert(Math.abs(r.hi - 0.99) < 1e-6, `hi ${r.hi}`);
+  // A near-uniform grid still gets a usable (widened) ramp.
+  const flat = binIdentity(store([[0, 0, 40, 40, 0, 1.0]]), B, 4, 4, BOTH);
+  const rf = binStretch(flat);
+  assert(rf.hi - rf.lo >= 0.005, 'ramp widened for flat data');
+});
+
 test('heatmap: paint flips rows and leaves empty cells transparent', () => {
   const bin = binIdentity(store([[0, 0, 8, 8, 0, 1]]), { x0: 0, x1: 40, y0: 0, y1: 40 }, 4, 4, BOTH);
   // Minimal colormap: 2 rows × 256 texels; row 0 red ramp.
@@ -69,7 +84,7 @@ test('heatmap: paint flips rows and leaves empty cells transparent', () => {
     cm[i * 4] = 200;
     cm[i * 4 + 3] = 255;
   }
-  const img = paintHeatmap(bin, cm, 0, 0);
+  const img = paintHeatmap(bin, cm, 0, 0, 1);
   // World cell (0,0) is bottom-left → image row ny-1.
   const o = ((4 - 1) * 4 + 0) * 4;
   assertEq(img.data[o], 200);

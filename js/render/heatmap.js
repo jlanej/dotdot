@@ -66,25 +66,49 @@ export function binIdentity(s, b, nx, ny, opts) {
 }
 
 /**
+ * Contrast stretch for the ramp: satellite arrays have a decent match in
+ * almost every tile, so a fixed 0..100% scale collapses the interesting
+ * variation (97 vs 99.5 vs 100%) into the ramp's top sliver. Map the ramp
+ * over the observed spread instead — the 2nd percentile to the maximum of
+ * nonempty tiles (StainedGlass-style auto scale).
+ * @param {HeatBin} bin
+ * @returns {{lo: number, hi: number}}
+ */
+export function binStretch(bin) {
+  /** @type {number[]} */
+  const vals = [];
+  for (let i = 0; i < bin.grid.length; i++) {
+    if (bin.grid[i] > 0) vals.push(bin.grid[i]);
+  }
+  if (vals.length === 0) return { lo: 0, hi: 1 };
+  vals.sort((a, b) => a - b);
+  const lo = vals[Math.floor(vals.length * 0.02)];
+  const hi = vals[vals.length - 1];
+  return hi - lo < 0.005 ? { lo: Math.max(0, hi - 0.05), hi } : { lo, hi };
+}
+
+/**
  * Paint a HeatBin into ImageData using an identity ramp (one-hue sequential
  * scale; empty cells stay transparent). The colormap is already built for
  * the active theme; its rows are 0 = forward identity ramp, 1 = reverse —
- * the heatmap uses the forward (blue) ramp as THE identity scale.
+ * the heatmap uses the forward (blue) ramp as THE identity scale, stretched
+ * over [lo, hi] (see binStretch).
  *
  * @param {HeatBin} bin
  * @param {Uint8Array | Uint8ClampedArray} cmData 256×4-row colormap pixels (RGBA)
  * @param {number} rampRow colormap row (0 = forward identity ramp)
- * @param {number} identLo ramp floor (identities at/below map to ramp start)
+ * @param {number} lo ramp start identity
+ * @param {number} hi ramp end identity
  * @returns {ImageData}
  */
-export function paintHeatmap(bin, cmData, rampRow, identLo) {
+export function paintHeatmap(bin, cmData, rampRow, lo, hi) {
   const img = new ImageData(bin.nx, bin.ny);
-  const denom = Math.max(1 - identLo, 1e-6);
+  const denom = Math.max(hi - lo, 1e-6);
   for (let cy = 0; cy < bin.ny; cy++) {
     for (let cx = 0; cx < bin.nx; cx++) {
       const v = bin.grid[cy * bin.nx + cx];
       if (v <= 0) continue;
-      const t = Math.min(1, Math.max(0, (v - identLo) / denom));
+      const t = Math.min(1, Math.max(0, (v - lo) / denom));
       const texel = (rampRow * 256 + Math.round(t * 255)) * 4;
       // ImageData rows run top-down; world y runs bottom-up — flip here so
       // the caller can draw the image directly.

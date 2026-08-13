@@ -9,7 +9,7 @@ import { SegmentGrid } from './core/grid.js';
 import { segmentEndpoints, allocSegments, copySegmentRow, blitSegments, segmentVisible } from './core/types.js';
 import { assemblePool } from './worker/assemble.js';
 import { locate, bandsInRange } from './core/catalog.js';
-import { binIdentity, paintHeatmap, heatAt } from './render/heatmap.js';
+import { binIdentity, paintHeatmap, heatAt, binStretch } from './render/heatmap.js';
 import { resolveRegion, parseBp } from './core/region.js';
 import { GlRenderer } from './render/gl.js';
 import { drawUnderlay, drawOverlay, LAYOUT, setAnnotationLanes } from './render/axes.js';
@@ -990,6 +990,9 @@ let heatBin = null;
 /** @type {HTMLCanvasElement | null} */
 let heatCanvas = null;
 let lastHeatSig = '';
+/** @type {{lo: number, hi: number}} the ramp's stretched identity range */
+let heatRange = { lo: 0, hi: 1 };
+let heatKickPending = false;
 
 function heatMode() {
   return selDrawMode.value === 'heat';
@@ -1007,23 +1010,27 @@ function rebuildHeatmap() {
     y1: Math.min(d.query.total, vb.y1),
   };
   if (b.x1 <= b.x0 || b.y1 <= b.y0) return;
-  const nx = Math.min(512, Math.max(64, Math.round(pw / 2)));
-  const ny = Math.min(512, Math.max(64, Math.round(ph / 2)));
+  const nx = Math.min(1024, Math.max(64, Math.round(pw / 1.5)));
+  const ny = Math.min(1024, Math.max(64, Math.round(ph / 1.5)));
   const bin = binIdentity(d.segments, b, nx, ny, { showFwd: chkFwd.checked, showRev: chkRev.checked });
+  heatRange = binStretch(bin);
   const cm = buildColormap(mode);
-  const img = paintHeatmap(bin, cm.data, 0, state.identLo);
+  const img = paintHeatmap(bin, cm.data, 0, heatRange.lo, heatRange.hi);
   if (!heatCanvas) heatCanvas = document.createElement('canvas');
   heatCanvas.width = nx;
   heatCanvas.height = ny;
   /** @type {CanvasRenderingContext2D} */ (heatCanvas.getContext('2d')).putImageData(img, 0, 0);
   heatBin = bin;
+  updateLegend();
   markDirty();
 }
 
 /** Settle watcher for heatmap rebins. @param {number} now */
 function heatmapTick(now) {
   if (!heatMode() || !state.data) return;
-  if (now - viewSettledAt < 250 || lastViewSig === lastHeatSig || lastViewSig === '') return;
+  // Small plots rebin almost immediately; big ones wait for a firmer rest.
+  const settleMs = state.data.segments.count < 1_500_000 ? 120 : 250;
+  if (now - viewSettledAt < settleMs || lastViewSig === lastHeatSig || lastViewSig === '') return;
   lastHeatSig = lastViewSig;
   rebuildHeatmap();
 }
@@ -1523,6 +1530,21 @@ function draw(dpr) {
   const d = displayOpts();
 
   const heat = heatMode() && heatBin && heatCanvas;
+  // Belt and braces for crispness: zoomed far past the current bin's
+  // resolution (anchored image stretching >6×), rebin on the next tick even
+  // if the settle plumbing missed it.
+  if (heat && heatBin && state.view && !heatKickPending) {
+    const vb = state.view.bounds(pw, ph);
+    const zoomX = (heatBin.x1 - heatBin.x0) / Math.max(vb.x1 - vb.x0, 1e-9);
+    const zoomY = (heatBin.y1 - heatBin.y0) / Math.max(vb.y1 - vb.y0, 1e-9);
+    if (zoomX > 6 || zoomY > 6) {
+      heatKickPending = true;
+      setTimeout(() => {
+        heatKickPending = false;
+        rebuildHeatmap();
+      }, 0);
+    }
+  }
   if (state.view && state.data) {
     /** @type {Float64Array | null} */
     let highlightEp = null;
@@ -1851,7 +1873,9 @@ setInterval(() => {
       const wy = state.view.pxToWorldY(p.y, ph);
       const v = heatAt(heatBin, wx, wy);
       hoverCard.className = v > 0 ? '' : 'empty';
-      hoverCard.textContent = v > 0 ? `tile identity ≥ ${(v * 100).toFixed(1)}%` : 'empty tile';
+      hoverCard.textContent = v > 0
+        ? `tile identity ≥ ${(v * 100).toFixed(1)}% (ramp ${(heatRange.lo * 100).toFixed(1)}–${(heatRange.hi * 100).toFixed(1)}%)`
+        : 'empty tile';
     }
     return;
   }
@@ -2344,7 +2368,12 @@ function updateLegend() {
   swFwd.style.background = cm.fwdFlat;
   swRev.style.background = cm.revFlat;
   legendEl.className = '';
-  if (colorMode === 0) {
+  if (heatMode()) {
+    // The heatmap's ramp is contrast-stretched to the observed tile range.
+    legendEl.innerHTML =
+      `<div class="row"><span class="lab">tile</span><span class="ramp" style="background:${cm.rampCss(0)}"></span></div>` +
+      `<div class="row"><span class="lab"></span><span class="lab">${(heatRange.lo * 100).toFixed(1)}% identity</span><span style="flex:1"></span><span class="lab">${(heatRange.hi * 100).toFixed(1)}%</span></div>`;
+  } else if (colorMode === 0) {
     const lo = `${Math.round(state.identLo * 100)}%`;
     legendEl.innerHTML =
       `<div class="row"><span class="lab">fwd</span><span class="ramp" style="background:${cm.rampCss(0)}"></span></div>` +
