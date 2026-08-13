@@ -167,9 +167,12 @@ The **Reference** dropdown gives instant material with no files at all:
 selecting **T2T-CHM13v2.0** streams its default showcase window — the DXZ1
 alpha-satellite array pictured above — and self-plots it from ~750 kB of
 streamed 2bit data. Type any window (`chr8:44.2M-46.33M`, `chr1:121,700,000-125,100,000` — k/M/G
-units and commas welcome; a bare name loads the whole sequence) or pick a
-showcase preset (chrX DXZ1, chr8 and chr17 centromeres, a chr1
-pericentromere). With a reference window loaded, added FASTAs dot **against
+units and commas welcome; a bare name loads the whole sequence), a
+cytogenetic **arm** (`chr13p`, resolved from the streamed cytoband track),
+or a **list** — `chr13p,chr14p,chr15p,chr21p,chr22p` lays all five
+acrocentric short arms on one axis for a 70 Mb self-comparison of the
+rDNA-bearing arms (also a showcase preset). Or pick any preset (chrX DXZ1,
+chr8 and chr17 centromeres, a chr1 pericentromere, the acrocentrics). With a reference window loaded, added FASTAs dot **against
 it** — the demo above is exactly that pattern. The axis rulers, hover, the
 readout, and `G` region jumps all speak true genomic coordinates
 (`chrX:58,000,000-58,200,000` works directly), and multi-sequence axes rule

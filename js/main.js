@@ -20,7 +20,7 @@ import { formatBp, formatInt, formatCount } from './render/format.js';
 import { looksLikePaf } from './io/paf.js';
 import { RemoteTwoBit, regionToFasta } from './io/twobit.js';
 import { RemoteBigBed } from './io/bigbed.js';
-import { REFERENCES, parseBrowserRegion } from './refs.js';
+import { REFERENCES, parseBrowserRegion, splitRegionList } from './refs.js';
 import { exportPng, compositeCanvases } from './export/png.js';
 import { exportSvg } from './export/svg.js';
 
@@ -769,48 +769,108 @@ function applyRefSelection(autoload) {
 async function loadRefRegion(text) {
   const ref = currentRef();
   if (!ref) return;
-  const parsed = parseBrowserRegion(text);
-  if (!parsed) {
-    toast(`Could not parse region “${text}” — try chrX:57.8M-60.7M (1-based).`, true);
-    return;
+  const exprs = splitRegionList(text);
+  /** @type {NonNullable<ReturnType<typeof parseBrowserRegion>>[]} */
+  const parsedList = [];
+  for (const e of exprs) {
+    const p = parseBrowserRegion(e);
+    if (!p) {
+      toast(`Could not parse region “${e}” — try chrX:57.8M-60.7M, chr13p, or a comma/;-separated list.`, true);
+      return;
+    }
+    if (p.arm && p.start1 !== null) {
+      toast(`Use either an arm (${p.chrom}${p.arm}) or coordinates — not both.`, true);
+      return;
+    }
+    parsedList.push(p);
   }
+  if (parsedList.length === 0) return;
   // Anything the user does after this (own FASTA, another selection, Clear)
   // bumps the generation; a slow fetch must then discard itself instead of
   // clobbering the newer data.
   const gen = ++refLoadGen;
   try {
     const tb = getTwoBit(ref);
-    const meta = await tb.seqMeta(parsed.chrom).catch(async (err) => {
-      const names = await tb.names().catch(() => []);
-      throw new Error(
-        (err instanceof Error ? err.message : String(err)) +
-          (names.length ? ` Available: ${names.slice(0, 8).join(', ')}…` : ''),
-      );
-    });
+    /** @type {{chrom: string, start0: number, end0: number, name?: string}[]} */
+    const regions = [];
+    for (const p of parsedList) {
+      const meta = await tb.seqMeta(p.chrom).catch(async (err) => {
+        const names = await tb.names().catch(() => []);
+        throw new Error(
+          (err instanceof Error ? err.message : String(err)) +
+            (names.length ? ` Available: ${names.slice(0, 8).join(', ')}…` : ''),
+        );
+      });
+      if (gen !== refLoadGen) return;
+      if (p.arm) {
+        const [a0, a1] = await armRange(ref, p.chrom, p.arm, meta.dnaSize);
+        if (a1 <= a0) {
+          toast(`${p.chrom}${p.arm} is empty in this cytoband set.`, true);
+          return;
+        }
+        regions.push({ chrom: p.chrom, start0: a0, end0: a1, name: `${p.chrom}${p.arm}` });
+      } else {
+        const start0 = p.start1 !== null ? p.start1 - 1 : 0;
+        const end0 = Math.min(p.end1 ?? meta.dnaSize, meta.dnaSize);
+        if (end0 - start0 <= 0) {
+          toast(`${p.chrom} is only ${formatBp(meta.dnaSize)} long.`, true);
+          return;
+        }
+        regions.push({ chrom: p.chrom, start0, end0 });
+      }
+    }
     if (gen !== refLoadGen) return;
-    const start0 = parsed.start1 !== null ? parsed.start1 - 1 : 0;
-    const end0 = Math.min(parsed.end1 ?? meta.dnaSize, meta.dnaSize);
-    const len = end0 - start0;
-    if (len <= 0) {
-      toast(`${parsed.chrom} is only ${formatBp(meta.dnaSize)} long.`, true);
+    const total = regions.reduce((a, r) => a + (r.end0 - r.start0), 0);
+    if (total > 300e6) {
+      toast('Regions too large — 300 Mb max combined.', true);
       return;
     }
-    if (len > 300e6) {
-      toast('Region too large — 300 Mb max.', true);
-      return;
-    }
-    const label1 = `${parsed.chrom}:${formatInt(start0 + 1)}-${formatInt(end0)}`;
+    let label;
+    if (regions.length > 1) label = `${regions.length} regions`;
+    else if (regions[0].name) label = regions[0].name;
+    else label = `${regions[0].chrom}:${formatInt(regions[0].start0 + 1)}-${formatInt(regions[0].end0)}`;
     toast(
-      `Fetching ${label1} (${formatBp(len)}) from ${ref.label}…` +
-        (len > 33e6 ? ' Large region — this will take a while.' : ''),
+      `Fetching ${label} (${formatBp(total)}) from ${ref.label}…` +
+        (total > 33e6 ? ' Large region — this will take a while.' : ''),
     );
-    const buf = await streamRefRegions(ref, [{ chrom: parsed.chrom, start0, end0 }]);
+    const buf = await streamRefRegions(ref, regions);
     if (gen !== refLoadGen) return;
-    setFasta('target', { name: `${label1} · ${ref.label}`, buf: buf.buffer });
+    setFasta('target', { name: `${label} · ${ref.label}`, buf: buf.buffer });
     shareBase = new URLSearchParams({ ref: ref.id, refregion: text }).toString();
   } catch (err) {
     toast(err instanceof Error ? err.message : String(err), true);
   }
+}
+
+/** @type {Map<string, {pEnd: number, qStart: number}>} */
+const armBounds = new Map();
+
+/**
+ * Cytogenetic arm range from the reference's streamed cytoband track:
+ * p = [0, end of the last p-band), q = [start of the first q-band, size).
+ * @param {import('./refs.js').ReferenceGenome} ref
+ * @param {string} chrom @param {'p'|'q'} arm @param {number} dnaSize
+ * @returns {Promise<[number, number]>}
+ */
+async function armRange(ref, chrom, arm, dnaSize) {
+  if (!ref.cytoband) {
+    throw new Error(`Arm coordinates (${chrom}${arm}) need a cytoband track — not available for ${ref.label} yet.`);
+  }
+  const key = `${ref.id}|${chrom}`;
+  let b = armBounds.get(key);
+  if (!b) {
+    const bands = await getBigBed(ref.cytoband).query(chrom, 0, dnaSize);
+    if (bands.length === 0) throw new Error(`No cytobands for ${chrom} in ${ref.label}.`);
+    let pEnd = 0;
+    let qStart = dnaSize;
+    for (const band of bands) {
+      if (band.name.startsWith('p')) pEnd = Math.max(pEnd, band.end);
+      if (band.name.startsWith('q')) qStart = Math.min(qStart, band.start);
+    }
+    b = { pEnd, qStart };
+    armBounds.set(key, b);
+  }
+  return arm === 'p' ? [0, b.pEnd] : [b.qStart, dnaSize];
 }
 
 /**
@@ -894,6 +954,8 @@ function activeTracks() {
  */
 function resolveChrom(name, chroms) {
   if (chroms.has(name)) return name;
+  const arm = /^(.+)[pq]$/.exec(name);
+  if (arm && chroms.has(arm[1])) return arm[1];
   const prefix = name.split('_', 1)[0];
   return chroms.has(prefix) ? prefix : null;
 }
@@ -2642,11 +2704,12 @@ const HELP = {
   ref:
     'Built-in reference genomes, fetched on demand as <b>byte ranges</b> from UCSC’s 2bit files — ' +
     'the genome itself never downloads. Type any region in genome-browser coordinates ' +
-    '(<b>chrX:57.8M-60.7M</b>, 1-based) and Load: with no query FASTA the region plots against ' +
-    'itself (try the centromere showcase presets — satellite arrays are spectacular); with a ' +
-    'query FASTA loaded, the query dots against the region. Coordinates shown for reference ' +
-    'regions are true genomic positions, and the region-jump box accepts them too. Shareable: ' +
-    '?ref=t2t&refregion=chrX:57.8M-60.7M.',
+    '(<b>chrX:57.8M-60.7M</b>, 1-based), a cytogenetic <b>arm</b> (<b>chr13p</b>, resolved from ' +
+    'the streamed cytoband track), or a <b>list</b> — comma or ; separated, e.g. ' +
+    '<b>chr13p,chr14p,chr15p,chr21p,chr22p</b> lays all five acrocentric short arms on one ' +
+    'axis (commas inside numbers are safe). With no query FASTA the regions plot against ' +
+    'themselves; with a query loaded, the query dots against them. All coordinates shown are ' +
+    'true genomic positions. Shareable: ?ref=t2t&refregion=chr13p,chr14p.',
   matching:
     'These change what is <i>computed</i> — press Recompute after editing. The Display section ' +
     'below applies instantly, without recomputing.',

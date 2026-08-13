@@ -29,6 +29,7 @@ import { parseBp } from './core/region.js';
  * @property {string} defaultRegion
  * @property {RefPreset[]} presets
  * @property {RefTrack[]} tracks annotation bigBeds for this genome
+ * @property {string} [cytoband] cytoband bigBed — enables chr13p/q arm syntax
  */
 
 /** @type {ReferenceGenome[]} */
@@ -43,7 +44,9 @@ export const REFERENCES = [
       { label: 'chr8 centromere — the first finished centromere', region: 'chr8:44,200,000-46,330,000' },
       { label: 'chr17 centromere — D17Z1 α-satellite', region: 'chr17:23,900,000-27,000,000' },
       { label: 'chr1 pericentromere — αSat/HSat mosaic', region: 'chr1:121,700,000-125,100,000' },
+      { label: 'acrocentric p arms — all five short arms vs themselves', region: 'chr13p,chr14p,chr15p,chr21p,chr22p' },
     ],
+    cytoband: 'https://hgdownload.soe.ucsc.edu/gbdb/hs1/cytoBandMapped/cytoBandMapped.bb',
     tracks: [
       {
         id: 'censat',
@@ -77,18 +80,39 @@ export const REFERENCES = [
 ];
 
 /**
- * Parse genome-browser region syntax: `chrX:57,820,000-60,670,000` (1-based
- * inclusive; k/M/G suffixes fine) or a bare sequence name for the whole
- * sequence.
+ * Split a region-list expression. `;` always delimits; `,` delimits only
+ * when followed by a letter/underscore, so thousands separators inside
+ * coordinates survive (`chr1:121,700,000-125M,chr8p` is two regions).
  * @param {string} text
- * @returns {{chrom: string, start1: number | null, end1: number | null} | null}
+ * @returns {string[]}
+ */
+export function splitRegionList(text) {
+  return text
+    .split(/;|,(?=\s*[A-Za-z_])/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+/**
+ * Parse genome-browser region syntax: `chrX:57,820,000-60,670,000` (1-based
+ * inclusive; k/M/G suffixes fine), a bare sequence name for the whole
+ * sequence, or a cytogenetic arm (`chr13p`, `chrXq`).
+ * @param {string} text
+ * @returns {{chrom: string, start1: number | null, end1: number | null, arm: 'p' | 'q' | null} | null}
  */
 export function parseBrowserRegion(text) {
   const s = text.trim();
   if (!s) return null;
   const colon = s.lastIndexOf(':');
-  if (colon < 0) return { chrom: s, start1: null, end1: null };
-  const chrom = s.slice(0, colon).trim();
+  let chrom = colon < 0 ? s : s.slice(0, colon).trim();
+  /** @type {'p' | 'q' | null} */
+  let arm = null;
+  const am = /^(chr[0-9XYM]+)([pq])$/i.exec(chrom);
+  if (am) {
+    chrom = am[1];
+    arm = /** @type {'p' | 'q'} */ (am[2].toLowerCase());
+  }
+  if (colon < 0) return { chrom, start1: null, end1: null, arm };
   const range = s.slice(colon + 1);
   const dash = range.split(/[-–]/);
   if (dash.length !== 2 || !chrom) return null;
@@ -97,5 +121,5 @@ export function parseBrowserRegion(text) {
   const a = Math.round(parseBp(dash[0]));
   const b = Math.round(parseBp(dash[1]));
   if (!Number.isFinite(a) || !Number.isFinite(b) || a < 1 || b < a) return null;
-  return { chrom, start1: a, end1: b };
+  return { chrom, start1: a, end1: b, arm };
 }
