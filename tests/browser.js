@@ -16,6 +16,7 @@ import './compress.test.js';
 import './format.test.js';
 import './refs.test.js';
 import './region.test.js';
+import './share.test.js';
 import './twobit.test.js';
 import { runAll } from './harness.js';
 

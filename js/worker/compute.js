@@ -186,7 +186,12 @@ function computeKmer(id, tParsed, qParsed, optsIn, t0, window = null) {
   // index's own occurrence histogram — repeat families, not sequence length,
   // are what melt genome-scale runs.
   const userCapEntries = Math.max(1, Math.floor(opts.maxOcc / stride));
-  const maxOccEff = pickMaxOcc(index, qLenEff, tLenEff, qSample, userCapEntries);
+  // Explicit refines may carry a raised anchor budget (opts.budgetX): the
+  // user asked for depth, so the repeat cutoff loosens accordingly.
+  const maxOccEff = pickMaxOcc(
+    index, qLenEff, tLenEff, qSample, userCapEntries,
+    60e6 * (/** @type {any} */ (opts).budgetX || 1),
+  );
   // Sampled runs cannot represent one- or two-anchor matches faithfully
   // anyway (sub-pixel at this scale) — require a few co-linear anchors of
   // evidence instead of letting tens of millions of repeat fragments exhaust

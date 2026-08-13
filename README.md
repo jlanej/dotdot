@@ -190,7 +190,8 @@ on all CPU cores; without them it runs the identical single-worker path.
 | Many FASTAs | file buttons multi-select to stack several files on one axis; dropping 3+ makes the first the target and the rest the query — each sequence keeps its own ruler, with alternating band shading separating regions |
 | PAF / PAF.gz | optional aligner audit: any PAF-emitting aligner's output on the same axes |
 | Reference dropdown | T2T-CHM13v2.0 / GRCh38 windows streamed from UCSC 2bit files — self-plot, or the target for added FASTAs |
-| URL parameters | `?demo=1` · `?ref=t2t&refregion=chrX:57.8M-60.7M` · `?target=<url>&query=<url>[&overlay=<paf-url>]` · `?paf=<url>` · plus `k=`, `gap=`, `occ=`, `region=` |
+| URL parameters | `?demo=1` · `?ref=t2t&refregion=chrX:57.8M-60.7M` · `?target=<url>&query=<url>[&overlay=<paf-url>]` · `?paf=<url>` · plus `k=`, `gap=`, `occ=`, `minrun=`, `sample=`, `region=`, and a `#v=` view fragment |
+| Share view | one click copies a link reproducing the exact data, viewport, display settings, and non-default matching options — every finding becomes a URL |
 
 Practical envelope: up to ~50 Mb of combined sequence the engine runs dense
 and exact (bacteria, fungi, chromosome pairs, plasmids, viral genomes).

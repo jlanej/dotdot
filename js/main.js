@@ -11,6 +11,7 @@ import { assemblePool } from './worker/assemble.js';
 import { locate, bandsInRange } from './core/catalog.js';
 import { binIdentity, paintHeatmap, heatAt, binStretch } from './render/heatmap.js';
 import { resolveRegion, parseBp } from './core/region.js';
+import { buildViewHash, parseViewHash } from './core/share.js';
 import { GlRenderer } from './render/gl.js';
 import { drawUnderlay, drawOverlay, LAYOUT, setAnnotationLanes } from './render/axes.js';
 import { buildColormap, hexToRgb } from './render/colormap.js';
@@ -78,6 +79,7 @@ const btnCompute = /** @type {HTMLButtonElement} */ ($('btn-compute'));
 const btnPng = /** @type {HTMLButtonElement} */ ($('btn-png'));
 const btnSvg = /** @type {HTMLButtonElement} */ ($('btn-svg'));
 const btnRefine = /** @type {HTMLButtonElement} */ ($('btn-refine'));
+const btnShare = /** @type {HTMLButtonElement} */ ($('btn-share'));
 const btnZoomRefine = /** @type {HTMLButtonElement} */ ($('btn-zoom-refine'));
 const btnStatsDetail = /** @type {HTMLButtonElement} */ ($('btn-stats-detail'));
 
@@ -525,6 +527,7 @@ function onData(data, reqId = -1) {
   updateStats();
   btnPng.disabled = false;
   btnSvg.disabled = false;
+  btnShare.disabled = false;
   setRefineEnabled(data.source === 'kmer' && !!state.fileTarget);
   panelDetail.hidden = false;
   setMinLen(parseLenOff(inMinLen.value, 0), { skipText: true });
@@ -579,6 +582,22 @@ function onData(data, reqId = -1) {
     setChip('chip-paf', act.overlay);
     submit({ type: 'pafOverlay', buf: act.overlay.buf, target: data.target, query: data.query });
   }
+  // A shared link's view state applies to the first plot, after the fit.
+  if (pendingView) {
+    const v = pendingView;
+    pendingView = null;
+    setMinLen(parseLenOff(v.len, 0));
+    inMinIdent.value = String(v.ident);
+    inMinIdent.dispatchEvent(new Event('input', { bubbles: true }));
+    chkFwd.checked = v.fwd;
+    chkRev.checked = v.rev;
+    chkAutoRefine.checked = v.auto;
+    if (v.draw === 'heat') selDrawMode.value = 'heat';
+    const { pw, ph } = state.sizes;
+    state.view.fitRect(v.x0, v.y0, v.x1, v.y1, pw, ph);
+    if (v.draw === 'heat') rebuildHeatmap();
+    updateLegend();
+  }
   markDirty();
 }
 
@@ -630,6 +649,7 @@ function loadPafFile(f) {
     overlayName = f.name;
     submit({ type: 'pafOverlay', buf, target: state.data.target, query: state.data.query });
   } else {
+    shareBase = null; // a locally picked PAF can't travel in a link
     computePaf(buf);
   }
 }
@@ -651,10 +671,21 @@ let boundActions = null;
 /** Reference/demo fetch generation: bumping it invalidates pending installs. */
 let refLoadGen = 0;
 
+/**
+ * Provenance for shareable links: the query string that reproduces the
+ * current DATA (ref=…, demo=1, target=…), or null when it came from local
+ * files no link can carry.
+ * @type {string | null}
+ */
+let shareBase = null;
+/** View state from the URL hash, applied to the first plot. */
+let pendingView = parseViewHash(location.hash);
+
 /** The user pivoted to new data — stale intents must not fire. */
 function newLoadIntent() {
   refLoadGen++;
   queuedActions = null;
+  shareBase = null;
 }
 
 /** @param {{segments: import('./core/types.js').SegmentStore, skipped: number, unknown: number}} msg */
@@ -776,6 +807,7 @@ async function loadRefRegion(text) {
     const buf = await streamRefRegions(ref, [{ chrom: parsed.chrom, start0, end0 }]);
     if (gen !== refLoadGen) return;
     setFasta('target', { name: `${label1} · ${ref.label}`, buf: buf.buffer });
+    shareBase = new URLSearchParams({ ref: ref.id, refregion: text }).toString();
   } catch (err) {
     toast(err instanceof Error ? err.message : String(err), true);
   }
@@ -1126,6 +1158,7 @@ async function loadDemo() {
     queuedActions = { overlay: o, region: carriedRegion };
     setFasta('query', q);
     setFasta('target', t);
+    shareBase = 'demo=1';
     toast(
       `Real chr17 loci vs both NA19240 haplotypes, alignment-free — target ${source}. ` +
         '17p11.2: heterozygous 250 kb inversion (hap1) + inverted duplication (hap2). ROI10.9: ' +
@@ -1174,6 +1207,7 @@ async function loadFullChr17() {
       queuedActions = { region: carriedRegion ?? 'chr17:18.3M-19.4M' };
       setChip('chip-paf', f);
       computePaf(f.buf);
+      shareBase = new URLSearchParams({ paf: 'testdata/real/NA19240_vs_chm13_chr17.paf' }).toString();
       toast(
         'Full-chromosome FASTAs are not present (run scripts/fetch_realdata.sh to get them) — ' +
           'showing the aligner’s PAF view instead.',
@@ -2135,15 +2169,14 @@ function refineView(auto = false) {
     if (!auto) toast('The visible window is too small to refine.');
     return;
   }
-  if (tx1 - tx0 > d.target.total * 0.9 && qy1 - qy0 > d.query.total * 0.9) {
-    if (!auto) toast('Zoom into a region first — Refine recomputes the visible window at full detail.');
-    return;
-  }
   refineQuiet = auto;
   autoRefinedSig = lastViewSig; // a window refined by hand needn't auto-refine again
   // Debug/automation stamp (globalThis.__dotdot.lastRefine).
   /** @type {any} */ (state).lastRefine = { auto, window: { tx0, tx1, qy0, qy1 } };
-  submitKmer({ ...matchOpts(), sample: 1 }, { tx0, tx1, qy0, qy1 });
+  // Full density plus a raised repeat budget: an explicit refine means
+  // "spend the time here" — at full fit this deepens the WHOLE plot
+  // (satellite cores especially), not just re-derives it.
+  submitKmer({ ...matchOpts(), sample: 1, budgetX: 4 }, { tx0, tx1, qy0, qy1 });
 }
 
 // ---- auto-refine: settle-watcher over the view -----------------------------
@@ -2287,6 +2320,7 @@ $('btn-clear').addEventListener('click', () => {
   emptyState.hidden = false;
   btnPng.disabled = true;
   btnSvg.disabled = true;
+  btnShare.disabled = true;
   setRefineEnabled(false);
   panelDetail.hidden = true;
   plotStats.hidden = true;
@@ -2324,6 +2358,46 @@ btnPng.addEventListener('click', () => {
     state.cursor = stashCursor;
     state.fpsOn = stashFps;
     markDirty();
+  }
+});
+
+btnShare.addEventListener('click', async () => {
+  if (!state.data || !state.view) return;
+  const { pw, ph } = state.sizes;
+  const b = state.view.bounds(pw, ph);
+  const hash = buildViewHash({
+    x0: b.x0,
+    x1: b.x1,
+    y0: b.y0,
+    y1: b.y1,
+    len: inMinLen.value.trim() || 'off',
+    // The slider's floor position means "off" — only a raised value travels.
+    ident: Number(inMinIdent.value) > state.identLo ? Number(inMinIdent.value) : 0,
+    draw: heatMode() ? 'heat' : 'seg',
+    fwd: chkFwd.checked,
+    rev: chkRev.checked,
+    auto: chkAutoRefine.checked,
+  });
+  // Non-default compute options ride along so the recipient's plot matches.
+  const q = new URLSearchParams(shareBase ?? '');
+  const mo = /** @type {any} */ (matchOpts());
+  if (mo.k !== 15) q.set('k', String(mo.k));
+  if (mo.maxGap !== 64) q.set('gap', String(mo.maxGap));
+  if (mo.maxOcc !== 200) q.set('occ', String(mo.maxOcc));
+  if (mo.minRunLen !== 0) q.set('minrun', String(mo.minRunLen));
+  if (mo.sample !== 'auto') q.set('sample', String(mo.sample));
+  const qs = q.toString();
+  const url = `${location.origin}${location.pathname}${qs ? '?' + qs : ''}${hash}`;
+  try {
+    await navigator.clipboard.writeText(url);
+    toast(
+      shareBase
+        ? 'View link copied — it reproduces this exact data, viewport, and settings.'
+        : 'Link copied — note: locally loaded files are not in it, only the viewport and settings.',
+    );
+  } catch {
+    inRegion.value = url;
+    toast('Could not reach the clipboard — the link is in the region box, ready to copy.');
   }
 });
 
@@ -2618,11 +2692,17 @@ const HELP = {
     'results pick a sane starting value automatically. <b>Refine view</b> lives below, with ' +
     '<b>auto</b> to refine as you go.',
   refine:
-    'Recomputes the <i>visible window</i> at full density and merges it into the plot in place ' +
-    '— axes, zoom, and the aligner overlay stay put. Press <kbd>F</kbd> or the ✦ button by the ' +
-    'zoom controls. With <b>auto</b> checked, resting a moment at a zoomed view refines it by ' +
-    'itself. The way to work: coarse whole-chromosome pass, zoom in, refine, repeat. Needs the ' +
-    'FASTA inputs still loaded.',
+    'Recomputes the <i>visible window</i> at full density with a raised repeat budget, merging ' +
+    'it into the plot in place — axes, zoom, and the aligner overlay stay put. Press <kbd>F</kbd> ' +
+    'or the ✦ button by the zoom controls; it works at <b>any</b> zoom, including full fit — ' +
+    'refining a whole centromere window digs deeper into its repeat families. With <b>auto</b> ' +
+    'checked, resting a moment at a zoomed view refines it by itself. Needs the FASTA inputs ' +
+    'still loaded.',
+  share:
+    'Copies a link that reproduces this exact view: the data (when it came from a reference, ' +
+    'the demo, or URLs), the viewport, display settings, and any non-default matching options. ' +
+    'Locally loaded files cannot travel in a link — everything else can. Paste it anywhere; ' +
+    'opening it replays the compute and lands on the same pixels.',
   minident:
     'Hide segments below this identity (matched fraction after gap bridging; for aligner PAFs, ' +
     'nmatch/alnlen). Instant — nothing recomputes.',
@@ -2712,6 +2792,8 @@ async function initFromUrl() {
   }
   if (p.has('gap')) inGap.value = p.get('gap') ?? inGap.value;
   if (p.has('occ')) inMaxOcc.value = p.get('occ') ?? inMaxOcc.value;
+  if (p.has('minrun')) inMinRun.value = p.get('minrun') ?? inMinRun.value;
+  if (p.has('sample')) inSample.value = p.get('sample') ?? inSample.value;
   const urlRegion = p.get('region');
   if (urlRegion) queuedActions = { ...(queuedActions ?? {}), region: urlRegion };
   try {
@@ -2736,6 +2818,7 @@ async function initFromUrl() {
       const f = await fetchAsFile(/** @type {string} */ (p.get('paf')));
       setChip('chip-paf', f);
       computePaf(f.buf);
+      shareBase = new URLSearchParams({ paf: /** @type {string} */ (p.get('paf')) }).toString();
     } else if (p.has('target')) {
       if (p.has('overlay')) {
         const o = await fetchAsFile(/** @type {string} */ (p.get('overlay')));
@@ -2745,6 +2828,10 @@ async function initFromUrl() {
       const q = p.has('query') ? await fetchAsFile(/** @type {string} */ (p.get('query'))) : null;
       if (q) setFasta('query', q);
       setFasta('target', t);
+      const sb = new URLSearchParams({ target: /** @type {string} */ (p.get('target')) });
+      if (p.has('query')) sb.set('query', /** @type {string} */ (p.get('query')));
+      if (p.has('overlay')) sb.set('overlay', /** @type {string} */ (p.get('overlay')));
+      shareBase = sb.toString();
     }
   } catch (err) {
     toast(err instanceof Error ? err.message : String(err), true);
