@@ -9,7 +9,7 @@
 import { parseFasta, mergeParsedFasta } from '../io/fasta.js';
 import { maybeGunzip } from '../io/compress.js';
 import { parsePaf, parsePafOnto } from '../io/paf.js';
-import { buildIndex, matchStrand, pickMaxOcc, KMER_DEFAULTS } from '../core/kmer.js';
+import { buildIndex, matchStrand, pickMaxOcc, saturatedIntervals, KMER_DEFAULTS } from '../core/kmer.js';
 import { reverseComplement } from '../core/dna.js';
 import { newSegmentVecs, vecsToSegments, segmentBuffers } from '../core/types.js';
 
@@ -200,6 +200,13 @@ function computeKmer(id, tParsed, qParsed, optsIn, t0, window = null) {
   const minRunLen =
     sampleSpacing > 1 ? Math.max(opts.minRunLen, opts.k + 3 * sampleSpacing) : opts.minRunLen;
   const effOpts = { ...opts, stride, qSample, maxOcc: maxOccEff, minRunLen };
+  // Where the cutoff actually bit: target intervals whose k-mers were mostly
+  // over-cap and therefore never enumerated. Shipped with the stats so the
+  // display can hatch them — an empty square there means "not searched",
+  // not "not similar".
+  const saturated = saturatedIntervals(index, maxOccEff, tParsed.codes.length);
+  let satBp = 0;
+  for (let i = 0; i < saturated.length; i += 2) satBp += saturated[i + 1] - saturated[i];
   /** @type {import('../core/types.js').KmerStats} */
   const kmerStats = {
     k: opts.k,
@@ -213,12 +220,20 @@ function computeKmer(id, tParsed, qParsed, optsIn, t0, window = null) {
       return n;
     })(),
     occCount: index.occCount,
+    saturated,
   };
+  const budgetX = /** @type {any} */ (opts).budgetX || 1;
   const samplingNote =
     stride > 1 || qSample > 1 || maxOccEff < userCapEntries
       ? `large input: sampling 1/${stride} target k-mers, 1/${qSample} query positions; ` +
-        `repeat cutoff ${maxOccEff * stride}× (auto)`
+        `repeat cutoff ${maxOccEff * stride}× (auto${budgetX > 1 ? `, budget ${budgetX}×` : ''})`
       : '';
+  const satNote =
+    satBp > 0.01 * tLenEff
+      ? `${Math.round((satBp / tLenEff) * 100)}% of the target is repeats above the cutoff — ` +
+        'hatched in the heatmap view, not searched'
+      : '';
+  const note = [samplingNote, satNote].filter(Boolean).join(' · ');
 
   if (pooled) {
     progress(id, 'Preparing shared memory', 0.5);
@@ -273,7 +288,7 @@ function computeKmer(id, tParsed, qParsed, optsIn, t0, window = null) {
         target: tParsed.catalog,
         query: qParsed.catalog,
         kmerStats,
-        note: (samplingNote ? samplingNote + ' · ' : '') + `${Math.min(cores, parts.length)} cores`,
+        note: (note ? note + ' · ' : '') + `${Math.min(cores, parts.length)} cores`,
       },
     });
     return;
@@ -305,7 +320,7 @@ function computeKmer(id, tParsed, qParsed, optsIn, t0, window = null) {
   }
   if (window) {
     post(
-      { id, type: 'regionResult', segments, window, identMin, elapsedMs: performance.now() - t0 },
+      { id, type: 'regionResult', segments, window, identMin, saturated, elapsedMs: performance.now() - t0 },
       segmentBuffers(segments),
     );
     return;
@@ -319,7 +334,7 @@ function computeKmer(id, tParsed, qParsed, optsIn, t0, window = null) {
     stats: {
       elapsedMs: performance.now() - t0,
       identMin,
-      note: samplingNote || undefined,
+      note: note || undefined,
       kmer: kmerStats,
     },
   };

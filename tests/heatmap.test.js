@@ -1,6 +1,6 @@
 // @ts-check
 import { test, assert, assertEq } from './harness.js';
-import { binIdentity, paintHeatmap, heatAt, binStretch } from '../js/render/heatmap.js';
+import { binIdentity, paintHeatmap, heatAt, binStretch, buildSatMask } from '../js/render/heatmap.js';
 
 /**
  * @param {[number, number, number, number, number, number][]} rows [x, y, dx, dy, strand, identity]
@@ -90,4 +90,52 @@ test('heatmap: paint flips rows and leaves empty cells transparent', () => {
   assertEq(img.data[o], 200);
   assertEq(img.data[o + 3], 255);
   assertEq(img.data[3], 0); // top-left image cell = world (0,3): empty, transparent
+});
+
+test('heatmap: buildSatMask maps bp intervals onto grid columns', () => {
+  const m = buildSatMask(Float64Array.from([10, 20]), 0, 40, 4);
+  assertEq(Array.from(m).join(','), '0,1,0,0');
+  const all = buildSatMask(Float64Array.from([0, 40]), 0, 40, 4);
+  assertEq(Array.from(all).join(','), '1,1,1,1');
+  // Outside the visible window: nothing marked.
+  assertEq(Array.from(buildSatMask(Float64Array.from([100, 120]), 0, 40, 4)).join(','), '0,0,0,0');
+});
+
+test('heatmap: saturation hatches empty capped cells; data always wins', () => {
+  const bin = binIdentity(store([[0, 0, 10, 10, 0, 0.9]]), B, 4, 4, BOTH);
+  const cm = new Uint8Array(256 * 4 * 4).fill(255);
+  const sat = { maskX: Uint8Array.from([1, 1, 0, 0]), maskY: null, r: 100, g: 100, b: 100, a: 200 };
+  const img = paintHeatmap(bin, cm, 0, 0, 1, sat);
+  /** @param {number} cx @param {number} cy */
+  const px = (cx, cy) => ((4 - 1 - cy) * 4 + cx) * 4;
+  // Data cell (0,0): the colormap color, full alpha — never the hatch.
+  assertEq(img.data[px(0, 0) + 3], 255);
+  assertEq(img.data[px(0, 0)], 255);
+  // Empty cell (0,1): saturated column, on-stripe ((0+1)&3 < 2) → hatch color.
+  assertEq(img.data[px(0, 1) + 3], 200);
+  assertEq(img.data[px(0, 1)], 100);
+  // Empty cell (1,2): saturated column but off-stripe ((1+2)&3 = 3) → clear.
+  assertEq(img.data[px(1, 2) + 3], 0);
+  // Empty cell (2,2): stripe would hit ((2+2)&3 = 0) but column unsaturated → clear.
+  assertEq(img.data[px(2, 2) + 3], 0);
+  // Without sat masks nothing hatches.
+  const plain = paintHeatmap(bin, cm, 0, 0, 1);
+  assertEq(plain.data[px(0, 1) + 3], 0);
+});
+
+test('heatmap: self-plot masks hatch only where both axes are capped', () => {
+  const bin = binIdentity(store([]), B, 4, 4, BOTH); // all empty
+  const cm = new Uint8Array(256 * 4 * 4).fill(255);
+  const sat = {
+    maskX: Uint8Array.from([1, 1, 1, 1]),
+    maskY: Uint8Array.from([1, 0, 0, 0]),
+    r: 100, g: 100, b: 100, a: 200,
+  };
+  const img = paintHeatmap(bin, cm, 0, 0, 1, sat);
+  /** @param {number} cx @param {number} cy */
+  const px = (cx, cy) => ((4 - 1 - cy) * 4 + cx) * 4;
+  // Row 0 is capped on both axes: on-stripe cell (1,0) hatches.
+  assertEq(img.data[px(1, 0) + 3], 200);
+  // Row 1 is not: on-stripe cell (0,1) stays clear.
+  assertEq(img.data[px(0, 1) + 3], 0);
 });

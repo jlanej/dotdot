@@ -534,6 +534,115 @@ export function matchStrand(index, qCodes, qStarts, qTotal, tStarts, tTotal, opt
 }
 
 /**
+ * Where the repeat cutoff actually bit: merged target intervals in which most
+ * indexed k-mers belong to groups *over* the effective occurrence cap — i.e.
+ * regions whose matches were never enumerated at all. Without this, "no
+ * similarity" and "similarity too deep to enumerate" render as the same empty
+ * square, the classic dot-plot lie in satellite DNA (for period < k no budget
+ * can fix it: chr9 HSat3 would need ~10^14 anchor pairs).
+ *
+ * A tile of `tileBp` bases is saturated when at least half of its index
+ * entries are over-cap — self-normalizing across stride, N runs, and record
+ * boundaries. One pass over the index, same shape as the occurrence-histogram
+ * pass in buildIndex.
+ *
+ * @param {KmerIndex} index
+ * @param {number} maxOccEntries effective per-group entry cap (post-stride)
+ * @param {number} tLen total target length in bp (positions are global)
+ * @param {number} [tileBp]
+ * @returns {Float64Array} merged [start, end) pairs in bp, ascending
+ */
+export function saturatedIntervals(index, maxOccEntries, tLen, tileBp = 512) {
+  const nTiles = Math.max(1, Math.ceil(tLen / tileBp));
+  const over = new Uint32Array(nTiles);
+  const total = new Uint32Array(nTiles);
+  const { kmers, pos, bucketStarts } = index;
+  const nBuckets = bucketStarts.length - 1;
+  for (let b = 0; b < nBuckets; b++) {
+    const hiB = bucketStarts[b + 1];
+    let g = bucketStarts[b];
+    while (g < hiB) {
+      const kv = kmers[g];
+      let e = g + 1;
+      while (e < hiB && kmers[e] === kv) e++;
+      const capped = e - g > maxOccEntries;
+      for (let j = g; j < e; j++) {
+        const t = (pos[j] / tileBp) | 0;
+        total[t]++;
+        if (capped) over[t]++;
+      }
+      g = e;
+    }
+  }
+  /** @type {number[]} */
+  const out = [];
+  let runStart = -1;
+  for (let t = 0; t < nTiles; t++) {
+    const sat = total[t] > 0 && over[t] * 2 >= total[t];
+    if (sat && runStart < 0) runStart = t;
+    if (!sat && runStart >= 0) {
+      out.push(runStart * tileBp, t * tileBp);
+      runStart = -1;
+    }
+  }
+  if (runStart >= 0) out.push(runStart * tileBp, Math.min(tLen, nTiles * tileBp));
+  return Float64Array.from(out);
+}
+
+/**
+ * Replace the [lo, hi) span of a sorted interval list with new intervals
+ * (already confined to that span) — how a window refine's saturation result
+ * updates the whole-plot picture, since its looser cap may de-saturate the
+ * window. Intervals crossing the span boundary are truncated; touching
+ * neighbors merge.
+ *
+ * @param {Float64Array} existing sorted non-overlapping [start, end) pairs
+ * @param {number} lo @param {number} hi
+ * @param {Float64Array} replacement pairs within [lo, hi)
+ * @returns {Float64Array}
+ */
+export function spliceIntervals(existing, lo, hi, replacement) {
+  /** @type {number[]} */
+  const merged = [];
+  /** @param {number} s @param {number} e */
+  const push = (s, e) => {
+    if (e <= s) return;
+    if (merged.length > 0 && s <= merged[merged.length - 1]) {
+      if (e > merged[merged.length - 1]) merged[merged.length - 1] = e;
+      return;
+    }
+    merged.push(s, e);
+  };
+  let r = 0;
+  let emittedNew = false;
+  const emitNew = () => {
+    if (emittedNew) return;
+    emittedNew = true;
+    while (r < replacement.length) {
+      push(Math.max(lo, replacement[r]), Math.min(hi, replacement[r + 1]));
+      r += 2;
+    }
+  };
+  for (let i = 0; i < existing.length; i += 2) {
+    const s = existing[i];
+    const e = existing[i + 1];
+    if (e <= lo) {
+      push(s, e);
+    } else if (s >= hi) {
+      emitNew();
+      push(s, e);
+    } else {
+      // Overlaps the span: keep only the parts outside it.
+      push(s, Math.min(e, lo));
+      emitNew();
+      push(Math.max(s, hi), e);
+    }
+  }
+  emitNew();
+  return Float64Array.from(merged);
+}
+
+/**
  * Choose the largest per-group entry cap whose estimated anchor volume fits
  * the budget. Estimate: a group with `occ` index entries represents
  * ~occ*stride true target occurrences, so its k-mer is hit by

@@ -9,7 +9,8 @@ import { SegmentGrid } from './core/grid.js';
 import { segmentEndpoints, allocSegments, copySegmentRow, blitSegments, segmentVisible } from './core/types.js';
 import { assemblePool } from './worker/assemble.js';
 import { locate, bandsInRange } from './core/catalog.js';
-import { binIdentity, paintHeatmap, heatAt, binStretch } from './render/heatmap.js';
+import { binIdentity, paintHeatmap, heatAt, binStretch, buildSatMask } from './render/heatmap.js';
+import { spliceIntervals } from './core/kmer.js';
 import { resolveRegion, parseBp } from './core/region.js';
 import { buildViewHash, parseViewHash } from './core/share.js';
 import { GlRenderer } from './render/gl.js';
@@ -60,6 +61,7 @@ const outMinLen = $('out-minlen');
 const chkAutoRefine = /** @type {HTMLInputElement} */ ($('chk-autorefine'));
 const panelDetail = $('panel-detail');
 const inSample = /** @type {HTMLInputElement} */ ($('in-sample'));
+const inBudget = /** @type {HTMLInputElement} */ ($('in-budget'));
 const chkFwd = /** @type {HTMLInputElement} */ ($('chk-fwd'));
 const chkRev = /** @type {HTMLInputElement} */ ($('chk-rev'));
 const selColorMode = /** @type {HTMLSelectElement} */ ($('sel-colormode'));
@@ -416,7 +418,12 @@ function finishPool(plan, results, req) {
   }
   setComputing(false);
   if (plan.window) {
-    onRegionRefined({ segments: assembled.segments, window: plan.window, identMin: assembled.identMin });
+    onRegionRefined({
+      segments: assembled.segments,
+      window: plan.window,
+      identMin: assembled.identMin,
+      saturated: plan.kmerStats?.saturated,
+    });
   } else {
     onData(
       {
@@ -485,6 +492,18 @@ function currentSample() {
   return Number.isFinite(v) && v >= 1 ? Math.round(v) : 'auto';
 }
 
+/**
+ * Repeat budget: 'auto' = the standard 60M-anchor budget; "2×"/"4"/… multiply
+ * it, loosening the auto repeat cutoff for users who'd rather spend RAM and
+ * minutes than sample repeats. Clamped to 1..64.
+ */
+function currentBudget() {
+  const t = inBudget.value.trim().toLowerCase().replace(/[x×]\s*$/, '');
+  if (t === '' || t === 'auto') return 1;
+  const v = Number(t);
+  return Number.isFinite(v) && v >= 1 ? Math.min(64, v) : 1;
+}
+
 function matchOpts() {
   return {
     k: currentK(),
@@ -493,6 +512,7 @@ function matchOpts() {
     minRunLen: parseLenOff(inMinRun.value, 0),
     sample: currentSample(),
     stride: 1,
+    budgetX: currentBudget(),
   };
 }
 
@@ -555,6 +575,7 @@ function onData(data, reqId = -1) {
   syncAnnoLayout();
   lastAnnoSig = '';
   heatBin = null;
+  heatSat = null;
   lastHeatSig = '';
   btnCompute.textContent = data.source === 'kmer' ? 'Recompute' : 'Compute dot plot';
 
@@ -1106,9 +1127,22 @@ let lastHeatSig = '';
 /** @type {{lo: number, hi: number}} the ramp's stretched identity range */
 let heatRange = { lo: 0, hi: 1 };
 let heatKickPending = false;
+/** @type {import('./render/heatmap.js').SatMasks | null} saturation masks of the current bin */
+let heatSat = null;
 
 function heatMode() {
   return selDrawMode.value === 'heat';
+}
+
+/** Is this world point inside the current bin's saturation hatch region? */
+/** @param {number} wx @param {number} wy */
+function heatSatAt(wx, wy) {
+  if (!heatBin || !heatSat) return false;
+  const b = heatBin;
+  const cx = Math.floor(((wx - b.x0) / Math.max(b.x1 - b.x0, 1e-9)) * b.nx);
+  const cy = Math.floor(((wy - b.y0) / Math.max(b.y1 - b.y0, 1e-9)) * b.ny);
+  if (cx < 0 || cx >= b.nx || cy < 0 || cy >= b.ny) return false;
+  return heatSat.maskX[cx] === 1 && (heatSat.maskY === null || heatSat.maskY[cy] === 1);
 }
 
 function rebuildHeatmap() {
@@ -1128,7 +1162,21 @@ function rebuildHeatmap() {
   const bin = binIdentity(d.segments, b, nx, ny, { showFwd: chkFwd.checked, showRev: chkRev.checked });
   heatRange = binStretch(bin);
   const cm = buildColormap(mode);
-  const img = paintHeatmap(bin, cm.data, 0, heatRange.lo, heatRange.hi);
+  // Saturation hatch: empty cells inside occurrence-capped target regions
+  // mean "not searched", never "not similar". On self-plots the same
+  // intervals apply to the query axis, and only the repeat×repeat blocks
+  // (both axes capped) are truly unsearched; on cross-plots the target
+  // column is the honest necessary condition.
+  const sat = d.stats.kmer?.saturated;
+  heatSat =
+    sat && sat.length > 0
+      ? {
+          maskX: buildSatMask(sat, b.x0, b.x1, nx),
+          maskY: state.fileQuery ? null : buildSatMask(sat, b.y0, b.y1, ny),
+          ...(mode === 'dark' ? { r: 138, g: 145, b: 160, a: 150 } : { r: 122, g: 128, b: 142, a: 165 }),
+        }
+      : null;
+  const img = paintHeatmap(bin, cm.data, 0, heatRange.lo, heatRange.hi, heatSat);
   if (!heatCanvas) heatCanvas = document.createElement('canvas');
   heatCanvas.width = nx;
   heatCanvas.height = ny;
@@ -1153,6 +1201,7 @@ selDrawMode.addEventListener('change', () => {
     rebuildHeatmap();
   } else {
     heatBin = null;
+  heatSat = null;
   }
   setHover(null, null);
   updateLegend();
@@ -1987,10 +2036,18 @@ setInterval(() => {
       const wx = state.view.pxToWorldX(p.x, pw);
       const wy = state.view.pxToWorldY(p.y, ph);
       const v = heatAt(heatBin, wx, wy);
-      hoverCard.className = v > 0 ? '' : 'empty';
-      hoverCard.textContent = v > 0
-        ? `tile identity ≥ ${(v * 100).toFixed(1)}% (ramp ${(heatRange.lo * 100).toFixed(1)}–${(heatRange.hi * 100).toFixed(1)}%)`
-        : 'empty tile';
+      if (v > 0) {
+        hoverCard.className = '';
+        hoverCard.textContent = `tile anchor identity ≥ ${(v * 100).toFixed(1)}% (ramp ${(heatRange.lo * 100).toFixed(1)}–${(heatRange.hi * 100).toFixed(1)}%)`;
+      } else if (heatSatAt(wx, wy)) {
+        hoverCard.className = '';
+        hoverCard.textContent =
+          'capped repeats — k-mers here exceed the repeat cutoff, matches were not enumerated. ' +
+          'Refine the view or raise the repeat budget.';
+      } else {
+        hoverCard.className = 'empty';
+        hoverCard.textContent = 'empty tile';
+      }
     }
     return;
   }
@@ -2051,6 +2108,9 @@ function describeSegment(i) {
   const qB = locate(data.query, Math.min(s.y[i] + s.dy[i] - 1, data.query.total - 1));
   const rev = s.strand[i] === 1;
   const ident = (s.identity[i] * 100).toFixed(s.identity[i] >= 0.999 ? 0 : 1);
+  // Name the metric honestly: k-mer plots report anchor identity (exact-run
+  // coverage), PAF rows carry the aligner's own identity.
+  const identLabel = data.source === 'kmer' ? 'anchor identity' : 'identity';
   /** @param {ReturnType<typeof locate>} a @param {ReturnType<typeof locate>} b */
   const span = (a, b) =>
     a && b
@@ -2062,7 +2122,7 @@ function describeSegment(i) {
     `<div class="line"><span>target</span><span>${span(tA, tB)}</span></div>` +
     `<div class="line"><span>query</span><span>${span(qA, qB)}</span></div>` +
     `<div class="line"><span>${rev ? 'reverse' : 'forward'} · ${formatBp(s.dx[i])}</span>` +
-    `<span class="t-ident">${ident}% identity</span></div>`
+    `<span class="t-ident">${ident}% ${identLabel}</span></div>`
   );
 }
 
@@ -2256,8 +2316,9 @@ function refineView(auto = false) {
   /** @type {any} */ (state).lastRefine = { auto, window: { tx0, tx1, qy0, qy1 } };
   // Full density plus a raised repeat budget: an explicit refine means
   // "spend the time here" — at full fit this deepens the WHOLE plot
-  // (satellite cores especially), not just re-derives it.
-  submitKmer({ ...matchOpts(), sample: 1, budgetX: 4 }, { tx0, tx1, qy0, qy1 });
+  // (satellite cores especially), not just re-derives it. A user-raised
+  // budget only ever raises it further.
+  submitKmer({ ...matchOpts(), sample: 1, budgetX: Math.max(4, currentBudget()) }, { tx0, tx1, qy0, qy1 });
 }
 
 // ---- auto-refine: settle-watcher over the view -----------------------------
@@ -2292,7 +2353,7 @@ function autoRefineTick(now) {
 }
 
 /**
- * @param {{segments: import('./core/types.js').SegmentStore, window: {tx0:number,tx1:number,qy0:number,qy1:number}, identMin: number}} msg
+ * @param {{segments: import('./core/types.js').SegmentStore, window: {tx0:number,tx1:number,qy0:number,qy1:number}, identMin: number, saturated?: Float64Array}} msg
  */
 function onRegionRefined(msg) {
   const d = state.data;
@@ -2323,6 +2384,12 @@ function onRegionRefined(msg) {
   state.grid = null;
   state.hoverIndex = null;
   lastHeatSig = ''; // refined data: rebin on next settle
+  // The refine's looser repeat cutoff may have de-saturated (or re-drawn)
+  // parts of the window — splice its saturation picture into the whole-plot
+  // one so the hatch stays truthful.
+  if (d.stats.kmer && msg.saturated) {
+    d.stats.kmer.saturated = spliceIntervals(d.stats.kmer.saturated, w.tx0, w.tx1, msg.saturated);
+  }
   setTimeout(() => {
     if (state.data === d) {
       state.grid = new SegmentGrid(merged, d.target.total, d.query.total);
@@ -2380,6 +2447,7 @@ $('btn-clear').addEventListener('click', () => {
   spawnWorker();
   stopPool();
   heatBin = null;
+  heatSat = null;
   lastHeatSig = '';
   activeReq = -1;
   setComputing(false);
@@ -2467,6 +2535,7 @@ btnShare.addEventListener('click', async () => {
   if (mo.maxOcc !== 200) q.set('occ', String(mo.maxOcc));
   if (mo.minRunLen !== 0) q.set('minrun', String(mo.minRunLen));
   if (mo.sample !== 'auto') q.set('sample', String(mo.sample));
+  if (mo.budgetX !== 1) q.set('budget', String(mo.budgetX));
   const qs = q.toString();
   const url = `${location.origin}${location.pathname}${qs ? '?' + qs : ''}${hash}`;
   try {
@@ -2527,13 +2596,18 @@ function updateLegend() {
     // The heatmap's ramp is contrast-stretched to the observed tile range.
     legendEl.innerHTML =
       `<div class="row"><span class="lab">tile</span><span class="ramp" style="background:${cm.rampCss(0)}"></span></div>` +
-      `<div class="row"><span class="lab"></span><span class="lab">${(heatRange.lo * 100).toFixed(1)}% identity</span><span style="flex:1"></span><span class="lab">${(heatRange.hi * 100).toFixed(1)}%</span></div>`;
+      `<div class="row"><span class="lab"></span><span class="lab">${(heatRange.lo * 100).toFixed(1)}% anchor identity</span><span style="flex:1"></span><span class="lab">${(heatRange.hi * 100).toFixed(1)}%</span></div>`;
+    const sat = state.data.stats.kmer?.saturated;
+    if (sat && sat.length > 0) {
+      legendEl.innerHTML +=
+        `<div class="row"><span class="swatch swatch-hatch"></span> capped repeats — not searched</div>`;
+    }
   } else if (colorMode === 0) {
     const lo = `${Math.round(state.identLo * 100)}%`;
     legendEl.innerHTML =
       `<div class="row"><span class="lab">fwd</span><span class="ramp" style="background:${cm.rampCss(0)}"></span></div>` +
       `<div class="row"><span class="lab">rev</span><span class="ramp" style="background:${cm.rampCss(1)}"></span></div>` +
-      `<div class="row"><span class="lab"></span><span class="lab">${lo} identity</span><span style="flex:1"></span><span class="lab">100%</span></div>`;
+      `<div class="row"><span class="lab"></span><span class="lab">${lo} anchor identity</span><span style="flex:1"></span><span class="lab">100%</span></div>`;
   } else {
     legendEl.innerHTML =
       `<div class="row"><span class="swatch" style="background:${cm.fwdFlat}"></span> forward matches</div>` +
@@ -2588,6 +2662,16 @@ function updateStats() {
     ['compute', `${secs.toFixed(2)} s · ${data.source === 'kmer' ? 'alignment-free' : 'PAF import'}`],
   ];
   if (s.skippedLines) rows.push(['skipped lines', String(formatInt(s.skippedLines))]);
+  // Saturation disclosure: how much of the target the repeat cutoff excluded
+  // from search entirely — the difference between "empty" and "not looked".
+  const sat = s.kmer?.saturated;
+  if (sat && sat.length > 0) {
+    let satBp = 0;
+    for (let i = 0; i < sat.length; i += 2) satBp += sat[i + 1] - sat[i];
+    if (satBp > 0) {
+      rows.push(['capped repeats', `${formatBp(satBp)} · ${((satBp / data.target.total) * 100).toFixed(1)}% of target`]);
+    }
+  }
   statsEl.innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd title="${v}">${v}</dd>`).join('');
   plotStats.hidden = false;
 }
@@ -2679,7 +2763,18 @@ function buildStatsPopHtml(d) {
       (km.stride > 1 ? ` (1/${km.stride} stride)` : '') +
       (km.qSample > 1 ? ` · query sampled 1/${km.qSample}` : '') +
       ` · repeat cutoff ${formatInt(km.maxOcc)}×. The x axis is how often a k-mer occurs in the ` +
-      `target — the right-hand tail is the repeat fraction of the genome.</p></div>`;
+      `target — the right-hand tail is the repeat fraction of the genome.` +
+      (() => {
+        let satBp = 0;
+        for (let i = 0; i < km.saturated.length; i += 2) satBp += km.saturated[i + 1] - km.saturated[i];
+        return satBp > 0
+          ? ` <b>${formatBp(satBp)}</b> of the target (${((satBp / d.target.total) * 100).toFixed(1)}%) is ` +
+            `repeats above the cutoff — matches there were <b>not enumerated</b> (hatched in the heatmap ` +
+            `view). Raising the repeat budget digs deeper, but satellite families with repeat period ` +
+            `shorter than k are unenumerable by nature — the hatch is the honest answer there.`
+          : '';
+      })() +
+      `</p></div>`;
   }
   html += '</div>';
   return html;
@@ -2743,7 +2838,17 @@ const HELP = {
   occ:
     'Skip k-mers occurring more often than this in the target — repeat masking. Any number ' +
     'works; presets are suggestions. At genome scale the cutoff also auto-tightens using the ' +
-    'index’s own occurrence histogram, so Alu-scale repeat families can’t flood the plot.',
+    'index’s own occurrence histogram, so Alu-scale repeat families can’t flood the plot. ' +
+    'Where the cutoff bites hardest, the plot says so: regions whose k-mers were mostly ' +
+    'over-cap are <b>hatched in the heatmap view</b> and counted in the scoreboard — an empty ' +
+    'square there means “not searched”, not “not similar”.',
+  budget:
+    'How many match anchors a compute may spend (~60M per strand at <b>auto</b>). The budget is ' +
+    'what auto-tightens the repeat cutoff on repeat-rich inputs; <b>2×/4×/8×</b> multiply it, ' +
+    'loosening that cutoff — deeper repeat structure for more time and RAM. <b>Refine view</b> ' +
+    'always runs at ≥4×. Two hard walls remain regardless: a 16M-segment ceiling protects your ' +
+    'GPU/RAM, and satellite families with repeat period &lt; k (HSat2/3) are unenumerable at ' +
+    'any budget — those regions stay hatched in the heatmap, which is the honest display.',
   minrun:
     'Drop merged runs shorter than this at compute time ("off", "30", "1kb", any value). At ' +
     'genome scale a small evidence filter applies automatically.',
@@ -2762,11 +2867,12 @@ const HELP = {
     'track itself.',
   drawmode:
     '<b>segments</b> draws every match as a line — the exact view. <b>identity heatmap</b> bins ' +
-    'the visible matches into tiles colored by the best identity seen in each (the ' +
+    'the visible matches into tiles colored by the best anchor identity seen in each (the ' +
     'StainedGlass-style satellite figure): dense repeat fabric becomes a readable identity ' +
-    'landscape. Tiles re-bin when you rest; strand checkboxes choose what is binned; hover ' +
-    'reads a tile; the aligner overlay still draws on top. PNG captures it (SVG stays ' +
-    'segment-only).',
+    'landscape. Regions above the repeat cutoff wear a <b>diagonal hatch</b> — matches there ' +
+    'were never enumerated, so blank ≠ dissimilar. Tiles re-bin when you rest; strand ' +
+    'checkboxes choose what is binned; hover reads a tile; the aligner overlay still draws on ' +
+    'top. PNG captures it (SVG stays segment-only).',
   detail:
     'The exploration dial, always at hand. <b>Min segment length</b> filters what is <i>drawn</i> ' +
     '(never what was computed): low reveals the repeat fabric, high shows clean structure — drag ' +
@@ -2786,8 +2892,12 @@ const HELP = {
     'Locally loaded files cannot travel in a link — everything else can. Paste it anywhere; ' +
     'opening it replays the compute and lands on the same pixels.',
   minident:
-    'Hide segments below this identity (matched fraction after gap bridging; for aligner PAFs, ' +
-    'nmatch/alnlen). Instant — nothing recomputes.',
+    'Hide segments below this <b>anchor identity</b> — dotdot’s metric: the fraction of a ' +
+    'merged run covered by exact k-mer anchors, after crediting sampling holes (bridged ' +
+    'mismatch/indel bases count against it). It is deliberately not alignment identity ' +
+    '(StainedGlass’s 100·M/(M+X+I+D)) nor k-mer ANI (ModDotPlot’s c^(1/k)) — it comes from ' +
+    'exact occurrence counts, no aligner. For PAF overlays the value is the aligner’s own ' +
+    'nmatch/alnlen. Instant — nothing recomputes.',
   strands:
     'Forward matches are blue; reverse-complement matches are orange — inversions appear as ' +
     'orange anti-diagonals. Toggle with keys <kbd>1</kbd> and <kbd>2</kbd>.',
@@ -2876,6 +2986,7 @@ async function initFromUrl() {
   if (p.has('occ')) inMaxOcc.value = p.get('occ') ?? inMaxOcc.value;
   if (p.has('minrun')) inMinRun.value = p.get('minrun') ?? inMinRun.value;
   if (p.has('sample')) inSample.value = p.get('sample') ?? inSample.value;
+  if (p.has('budget')) inBudget.value = `${p.get('budget')}×`;
   const urlRegion = p.get('region');
   if (urlRegion) queuedActions = { ...(queuedActions ?? {}), region: urlRegion };
   try {

@@ -1,6 +1,6 @@
 // @ts-check
 import { test, assert, assertEq, assertClose, mulberry32 } from './harness.js';
-import { buildIndex, matchStrand, pickMaxOcc, KMER_DEFAULTS } from '../js/core/kmer.js';
+import { buildIndex, matchStrand, pickMaxOcc, saturatedIntervals, spliceIntervals, KMER_DEFAULTS } from '../js/core/kmer.js';
 import { reverseComplement } from '../js/core/dna.js';
 import { F64Vec, F32Vec, U8Vec } from '../js/core/vec.js';
 
@@ -297,4 +297,31 @@ test('kmer: pickMaxOcc scales the anchor budget by index stride', () => {
 test('kmer: buildIndex records its stride', () => {
   const t = randCodes(4000, 77);
   assertEq(buildIndex(t, starts([4000]), 12, 3).stride, 3);
+});
+
+test('kmer: saturatedIntervals marks the over-cap repeat block, not the unique flanks', () => {
+  // 2kb random | 2kb of ACAC... (period 2: every k-mer is one of two, each
+  // occurring ~2000× — the unenumerable case) | 2kb random.
+  const t = new Uint8Array(6144);
+  t.set(randCodes(2048, 11), 0);
+  for (let i = 2048; i < 4096; i++) t[i] = i % 2 === 0 ? 0 : 1; // A/C alternation
+  t.set(randCodes(2048, 12), 4096);
+  const index = buildIndex(t, starts([6144]), 8, 1);
+  const sat = saturatedIntervals(index, 64, 6144, 512);
+  assertEq(sat.length, 2);
+  assertEq(sat[0], 2048);
+  assertEq(sat[1], 4096);
+  // A cap above the repeat's occurrence count saturates nothing.
+  assertEq(saturatedIntervals(index, 4096, 6144, 512).length, 0);
+});
+
+test('kmer: spliceIntervals truncates at the window and inserts the replacement', () => {
+  const existing = Float64Array.from([100, 200, 300, 500, 800, 900]);
+  const out = spliceIntervals(existing, 150, 850, Float64Array.from([400, 450]));
+  assertEq(Array.from(out).join(','), '100,150,400,450,850,900');
+  // An empty replacement de-saturates the window entirely.
+  assertEq(spliceIntervals(out, 0, 1000, new Float64Array(0)).length, 0);
+  // Touching pieces merge.
+  const merged = spliceIntervals(Float64Array.from([0, 100]), 100, 200, Float64Array.from([100, 150]));
+  assertEq(Array.from(merged).join(','), '0,150');
 });

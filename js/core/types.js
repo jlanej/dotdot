@@ -47,6 +47,9 @@ import { F64Vec, F32Vec, U8Vec } from './vec.js';
  * @property {number} entries index entries (post-stride positions)
  * @property {Float64Array} occCount distinct k-mers per occurrence class
  *   (1..1023 exact; 1024 = ≥1024)
+ * @property {Float64Array} saturated merged target [start,end) pairs where
+ *   most k-mers were over the repeat cutoff — matches there were never
+ *   enumerated (see saturatedIntervals in core/kmer.js)
  */
 
 /**

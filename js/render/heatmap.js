@@ -88,31 +88,77 @@ export function binStretch(bin) {
 }
 
 /**
+ * @typedef {Object} SatMasks Occurrence-cap saturation, mapped to grid cells.
+ * A cell is "saturated" when its target column — and, on self-plots, its
+ * query row too — lies in a region whose k-mers were over the repeat cutoff:
+ * matches there were never enumerated, so an empty cell must not read as
+ * "no similarity". Painted as a diagonal hatch behind the data.
+ * @property {Uint8Array} maskX per-column flags, length nx
+ * @property {Uint8Array | null} maskY per-row flags (self-plots), length ny;
+ *   null = cross-plot, columns alone decide
+ * @property {number} r @property {number} g @property {number} b
+ * @property {number} a
+ */
+
+/**
+ * Mark grid cells covered by saturated intervals along one axis.
+ * @param {Float64Array} intervals [start,end) pairs in bp, ascending
+ * @param {number} w0 axis world start @param {number} w1 axis world end
+ * @param {number} n cells along the axis
+ * @returns {Uint8Array}
+ */
+export function buildSatMask(intervals, w0, w1, n) {
+  const mask = new Uint8Array(n);
+  const f = n / Math.max(w1 - w0, 1e-9);
+  for (let i = 0; i < intervals.length; i += 2) {
+    const c0 = Math.max(0, Math.floor((intervals[i] - w0) * f));
+    const c1 = Math.min(n, Math.ceil((intervals[i + 1] - w0) * f));
+    for (let c = c0; c < c1; c++) mask[c] = 1;
+  }
+  return mask;
+}
+
+/**
  * Paint a HeatBin into ImageData using an identity ramp (one-hue sequential
  * scale; empty cells stay transparent). The colormap is already built for
  * the active theme; its rows are 0 = forward identity ramp, 1 = reverse —
  * the heatmap uses the forward (blue) ramp as THE identity scale, stretched
  * over [lo, hi] (see binStretch).
  *
+ * Empty cells in saturated regions (see SatMasks) get a diagonal hatch
+ * instead of transparency; cells with data always keep their data color.
+ *
  * @param {HeatBin} bin
  * @param {Uint8Array | Uint8ClampedArray} cmData 256×4-row colormap pixels (RGBA)
  * @param {number} rampRow colormap row (0 = forward identity ramp)
  * @param {number} lo ramp start identity
  * @param {number} hi ramp end identity
+ * @param {SatMasks | null} [sat]
  * @returns {ImageData}
  */
-export function paintHeatmap(bin, cmData, rampRow, lo, hi) {
+export function paintHeatmap(bin, cmData, rampRow, lo, hi, sat = null) {
   const img = new ImageData(bin.nx, bin.ny);
   const denom = Math.max(hi - lo, 1e-6);
   for (let cy = 0; cy < bin.ny; cy++) {
     for (let cx = 0; cx < bin.nx; cx++) {
       const v = bin.grid[cy * bin.nx + cx];
-      if (v <= 0) continue;
-      const t = Math.min(1, Math.max(0, (v - lo) / denom));
-      const texel = (rampRow * 256 + Math.round(t * 255)) * 4;
       // ImageData rows run top-down; world y runs bottom-up — flip here so
       // the caller can draw the image directly.
       const o = ((bin.ny - 1 - cy) * bin.nx + cx) * 4;
+      if (v <= 0) {
+        if (
+          sat && sat.maskX[cx] === 1 && (sat.maskY === null || sat.maskY[cy] === 1) &&
+          ((cx + cy) & 3) < 2 // 45° stripes, two cells on / two off
+        ) {
+          img.data[o] = sat.r;
+          img.data[o + 1] = sat.g;
+          img.data[o + 2] = sat.b;
+          img.data[o + 3] = sat.a;
+        }
+        continue;
+      }
+      const t = Math.min(1, Math.max(0, (v - lo) / denom));
+      const texel = (rampRow * 256 + Math.round(t * 255)) * 4;
       img.data[o] = cmData[texel];
       img.data[o + 1] = cmData[texel + 1];
       img.data[o + 2] = cmData[texel + 2];

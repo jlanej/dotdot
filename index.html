@@ -144,6 +144,16 @@
             <option value="16"></option>
           </datalist>
         </div>
+        <div class="ctl">
+          <label for="in-budget">repeat budget <button class="help" data-help="budget">?</button></label>
+          <input type="text" id="in-budget" class="combo" list="dl-budget" value="auto" spellcheck="false" autocomplete="off" />
+          <datalist id="dl-budget">
+            <option value="auto"></option>
+            <option value="2×"></option>
+            <option value="4×"></option>
+            <option value="8×" label="RAM and minutes"></option>
+          </datalist>
+        </div>
         <button id="btn-compute" class="btn primary" disabled>Compute dot plot</button>
       </section>
 

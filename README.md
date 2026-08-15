@@ -295,11 +295,21 @@ CPU core — treat them as generous upper bounds on what a foreground tab does.
 - x = target position, y = query position, laid out per sequence
   (length-descending) with boundary gridlines and names on the axes.
 - Blue = forward matches; orange = reverse-complement matches (anti-diagonals
-  are inversions). Color depth encodes identity — darker is more identical in
-  light mode, brighter in dark mode.
+  are inversions). Color depth encodes **anchor identity** — the fraction of
+  each merged run covered by exact k-mer anchors (bridged mismatch/indel bases
+  count against it). It is deliberately neither alignment identity
+  (StainedGlass) nor k-mer ANI (ModDotPlot); it derives from exact occurrence
+  counts, no aligner involved. Darker is more identical in light mode,
+  brighter in dark mode.
 - Broken diagonals are indels; off-diagonal blocks are duplications or
   translocations; vertical/horizontal dashed columns are repeats hitting the
   occurrence cap.
+- **Diagonal hatching** in the heatmap view marks regions whose k-mers exceed
+  the repeat cutoff: matches there were **never enumerated**, so an empty
+  square means "not searched", not "not similar" — the classic dot-plot lie
+  in satellite DNA, refused. The scoreboard counts the capped fraction, and a
+  **repeat budget** control (2×/4×/8×) buys back depth where the repeat
+  period allows it.
 
 ## Architecture
 

@@ -312,6 +312,12 @@ input.combo:focus,
   display: inline-block;
 }
 
+/* Occurrence-cap saturation: diagonal hatch = "not searched", matching the
+   heatmap's in-plot painting. */
+.swatch-hatch {
+  background: repeating-linear-gradient(45deg, var(--muted) 0 2px, transparent 2px 5px);
+}
+
 /* ---- buttons ----------------------------------------------------------- */
 
 .btn {
