@@ -67,6 +67,7 @@ const chkFwd = /** @type {HTMLInputElement} */ ($('chk-fwd'));
 const chkRev = /** @type {HTMLInputElement} */ ($('chk-rev'));
 const selColorMode = /** @type {HTMLSelectElement} */ ($('sel-colormode'));
 const selDrawMode = /** @type {HTMLSelectElement} */ ($('sel-drawmode'));
+const inAniTiles = /** @type {HTMLInputElement} */ ($('in-anitiles'));
 const inWidth = /** @type {HTMLInputElement} */ ($('in-width'));
 const outWidth = $('out-width');
 const chkMinPx = /** @type {HTMLInputElement} */ ($('chk-minpx'));
@@ -1380,16 +1381,30 @@ function containTick(now) {
   submitContainment(w);
 }
 
+/**
+ * ANI tile-count field: 'auto' sizes to the display and a work budget; an
+ * explicit number (to 1024) is honored outright — export-grade, user-paid.
+ * @returns {number} 0 = auto
+ */
+function currentAniTiles() {
+  const t = inAniTiles.value.trim().toLowerCase();
+  if (t === '' || t === 'auto') return 0;
+  const v = Number(t);
+  return Number.isFinite(v) && v >= 64 ? Math.min(1024, Math.round(v)) : 0;
+}
+
 /** @param {{tx0:number,tx1:number,qy0:number,qy1:number}} window */
 function submitContainment(window) {
   if (!state.fileTarget) return;
   lastContain = { window };
   lastSubmitKind = 'contain';
   const sendData = workerGen !== dataGen;
+  const forceN = currentAniTiles();
   submit({
     type: 'containment',
     gen: dataGen,
-    opts: { k: currentK() },
+    // maxN: tiles beyond ~1 per 1.5 css px out-resolve the display (auto).
+    opts: { k: currentK(), maxN: Math.round(state.sizes.pw / 1.5), forceN: forceN || undefined },
     window,
     target: sendData ? state.fileTarget.bufs : null,
     query: sendData ? (state.fileQuery ? state.fileQuery.bufs : null) : null,
@@ -1434,6 +1449,9 @@ function annotationTick(now) {
 
 chkMult.addEventListener('change', () => {
   lastAnnoSig = '';
+});
+inAniTiles.addEventListener('change', () => {
+  lastContainSig = ''; // recompute on next settle when in ANI mode
 });
 
 /** Populate the sidebar track checkboxes for the current annotation genome. */
@@ -2762,6 +2780,7 @@ btnShare.addEventListener('click', async () => {
     q.set('sample', mo.sample === 'off' ? inSample.value.trim().toLowerCase() : String(mo.sample));
   }
   if (mo.budgetX !== 1) q.set('budget', mo.budgetX === Infinity ? 'off' : String(mo.budgetX));
+  if (currentAniTiles() > 0) q.set('anitiles', String(currentAniTiles()));
   const qs = q.toString();
   const url = `${location.origin}${location.pathname}${qs ? '?' + qs : ''}${hash}`;
   try {
@@ -2820,10 +2839,13 @@ function updateLegend() {
   swRev.style.background = cm.revFlat;
   legendEl.className = '';
   if (aniMode()) {
+    const res = heatBin
+      ? ` · ${heatBin.nx}×${heatBin.ny} tiles (${formatBp((heatBin.x1 - heatBin.x0) / heatBin.nx)} each — zoom to refine)`
+      : '';
     legendEl.innerHTML =
       `<div class="row"><span class="lab">tile</span><span class="ramp" style="background:${cm.rampCss(0)}"></span></div>` +
       `<div class="row"><span class="lab"></span><span class="lab">${(heatRange.lo * 100).toFixed(1)}% k-mer ANI</span><span style="flex:1"></span><span class="lab">${(heatRange.hi * 100).toFixed(1)}%</span></div>` +
-      `<div class="row"><span class="lab" style="white-space:normal">multiset containment — no occurrence cap, nothing skipped</span></div>`;
+      `<div class="row"><span class="lab" style="white-space:normal">multiset containment — no cap, nothing skipped${res}</span></div>`;
   } else if (heatMode()) {
     // The heatmap's ramp is contrast-stretched to the observed tile range.
     legendEl.innerHTML =
@@ -3218,6 +3240,13 @@ const HELP = {
     'included; it recomputes for the visible window when you rest (self-plots, ' +
     'alignment-free). Hover reads a tile; the aligner overlay still draws on top. PNG ' +
     'captures the heatmaps (SVG stays segment-only).',
+  anitiles:
+    'Grid resolution of the ANI heatmap. <b>auto</b> sizes to your display and a work budget ' +
+    '(satellite-dense windows may coarsen — the legend reports the tiles and their bp size). ' +
+    'An explicit count (to <b>1024</b>) is honored outright: finer than the screen for ' +
+    'publication export, at whatever compute time it takes. Each tile spans window÷N bases, ' +
+    'so <b>zooming in refines resolution for free</b> — the grid recomputes per view. Rides ' +
+    'share links (?anitiles=1024).',
   detail:
     'The exploration dial, always at hand. <b>Min segment length</b> filters what is <i>drawn</i> ' +
     '(never what was computed): low reveals the repeat fabric, high shows clean structure — drag ' +
@@ -3340,6 +3369,7 @@ async function initFromUrl() {
     const b = /** @type {string} */ (p.get('budget'));
     inBudget.value = /^\d/.test(b) ? `${b}×` : b;
   }
+  if (p.has('anitiles')) inAniTiles.value = p.get('anitiles') ?? inAniTiles.value;
   const urlRegion = p.get('region');
   if (urlRegion) queuedActions = { ...(queuedActions ?? {}), region: urlRegion };
   try {

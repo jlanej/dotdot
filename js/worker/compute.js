@@ -400,7 +400,7 @@ function computeKmer(id, tParsed, qParsed, optsIn, t0, window = null) {
  * Uses the same parse cache / needData protocol as kmer requests, builds a
  * windowed index spanning both tile ranges, and picks the tile resolution
  * from the occurrence histogram so the group walk fits a work budget.
- * @param {{id:number, gen?:number, target:ArrayBuffer[]|ArrayBuffer|null, query:ArrayBuffer[]|ArrayBuffer|null, opts:{k:number}, window:{tx0:number,tx1:number,qy0:number,qy1:number}}} req
+ * @param {{id:number, gen?:number, target:ArrayBuffer[]|ArrayBuffer|null, query:ArrayBuffer[]|ArrayBuffer|null, opts:{k:number, maxN?:number, forceN?:number}, window:{tx0:number,tx1:number,qy0:number,qy1:number}}} req
  */
 async function handleContainment(req) {
   const t0 = performance.now();
@@ -433,22 +433,34 @@ async function handleContainment(req) {
     (d, t) => progress(req.id, 'Indexing window', d / t), lo, hi,
   );
   // Resolution by work budget: a group touching many tiles costs
-  // nnz_x * nnz_y, so estimate from the occurrence histogram and take the
-  // finest grid that stays under ~4e8 min-ops.
+  // nnz_x * nnz_y. Estimate touched tiles with the birthday bound
+  // n·(1 − e^(−occ/n)) — much tighter than min(occ, n) for mid-depth
+  // families — and take the finest grid under the budget, capped at what
+  // the caller's viewport can display (no point out-resolving the screen).
   let n = 64;
-  for (const cand of [288, 224, 160, 128, 96]) {
-    let est = 0;
-    for (let o = 1; o < index.occCount.length; o++) {
-      const nnz = Math.min(o, cand);
-      est += index.occCount[o] * nnz * nnz;
-    }
-    if (est <= 4e8) {
-      n = cand;
-      break;
+  if (req.opts.forceN) {
+    // An explicit tile count is the user's call — no budget, no display cap
+    // (export-grade grids out-resolve the screen on purpose).
+    n = Math.max(64, Math.min(1024, Math.round(req.opts.forceN)));
+  } else {
+    const maxN = Math.max(96, Math.min(1024, Math.round(req.opts.maxN || 512)));
+    for (const cand of [1024, 768, 640, 512, 416, 320, 256, 192, 128, 96]) {
+      if (cand > maxN) continue;
+      let est = 0;
+      for (let o = 1; o < index.occCount.length; o++) {
+        const nnz = cand * (1 - Math.exp(-o / cand));
+        est += index.occCount[o] * nnz * nnz;
+      }
+      if (est <= 1.2e9) {
+        n = cand;
+        break;
+      }
     }
   }
-  progress(req.id, 'Comparing tiles', 0.6);
-  const { grid } = containmentGrid(index, w.tx0, w.tx1, w.qy0, w.qy1, n, n, k);
+  const { grid } = containmentGrid(
+    index, w.tx0, w.tx1, w.qy0, w.qy1, n, n, k,
+    (d, t) => progress(req.id, `Comparing ${n}×${n} tiles`, d / t),
+  );
   post(
     {
       id: req.id,

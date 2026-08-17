@@ -187,6 +187,16 @@
           </select>
         </div>
         <div class="ctl">
+          <label for="in-anitiles">ANI tiles <button class="help" data-help="anitiles">?</button></label>
+          <input type="text" id="in-anitiles" class="combo" list="dl-anitiles" value="auto" spellcheck="false" autocomplete="off" />
+          <datalist id="dl-anitiles">
+            <option value="auto"></option>
+            <option value="256"></option>
+            <option value="512"></option>
+            <option value="1024" label="finest — slower"></option>
+          </datalist>
+        </div>
+        <div class="ctl">
           <label for="sel-colormode">color by <button class="help" data-help="colorby">?</button></label>
           <select id="sel-colormode">
             <option value="0" selected>identity</option>

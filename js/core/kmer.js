@@ -830,10 +830,11 @@ export function pickMaxOcc(index, qLen, tLen, qSample, userCapEntries, budget = 
  * @param {number} y0 @param {number} y1 query-axis range
  * @param {number} nx @param {number} ny
  * @param {number} kEff word size for the ANI exponent
+ * @param {(done: number, total: number) => void} [onProgress]
  * @returns {{grid: Float32Array, nx: number, ny: number}} row-major [y][x];
  *   0 where either tile holds no indexed k-mers
  */
-export function containmentGrid(index, x0, x1, y0, y1, nx, ny, kEff) {
+export function containmentGrid(index, x0, x1, y0, y1, nx, ny, kEff, onProgress) {
   const acc = new Float64Array(nx * ny);
   const totX = new Float64Array(nx);
   const totY = new Float64Array(ny);
@@ -846,6 +847,7 @@ export function containmentGrid(index, x0, x1, y0, y1, nx, ny, kEff) {
   const { kmers, pos, bucketStarts } = index;
   const nBuckets = bucketStarts.length - 1;
   for (let b = 0; b < nBuckets; b++) {
+    if (onProgress && (b & 0xfff) === 0) onProgress(b, nBuckets);
     const hiB = bucketStarts[b + 1];
     let g = bucketStarts[b];
     while (g < hiB) {
