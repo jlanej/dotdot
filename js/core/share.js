@@ -12,7 +12,7 @@
  * @property {number} y0 @property {number} y1 world y range
  * @property {string} len min-segment-length field text ('off' or a bp expression)
  * @property {number} ident min identity 0..1
- * @property {'seg'|'heat'} draw
+ * @property {'seg'|'heat'|'ani'} draw
  * @property {boolean} fwd @property {boolean} rev
  * @property {boolean} auto auto-refine enabled
  */
@@ -27,7 +27,7 @@ export function buildViewHash(v) {
   ];
   if (v.len && v.len !== 'off' && v.len !== '0') parts.push(`len=${encodeURIComponent(v.len)}`);
   if (v.ident > 0) parts.push(`ident=${v.ident.toFixed(3)}`);
-  if (v.draw === 'heat') parts.push('draw=heat');
+  if (v.draw === 'heat' || v.draw === 'ani') parts.push(`draw=${v.draw}`);
   if (!v.fwd || !v.rev) parts.push(`str=${(v.fwd ? 'f' : '') + (v.rev ? 'r' : '')}`);
   if (v.auto) parts.push('auto=1');
   return '#' + parts.join('&');
@@ -61,7 +61,7 @@ export function parseViewHash(hash) {
     y1,
     len: q.get('len') ?? 'off',
     ident: Number.isFinite(ident) ? Math.min(1, Math.max(0, ident)) : 0,
-    draw: q.get('draw') === 'heat' ? 'heat' : 'seg',
+    draw: q.get('draw') === 'heat' || q.get('draw') === 'ani' ? /** @type {'heat'|'ani'} */ (q.get('draw')) : 'seg',
     fwd: str === null ? true : str.includes('f'),
     rev: str === null ? true : str.includes('r'),
     auto: q.get('auto') === '1',

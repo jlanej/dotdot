@@ -811,6 +811,98 @@ export function pickMaxOcc(index, qLen, tLen, qSample, userCapEntries, budget = 
 }
 
 /**
+ * Cap-free tile-pair identity straight from exact k-mer counts — the escape
+ * from the occurrence-cap trap. For every (x-tile, y-tile) pair, the
+ * multiset containment of their k-mer contents
+ *   c = Σ_k min(count_x(k), count_y(k)) / min(total_x, total_y)
+ * mapped to the Mash/ModDotPlot ANI estimator c^(1/k). Nothing is
+ * enumerated and nothing skipped: cost per k-mer group is
+ * (x-tiles touched) × (y-tiles touched) — bounded by tile counts, never by
+ * occurrence counts, so a satellite array prices like unique sequence.
+ * Count-weighted (multiset) containment is deliberate: set containment
+ * saturates in tandem arrays, which ModDotPlot's authors name as their own
+ * limitation — exact counts are the accuracy edge of an exact index.
+ *
+ * Both tile ranges address the same coordinate space (self-plots).
+ *
+ * @param {KmerIndex} index index whose positions cover both ranges (global coords)
+ * @param {number} x0 @param {number} x1 target-axis range
+ * @param {number} y0 @param {number} y1 query-axis range
+ * @param {number} nx @param {number} ny
+ * @param {number} kEff word size for the ANI exponent
+ * @returns {{grid: Float32Array, nx: number, ny: number}} row-major [y][x];
+ *   0 where either tile holds no indexed k-mers
+ */
+export function containmentGrid(index, x0, x1, y0, y1, nx, ny, kEff) {
+  const acc = new Float64Array(nx * ny);
+  const totX = new Float64Array(nx);
+  const totY = new Float64Array(ny);
+  const cntX = new Float64Array(nx);
+  const cntY = new Float64Array(ny);
+  const touchedX = new Int32Array(nx);
+  const touchedY = new Int32Array(ny);
+  const fx = nx / Math.max(x1 - x0, 1e-9);
+  const fy = ny / Math.max(y1 - y0, 1e-9);
+  const { kmers, pos, bucketStarts } = index;
+  const nBuckets = bucketStarts.length - 1;
+  for (let b = 0; b < nBuckets; b++) {
+    const hiB = bucketStarts[b + 1];
+    let g = bucketStarts[b];
+    while (g < hiB) {
+      const kv = kmers[g];
+      let e = g + 1;
+      while (e < hiB && kmers[e] === kv) e++;
+      let nX = 0;
+      let nY = 0;
+      for (let j = g; j < e; j++) {
+        const p = pos[j];
+        if (p >= x0 && p < x1) {
+          const t = Math.min(nx - 1, ((p - x0) * fx) | 0);
+          if (cntX[t] === 0) touchedX[nX++] = t;
+          cntX[t]++;
+        }
+        if (p >= y0 && p < y1) {
+          const t = Math.min(ny - 1, ((p - y0) * fy) | 0);
+          if (cntY[t] === 0) touchedY[nY++] = t;
+          cntY[t]++;
+        }
+      }
+      if (nX > 0 && nY > 0) {
+        for (let a = 0; a < nX; a++) {
+          const tx = touchedX[a];
+          const cx = cntX[tx];
+          for (let b2 = 0; b2 < nY; b2++) {
+            const ty = touchedY[b2];
+            const cy = cntY[ty];
+            acc[ty * nx + tx] += cx < cy ? cx : cy;
+          }
+        }
+      }
+      for (let a = 0; a < nX; a++) {
+        totX[touchedX[a]] += cntX[touchedX[a]];
+        cntX[touchedX[a]] = 0;
+      }
+      for (let a = 0; a < nY; a++) {
+        totY[touchedY[a]] += cntY[touchedY[a]];
+        cntY[touchedY[a]] = 0;
+      }
+      g = e;
+    }
+  }
+  const grid = new Float32Array(nx * ny);
+  const inv = 1 / Math.max(1, kEff);
+  for (let ty = 0; ty < ny; ty++) {
+    for (let tx = 0; tx < nx; tx++) {
+      const denom = Math.min(totX[tx], totY[ty]);
+      if (denom <= 0) continue;
+      const c = acc[ty * nx + tx] / denom;
+      if (c > 0) grid[ty * nx + tx] = Math.pow(c, inv);
+    }
+  }
+  return { grid, nx, ny };
+}
+
+/**
  * First index in [lo, hi) whose value is >= x.
  * @param {Uint32Array | Float64Array} a @param {number} lo @param {number} hi @param {number} x
  */

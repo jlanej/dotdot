@@ -1,6 +1,6 @@
 // @ts-check
 import { test, assert, assertEq, assertClose, mulberry32 } from './harness.js';
-import { buildIndex, matchStrand, pickMaxOcc, pickDensity, estimateAnchors, saturatedIntervals, spliceIntervals, multiplicityProfile, KMER_DEFAULTS } from '../js/core/kmer.js';
+import { buildIndex, matchStrand, pickMaxOcc, pickDensity, estimateAnchors, saturatedIntervals, spliceIntervals, multiplicityProfile, containmentGrid, KMER_DEFAULTS } from '../js/core/kmer.js';
 import { reverseComplement } from '../js/core/dna.js';
 import { F64Vec, F32Vec, U8Vec } from '../js/core/vec.js';
 
@@ -461,4 +461,33 @@ test('kmer: estimateAnchors sums the volume the cap admits', () => {
   assertEq(estimateAnchors(idx, 100, 1), 1100); // classes 1 + 10
   assertEq(estimateAnchors(idx, Infinity, 1), 1001100); // tail included
   assertEq(estimateAnchors(idx, Infinity, 2), 2002200); // scale multiplies
+});
+
+test('kmer: containmentGrid — cap-free tile identity from exact counts', () => {
+  // Four 1 kb tiles: [0]=A, [1]=perfect copy of A, [2]=A at ~5% divergence,
+  // [3]=unrelated random. No occurrence cap anywhere in this path.
+  const A = randCodes(1024, 91);
+  const t = new Uint8Array(4096);
+  t.set(A, 0);
+  t.set(A, 1024);
+  const Am = A.slice();
+  const rng = mulberry32(92);
+  for (let i = 0; i < 1024; i++) {
+    if (rng() < 0.05) Am[i] = (Am[i] + 1 + ((rng() * 3) | 0)) & 3;
+  }
+  t.set(Am, 2048);
+  t.set(randCodes(1024, 93), 3072);
+  const index = buildIndex(t, starts([4096]), 12, 1);
+  const g = containmentGrid(index, 0, 4096, 0, 4096, 4, 4, 12);
+  /** @param {number} x @param {number} y */
+  const at = (x, y) => g.grid[y * 4 + x];
+  assert(at(0, 0) > 0.999, `self ${at(0, 0)}`);
+  assert(at(1, 0) > 0.999, `copy ${at(1, 0)}`);
+  assert(at(2, 0) > 0.9 && at(2, 0) < 0.99, `5% diverged ~0.95, got ${at(2, 0)}`);
+  assert(at(3, 0) < 0.8, `unrelated background ${at(3, 0)}`);
+  // Symmetric ranges give a symmetric grid.
+  assert(Math.abs(at(2, 0) - at(0, 2)) < 1e-6);
+  // Off-diagonal windows: x and y tile ranges are independent.
+  const off = containmentGrid(index, 0, 1024, 1024, 2048, 1, 1, 12);
+  assert(off.grid[0] > 0.999, `windowed copy ${off.grid[0]}`);
 });

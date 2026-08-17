@@ -9,7 +9,7 @@
 import { parseFasta, mergeParsedFasta } from '../io/fasta.js';
 import { maybeGunzip } from '../io/compress.js';
 import { parsePaf, parsePafOnto } from '../io/paf.js';
-import { buildIndex, matchStrand, pickMaxOcc, pickDensity, estimateAnchors, saturatedIntervals, multiplicityProfile, KMER_DEFAULTS, EXACT_MAX_BP, EXACT_HARD_BP } from '../core/kmer.js';
+import { buildIndex, matchStrand, pickMaxOcc, pickDensity, estimateAnchors, saturatedIntervals, multiplicityProfile, containmentGrid, KMER_DEFAULTS, EXACT_MAX_BP, EXACT_HARD_BP } from '../core/kmer.js';
 import { reverseComplement } from '../core/dna.js';
 import { newSegmentVecs, vecsToSegments, segmentBuffers } from '../core/types.js';
 
@@ -35,6 +35,7 @@ self.onmessage = async (ev) => {
   const req = /** @type {any} */ (ev).data;
   try {
     if (req.type === 'kmer') await handleKmer(req);
+    else if (req.type === 'containment') await handleContainment(req);
     else if (req.type === 'paf') await handlePaf(req);
     else if (req.type === 'pafOverlay') await handlePafOverlay(req);
     else throw new Error(`Unknown request type: ${req?.type}`);
@@ -391,6 +392,75 @@ function computeKmer(id, tParsed, qParsed, optsIn, t0, window = null) {
     },
   };
   post({ id, type: 'result', data }, segmentBuffers(data.segments));
+}
+
+/**
+ * ANI heatmap request: tile-pair identity by multiset containment over the
+ * visible window of a self-plot — no anchors, no occurrence cap, no trap.
+ * Uses the same parse cache / needData protocol as kmer requests, builds a
+ * windowed index spanning both tile ranges, and picks the tile resolution
+ * from the occurrence histogram so the group walk fits a work budget.
+ * @param {{id:number, gen?:number, target:ArrayBuffer[]|ArrayBuffer|null, query:ArrayBuffer[]|ArrayBuffer|null, opts:{k:number}, window:{tx0:number,tx1:number,qy0:number,qy1:number}}} req
+ */
+async function handleContainment(req) {
+  const t0 = performance.now();
+  /** @type {{catalog: any, codes: Uint8Array}} */
+  let tParsed;
+  if (!req.target) {
+    if (parsedCache && parsedCache.gen === req.gen) {
+      tParsed = parsedCache.tParsed;
+    } else {
+      post({ id: req.id, type: 'needData', gen: req.gen });
+      return;
+    }
+  } else {
+    progress(req.id, 'Reading files', 0);
+    tParsed = await parseSlot(req.target, 'target');
+    const qBase = req.query ? await parseSlot(req.query, 'query') : null;
+    parsedCache = { gen: req.gen ?? -1, tParsed, qParsed: qBase };
+  }
+  const w = req.window;
+  const k = Math.min(26, Math.max(4, Math.round(req.opts.k || 15)));
+  const lo = Math.max(0, Math.floor(Math.min(w.tx0, w.qy0)));
+  const hi = Math.min(tParsed.codes.length, Math.ceil(Math.max(w.tx1, w.qy1)));
+  const span = Math.max(1, hi - lo);
+  // Stride subsamples both tiles' multisets identically, so the containment
+  // ratio is robust to it — index budget applies as usual.
+  const stride = Math.max(1, Math.ceil(span / 48_000_000));
+  progress(req.id, 'Indexing window', 0);
+  const index = buildIndex(
+    tParsed.codes, tParsed.catalog.starts, k, stride,
+    (d, t) => progress(req.id, 'Indexing window', d / t), lo, hi,
+  );
+  // Resolution by work budget: a group touching many tiles costs
+  // nnz_x * nnz_y, so estimate from the occurrence histogram and take the
+  // finest grid that stays under ~4e8 min-ops.
+  let n = 64;
+  for (const cand of [288, 224, 160, 128, 96]) {
+    let est = 0;
+    for (let o = 1; o < index.occCount.length; o++) {
+      const nnz = Math.min(o, cand);
+      est += index.occCount[o] * nnz * nnz;
+    }
+    if (est <= 4e8) {
+      n = cand;
+      break;
+    }
+  }
+  progress(req.id, 'Comparing tiles', 0.6);
+  const { grid } = containmentGrid(index, w.tx0, w.tx1, w.qy0, w.qy1, n, n, k);
+  post(
+    {
+      id: req.id,
+      type: 'containResult',
+      grid,
+      nx: n,
+      ny: n,
+      window: w,
+      elapsedMs: performance.now() - t0,
+    },
+    [grid.buffer],
+  );
 }
 
 /**

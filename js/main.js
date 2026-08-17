@@ -237,6 +237,10 @@ let dataGen = 0; // bumped whenever the target/query file slots change
 let workerGen = -1; // the generation the compute worker has parsed & cached
 /** @type {{opts: object, window: {tx0:number,tx1:number,qy0:number,qy1:number} | null} | null} */
 let lastKmer = null;
+/** @type {{window: {tx0:number,tx1:number,qy0:number,qy1:number}} | null} */
+let lastContain = null;
+/** Which request kind a worker needData reply should resubmit. */
+let lastSubmitKind = 'kmer';
 
 function spawnWorker() {
   workerGen = -1;
@@ -258,6 +262,9 @@ function spawnWorker() {
     } else if (msg.type === 'regionResult') {
       setComputing(false);
       onRegionRefined(msg);
+    } else if (msg.type === 'containResult') {
+      setComputing(false);
+      onContainResult(msg);
     } else if (msg.type === 'confirmExact') {
       // Exact mode over the consent threshold: ask with the real numbers
       // instead of refusing. The parse cache makes either answer cheap.
@@ -276,7 +283,8 @@ function spawnWorker() {
         queuedActions = { overlay: boundActions.overlay, region: boundActions.region };
         boundActions = null;
       }
-      if (lastKmer) submitKmer(lastKmer.opts, lastKmer.window);
+      if (lastSubmitKind === 'contain' && lastContain) submitContainment(lastContain.window);
+      else if (lastKmer) submitKmer(lastKmer.opts, lastKmer.window);
       else setComputing(false);
     } else if (msg.type === 'error') {
       setComputing(false);
@@ -679,10 +687,11 @@ function onData(data, reqId = -1) {
     chkFwd.checked = v.fwd;
     chkRev.checked = v.rev;
     chkAutoRefine.checked = v.auto;
-    if (v.draw === 'heat') selDrawMode.value = 'heat';
+    if (v.draw === 'heat' || v.draw === 'ani') selDrawMode.value = v.draw;
     const { pw, ph } = state.sizes;
     state.view.fitRect(v.x0, v.y0, v.x1, v.y1, pw, ph);
     if (v.draw === 'heat') rebuildHeatmap();
+    if (v.draw === 'ani') lastContainSig = ''; // containTick requests on settle
     updateLegend();
   }
   markDirty();
@@ -701,6 +710,7 @@ function submitKmer(opts, window = null) {
     return;
   }
   lastKmer = { opts, window };
+  lastSubmitKind = 'kmer';
   const sendData = workerGen !== dataGen;
   submit({
     type: 'kmer',
@@ -1254,6 +1264,16 @@ function heatMode() {
   return selDrawMode.value === 'heat';
 }
 
+/** ANI heatmap: tile-pair identity by multiset containment — no cap, no trap. */
+function aniMode() {
+  return selDrawMode.value === 'ani';
+}
+
+/** Either image-underlay mode: base segments hide, heatCanvas draws. */
+function heatLike() {
+  return heatMode() || aniMode();
+}
+
 /** Is this world point inside the current bin's saturation hatch region? */
 /** @param {number} wx @param {number} wy */
 function heatSatAt(wx, wy) {
@@ -1319,14 +1339,82 @@ function heatmapTick(now) {
 selDrawMode.addEventListener('change', () => {
   if (heatMode()) {
     rebuildHeatmap();
+  } else if (aniMode()) {
+    // Self-plots only for now: containment needs k-mer counts for both axes,
+    // and the index covers the target.
+    if (state.fileQuery || (state.data && state.data.source !== 'kmer')) {
+      toast('The ANI heatmap works on alignment-free self-plots (no query FASTA) for now.');
+      selDrawMode.value = 'seg';
+    } else {
+      heatBin = null;
+      heatSat = null;
+      lastContainSig = ''; // request on next settle tick
+    }
   } else {
     heatBin = null;
-  heatSat = null;
+    heatSat = null;
   }
   setHover(null, null);
   updateLegend();
   markDirty();
 });
+
+// ---- ANI (containment) heatmap: settle watcher + request lifecycle --------
+let lastContainSig = '';
+
+/** @param {number} now */
+function containTick(now) {
+  if (!aniMode() || !state.data || !state.view || state.computing) return;
+  if (state.fileQuery || state.data.source !== 'kmer' || !state.fileTarget) return;
+  if (now - viewSettledAt < 500 || lastViewSig === lastContainSig || lastViewSig === '') return;
+  lastContainSig = lastViewSig;
+  const { pw, ph } = state.sizes;
+  const b = state.view.bounds(pw, ph);
+  const w = {
+    tx0: Math.max(0, Math.floor(b.x0)),
+    tx1: Math.min(state.data.target.total, Math.ceil(b.x1)),
+    qy0: Math.max(0, Math.floor(b.y0)),
+    qy1: Math.min(state.data.query.total, Math.ceil(b.y1)),
+  };
+  if (w.tx1 - w.tx0 < 100 || w.qy1 - w.qy0 < 100) return;
+  submitContainment(w);
+}
+
+/** @param {{tx0:number,tx1:number,qy0:number,qy1:number}} window */
+function submitContainment(window) {
+  if (!state.fileTarget) return;
+  lastContain = { window };
+  lastSubmitKind = 'contain';
+  const sendData = workerGen !== dataGen;
+  submit({
+    type: 'containment',
+    gen: dataGen,
+    opts: { k: currentK() },
+    window,
+    target: sendData ? state.fileTarget.bufs : null,
+    query: sendData ? (state.fileQuery ? state.fileQuery.bufs : null) : null,
+  });
+  workerGen = dataGen;
+}
+
+/**
+ * @param {{grid: Float32Array, nx: number, ny: number, window: {tx0:number,tx1:number,qy0:number,qy1:number}, elapsedMs: number}} msg
+ */
+function onContainResult(msg) {
+  if (!state.data || !aniMode()) return;
+  const w = msg.window;
+  heatBin = { grid: msg.grid, nx: msg.nx, ny: msg.ny, x0: w.tx0, x1: w.tx1, y0: w.qy0, y1: w.qy1 };
+  heatSat = null; // nothing was skipped — that is the point
+  heatRange = binStretch(heatBin);
+  const cm = buildColormap(mode);
+  const img = paintHeatmap(heatBin, cm.data, 0, heatRange.lo, heatRange.hi);
+  if (!heatCanvas) heatCanvas = document.createElement('canvas');
+  heatCanvas.width = msg.nx;
+  heatCanvas.height = msg.ny;
+  /** @type {CanvasRenderingContext2D} */ (heatCanvas.getContext('2d')).putImageData(img, 0, 0);
+  updateLegend();
+  markDirty();
+}
 
 /** Settle watcher for annotation fetches (rides the frame loop). @param {number} now */
 function annotationTick(now) {
@@ -1808,6 +1896,7 @@ function frame() {
   autoRefineTick(performance.now());
   annotationTick(performance.now());
   heatmapTick(performance.now());
+  containTick(performance.now());
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
@@ -1817,7 +1906,7 @@ function draw(dpr) {
   const { cssW, cssH, pw, ph } = state.sizes;
   const d = displayOpts();
 
-  const heat = heatMode() && heatBin && heatCanvas;
+  const heat = heatLike() && heatBin && heatCanvas;
   // Belt and braces for crispness: zoomed far past the current bin's
   // resolution (anchored image stretching >6×), rebin on the next tick even
   // if the settle plumbing missed it.
@@ -1829,7 +1918,8 @@ function draw(dpr) {
       heatKickPending = true;
       setTimeout(() => {
         heatKickPending = false;
-        rebuildHeatmap();
+        if (aniMode()) lastContainSig = ''; // fresh containment on next settle
+        else rebuildHeatmap();
       }, 0);
     }
   }
@@ -1906,6 +1996,9 @@ Object.defineProperty(globalThis, '__dotdotAutoTick', {
 });
 Object.defineProperty(globalThis, '__dotdotAnnoTick', {
   value: (/** @type {number} */ now) => annotationTick(now),
+});
+Object.defineProperty(globalThis, '__dotdotContainTick', {
+  value: (/** @type {number} */ now) => containTick(now),
 });
 
 // Full-quality frame capture for automation/screenshots: renders the plot at
@@ -2154,7 +2247,7 @@ setInterval(() => {
     setHover(null, null);
     return;
   }
-  if (heatMode()) {
+  if (heatLike()) {
     // Cell readout instead of segment picking.
     setHover(null, null);
     if (heatBin) {
@@ -2163,7 +2256,9 @@ setInterval(() => {
       const v = heatAt(heatBin, wx, wy);
       if (v > 0) {
         hoverCard.className = '';
-        hoverCard.textContent = `tile anchor identity ≥ ${(v * 100).toFixed(1)}% (ramp ${(heatRange.lo * 100).toFixed(1)}–${(heatRange.hi * 100).toFixed(1)}%)`;
+        hoverCard.textContent = aniMode()
+          ? `tile k-mer ANI ~${(v * 100).toFixed(1)}% (containment; ramp ${(heatRange.lo * 100).toFixed(1)}–${(heatRange.hi * 100).toFixed(1)}%)`
+          : `tile anchor identity ≥ ${(v * 100).toFixed(1)}% (ramp ${(heatRange.lo * 100).toFixed(1)}–${(heatRange.hi * 100).toFixed(1)}%)`;
       } else if (heatSatAt(wx, wy)) {
         hoverCard.className = '';
         hoverCard.textContent =
@@ -2171,7 +2266,7 @@ setInterval(() => {
           'Refine the view or raise the repeat budget.';
       } else {
         hoverCard.className = 'empty';
-        hoverCard.textContent = 'empty tile';
+        hoverCard.textContent = aniMode() ? 'no shared k-mers' : 'empty tile';
       }
     }
     return;
@@ -2649,7 +2744,7 @@ btnShare.addEventListener('click', async () => {
     len: inMinLen.value.trim() || 'off',
     // The slider's floor position means "off" — only a raised value travels.
     ident: Number(inMinIdent.value) > state.identLo ? Number(inMinIdent.value) : 0,
-    draw: heatMode() ? 'heat' : 'seg',
+    draw: heatMode() ? 'heat' : aniMode() ? 'ani' : 'seg',
     fwd: chkFwd.checked,
     rev: chkRev.checked,
     auto: chkAutoRefine.checked,
@@ -2684,7 +2779,7 @@ btnShare.addEventListener('click', async () => {
 
 btnSvg.addEventListener('click', () => {
   if (!state.data || !state.view) return;
-  if (heatMode()) {
+  if (heatLike()) {
     toast('SVG exports the segment view — switch “draw as” to segments (PNG captures the heatmap).');
     return;
   }
@@ -2724,7 +2819,12 @@ function updateLegend() {
   swFwd.style.background = cm.fwdFlat;
   swRev.style.background = cm.revFlat;
   legendEl.className = '';
-  if (heatMode()) {
+  if (aniMode()) {
+    legendEl.innerHTML =
+      `<div class="row"><span class="lab">tile</span><span class="ramp" style="background:${cm.rampCss(0)}"></span></div>` +
+      `<div class="row"><span class="lab"></span><span class="lab">${(heatRange.lo * 100).toFixed(1)}% k-mer ANI</span><span style="flex:1"></span><span class="lab">${(heatRange.hi * 100).toFixed(1)}%</span></div>` +
+      `<div class="row"><span class="lab" style="white-space:normal">multiset containment — no occurrence cap, nothing skipped</span></div>`;
+  } else if (heatMode()) {
     // The heatmap's ramp is contrast-stretched to the observed tile range.
     legendEl.innerHTML =
       `<div class="row"><span class="lab">tile</span><span class="ramp" style="background:${cm.rampCss(0)}"></span></div>` +
@@ -3111,9 +3211,13 @@ const HELP = {
     'the visible matches into tiles colored by the best anchor identity seen in each (the ' +
     'StainedGlass-style satellite figure): dense repeat fabric becomes a readable identity ' +
     'landscape. Regions above the repeat cutoff wear a <b>diagonal hatch</b> — matches there ' +
-    'were never enumerated, so blank ≠ dissimilar. Tiles re-bin when you rest; strand ' +
-    'checkboxes choose what is binned; hover reads a tile; the aligner overlay still draws on ' +
-    'top. PNG captures it (SVG stays segment-only).',
+    'were never enumerated, so blank ≠ dissimilar. <b>ANI heatmap</b> escapes the cap ' +
+    'entirely: every tile pair is compared by the <b>multiset containment</b> of its exact ' +
+    'k-mer counts, mapped to ANI = c^(1/k) (the Mash/ModDotPlot estimator, made ' +
+    'count-weighted) — no matches enumerated, no occurrence cap, no hatch, satellite cores ' +
+    'included; it recomputes for the visible window when you rest (self-plots, ' +
+    'alignment-free). Hover reads a tile; the aligner overlay still draws on top. PNG ' +
+    'captures the heatmaps (SVG stays segment-only).',
   detail:
     'The exploration dial, always at hand. <b>Min segment length</b> filters what is <i>drawn</i> ' +
     '(never what was computed): low reveals the repeat fabric, high shows clean structure — drag ' +
