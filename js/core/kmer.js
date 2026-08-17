@@ -72,6 +72,44 @@ export const KMER_DEFAULTS = Object.freeze({
 
 export const MAX_SEGMENTS = 16_000_000;
 
+/** Largest target an exact (sampling off) compute may index: every k-mer of
+ * the worked extent lives in RAM, ~8–12 bytes per base. */
+export const EXACT_MAX_BP = 128_000_000;
+
+/**
+ * Resolve the sampling mode into concrete densities. 'off' is TRUE full
+ * density — every target k-mer indexed (stride 1) and every query position
+ * tested — refused with guidance when the target extent exceeds
+ * EXACT_MAX_BP, never silently degraded (a strided index enforces
+ * occurrence caps in sampled units, which is exactly what "off" must not
+ * do). 'auto' and numbers thin the query side; the target strides
+ * independently past 48 Mb to keep the index in budget.
+ *
+ * @param {'auto'|'off'|number|undefined} sample
+ * @param {number} strideFloor user stride option (>= 1)
+ * @param {number} tLenEff target bases in the worked extent
+ * @param {number} qLenEff query bases in the worked extent
+ * @returns {{stride: number, qSample: number}}
+ */
+export function pickDensity(sample, strideFloor, tLenEff, qLenEff) {
+  if (sample === 'off') {
+    if (tLenEff > EXACT_MAX_BP) {
+      throw new Error(
+        `Exact mode (sampling off) indexes every target k-mer — ${Math.round(tLenEff / 1e6)} Mb ` +
+          `is over the ${EXACT_MAX_BP / 1e6} Mb in-browser ceiling. Zoom under it and Refine, ` +
+          'or use auto/numbered sampling.',
+      );
+    }
+    return { stride: 1, qSample: 1 };
+  }
+  const autoStride = Math.max(1, Math.ceil(tLenEff / 48_000_000));
+  const stride = Math.max(strideFloor, autoStride);
+  const autoQ = Math.max(1, Math.ceil(qLenEff / 48_000_000));
+  const qSample =
+    sample == null || sample === 'auto' ? autoQ : Math.max(1, Math.floor(sample));
+  return { stride, qSample };
+}
+
 const PROGRESS_EVERY = 1 << 21;
 
 /**

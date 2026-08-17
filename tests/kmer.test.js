@@ -1,6 +1,6 @@
 // @ts-check
 import { test, assert, assertEq, assertClose, mulberry32 } from './harness.js';
-import { buildIndex, matchStrand, pickMaxOcc, saturatedIntervals, spliceIntervals, multiplicityProfile, KMER_DEFAULTS } from '../js/core/kmer.js';
+import { buildIndex, matchStrand, pickMaxOcc, pickDensity, saturatedIntervals, spliceIntervals, multiplicityProfile, KMER_DEFAULTS } from '../js/core/kmer.js';
 import { reverseComplement } from '../js/core/dna.js';
 import { F64Vec, F32Vec, U8Vec } from '../js/core/vec.js';
 
@@ -369,4 +369,24 @@ test('kmer: multiplicityProfile maps repeat depth and unique territory', () => {
   // (copy estimate is (occ-1)*stride + 1).
   const strided = multiplicityProfile(buildIndex(t, starts([6144]), 8, 2), 6144, 512);
   assert(strided.mult[0] < 1.2, `strided flank mult ${strided.mult[0]}`);
+});
+
+test('kmer: pickDensity — off is true full density, guarded; auto/number stride the target', () => {
+  // 'off': both axes exact, regardless of size (under the ceiling).
+  const exact = pickDensity('off', 1, 51_300_000, 51_300_000);
+  assertEq(exact.stride, 1);
+  assertEq(exact.qSample, 1);
+  // Over the ceiling it refuses with guidance rather than silently striding.
+  let threw = '';
+  try { pickDensity('off', 1, 248_000_000, 248_000_000); } catch (e) { threw = String(e); }
+  assert(threw.includes('128'), `expected ceiling in message, got: ${threw}`);
+  // 'auto' and explicit numbers keep the 48 Mb index budget: target strides.
+  const auto = pickDensity('auto', 1, 51_300_000, 51_300_000);
+  assertEq(auto.stride, 2);
+  assertEq(auto.qSample, 2);
+  const pinned = pickDensity(1, 1, 51_300_000, 51_300_000);
+  assertEq(pinned.stride, 2); // the old "full density" — query-side only
+  assertEq(pinned.qSample, 1);
+  // User stride floor is honored outside exact mode.
+  assertEq(pickDensity('auto', 4, 1_000_000, 1_000_000).stride, 4);
 });

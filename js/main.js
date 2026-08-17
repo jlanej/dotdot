@@ -482,14 +482,16 @@ function currentK() {
 }
 
 /**
- * Sampling field: 'auto' follows input size; 'off'/'1' forces full density;
- * any number is honored exactly.
- * @returns {'auto' | number}
+ * Sampling field: 'auto' follows input size; 'off' (or 'exact'/'full') is
+ * TRUE full density — every target k-mer indexed and every query position
+ * tested (the worker refuses over 128 Mb rather than silently striding);
+ * a number thins the query side only.
+ * @returns {'auto' | 'off' | number}
  */
 function currentSample() {
   const t = inSample.value.trim().toLowerCase();
   if (t === '' || t === 'auto') return 'auto';
-  if (t === 'off') return 1;
+  if (t === 'off' || t === 'exact' || t === 'full') return 'off';
   const v = parseBp(t);
   return Number.isFinite(v) && v >= 1 ? Math.round(v) : 'auto';
 }
@@ -2408,8 +2410,10 @@ function refineView(auto = false) {
   // Full density plus a raised repeat budget: an explicit refine means
   // "spend the time here" — at full fit this deepens the WHOLE plot
   // (satellite cores especially), not just re-derives it. A user-raised
-  // budget only ever raises it further.
-  submitKmer({ ...matchOpts(), sample: 1, budgetX: Math.max(4, currentBudget()) }, { tx0, tx1, qy0, qy1 });
+  // budget only ever raises it further, and a user in exact mode stays
+  // exact (window permitting).
+  const sample = currentSample() === 'off' ? 'off' : 1;
+  submitKmer({ ...matchOpts(), sample, budgetX: Math.max(4, currentBudget()) }, { tx0, tx1, qy0, qy1 });
 }
 
 // ---- auto-refine: settle-watcher over the view -----------------------------
@@ -2948,10 +2952,14 @@ const HELP = {
     'Drop merged runs shorter than this at compute time ("off", "30", "1kb", any value). At ' +
     'genome scale a small evidence filter applies automatically.',
   sample:
-    '<b>auto</b> thins matching on big inputs (test every Nth query position, sized to the ' +
-    'data) so chromosomes compute in minutes. Set a number to pin it, or <b>off</b> for full ' +
-    'density — exact but slow at chromosome scale. Tip: keep auto for the overview, zoom in, ' +
-    'then hit <b>Refine view</b> to recompute just the window at full detail.',
+    '<b>auto</b> thins matching on big inputs (every Nth query position, and past 48 Mb the ' +
+    'target index strides too) so chromosomes compute in minutes. A <b>number</b> pins the ' +
+    'query-side interval only — the target may still stride, and the result note says when. ' +
+    '<b>off</b> is <b>true full density</b>: every target k-mer indexed, every query position ' +
+    'tested, occurrence caps enforced in exact counts — allowed up to 128 Mb of target (the ' +
+    'index lives in RAM; ~0.5 GB per 50 Mb), refused with guidance beyond that, never silently ' +
+    'degraded. Tip: keep auto for the overview, zoom in, then <b>Refine view</b> for exact ' +
+    'windows.',
   annotations:
     'Axis-margin lanes. <b>k-mer multiplicity</b> comes from this plot’s own index — no ' +
     'download, works for any FASTA: ink darkens with log copy number (full ink ≈ 300×+), and ' +

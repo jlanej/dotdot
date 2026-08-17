@@ -9,7 +9,7 @@
 import { parseFasta, mergeParsedFasta } from '../io/fasta.js';
 import { maybeGunzip } from '../io/compress.js';
 import { parsePaf, parsePafOnto } from '../io/paf.js';
-import { buildIndex, matchStrand, pickMaxOcc, saturatedIntervals, multiplicityProfile, KMER_DEFAULTS } from '../core/kmer.js';
+import { buildIndex, matchStrand, pickMaxOcc, pickDensity, saturatedIntervals, multiplicityProfile, KMER_DEFAULTS } from '../core/kmer.js';
 import { reverseComplement } from '../core/dna.js';
 import { newSegmentVecs, vecsToSegments, segmentBuffers } from '../core/types.js';
 
@@ -124,7 +124,7 @@ function selfPlotView(tParsed) {
  * @param {number} id
  * @param {{catalog: any, codes: Uint8Array}} tParsed
  * @param {{catalog: any, codes: Uint8Array}} qParsed
- * @param {object & {sample?: 'auto'|number}} optsIn
+ * @param {object & {sample?: 'auto'|'off'|number}} optsIn
  * @param {number} t0
  * @param {RefineWindow | null} [window]
  */
@@ -134,18 +134,16 @@ function computeKmer(id, tParsed, qParsed, optsIn, t0, window = null) {
   // query-side lookups the same way — random-access lookups are the wall at
   // chromosome scale, and run merging bridges the sampling holes. All auto
   // values derive from the *worked* extent, so a refine window computes at
-  // full density even when the whole chromosome would not.
+  // full density even when the whole chromosome would not. 'off' is TRUE
+  // full density on both axes (or a refusal — never a silent stride).
   const tLenEff = window ? Math.max(1, window.tx1 - window.tx0) : tParsed.codes.length;
   const qLenEff = window ? Math.max(1, window.qy1 - window.qy0) : qParsed.codes.length;
-  const autoStride = Math.max(1, Math.ceil(tLenEff / 48_000_000));
-  const stride = Math.max(opts.stride, autoStride);
-  const autoQSample = Math.max(1, Math.ceil(qLenEff / 48_000_000));
-  // 'auto' (or absent) follows size; an explicit number is honored exactly —
-  // including 1 = full density at the user's own risk/time.
-  const qSample =
-    opts.sample == null || opts.sample === 'auto'
-      ? autoQSample
-      : Math.max(1, Math.floor(opts.sample));
+  const { stride, qSample } = pickDensity(
+    /** @type {'auto'|'off'|number|undefined} */ (opts.sample),
+    Math.max(1, opts.stride),
+    tLenEff,
+    qLenEff,
+  );
 
   const qTotal = qParsed.catalog.total;
   const tTotal = tParsed.catalog.total;
