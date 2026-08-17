@@ -390,3 +390,19 @@ test('kmer: pickDensity — off is true full density, guarded; auto/number strid
   // User stride floor is honored outside exact mode.
   assertEq(pickDensity('auto', 4, 1_000_000, 1_000_000).stride, 4);
 });
+
+test('kmer: pickDensity exact ceiling is user-raisable, clamped to the engine limit', () => {
+  // 248 Mb refuses at the default ceiling, and the message teaches the raise.
+  let msg = '';
+  try { pickDensity('off', 1, 248_000_000, 248_000_000); } catch (e) { msg = String(e); }
+  assert(msg.includes('off 248M'), `refusal should teach the override, got: ${msg}`);
+  assert(msg.includes('GB'), 'refusal should estimate RAM');
+  // A raised ceiling admits it, truly exact.
+  const raised = pickDensity('off', 1, 248_000_000, 248_000_000, 512_000_000);
+  assertEq(raised.stride, 1);
+  assertEq(raised.qSample, 1);
+  // The engine allocation limit is a hard wall: no ceiling passes ~1 Gb.
+  let hard = '';
+  try { pickDensity('off', 1, 2_000_000_000, 2_000_000_000, 8_000_000_000); } catch (e) { hard = String(e); }
+  assert(hard.includes('1000 Mb'), `hard limit should hold, got: ${hard}`);
+});

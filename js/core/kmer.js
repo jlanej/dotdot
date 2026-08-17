@@ -72,32 +72,46 @@ export const KMER_DEFAULTS = Object.freeze({
 
 export const MAX_SEGMENTS = 16_000_000;
 
-/** Largest target an exact (sampling off) compute may index: every k-mer of
- * the worked extent lives in RAM, ~8–12 bytes per base. */
+/** Default largest target an exact (sampling off) compute may index: every
+ * k-mer of the worked extent lives in RAM, ~8–12 bytes per base. The user
+ * may raise it ("off 512M") up to the engine's allocation limit. */
 export const EXACT_MAX_BP = 128_000_000;
+
+/** Absolute exact-mode ceiling: past ~1 Gb the position array alone nears
+ * the 4 GB TypedArray limit — allocation, not policy. */
+export const EXACT_HARD_BP = 1_000_000_000;
 
 /**
  * Resolve the sampling mode into concrete densities. 'off' is TRUE full
  * density — every target k-mer indexed (stride 1) and every query position
- * tested — refused with guidance when the target extent exceeds
- * EXACT_MAX_BP, never silently degraded (a strided index enforces
- * occurrence caps in sampled units, which is exactly what "off" must not
- * do). 'auto' and numbers thin the query side; the target strides
- * independently past 48 Mb to keep the index in budget.
+ * tested — refused with guidance when the target extent exceeds the
+ * ceiling, never silently degraded (a strided index enforces occurrence
+ * caps in sampled units, which is exactly what "off" must not do). The
+ * ceiling defaults to EXACT_MAX_BP and is user-raisable per compute
+ * ("off 512M") for deep drills and publication figures — RAM and minutes
+ * are the user's to spend, silent approximation is not. 'auto' and numbers
+ * thin the query side; the target strides independently past 48 Mb to keep
+ * the index in budget.
  *
  * @param {'auto'|'off'|number|undefined} sample
  * @param {number} strideFloor user stride option (>= 1)
  * @param {number} tLenEff target bases in the worked extent
  * @param {number} qLenEff query bases in the worked extent
+ * @param {number} [maxBp] user-raised exact ceiling (clamped to sane bounds)
  * @returns {{stride: number, qSample: number}}
  */
-export function pickDensity(sample, strideFloor, tLenEff, qLenEff) {
+export function pickDensity(sample, strideFloor, tLenEff, qLenEff, maxBp) {
   if (sample === 'off') {
-    if (tLenEff > EXACT_MAX_BP) {
+    const ceiling = Math.min(EXACT_HARD_BP, Math.max(1_000_000, maxBp ?? EXACT_MAX_BP));
+    if (tLenEff > ceiling) {
+      const gbLo = ((tLenEff * 8) / 1e9).toFixed(1);
+      const gbHi = ((tLenEff * 12) / 1e9).toFixed(1);
       throw new Error(
-        `Exact mode (sampling off) indexes every target k-mer — ${Math.round(tLenEff / 1e6)} Mb ` +
-          `is over the ${EXACT_MAX_BP / 1e6} Mb in-browser ceiling. Zoom under it and Refine, ` +
-          'or use auto/numbered sampling.',
+        `Exact mode indexes every target k-mer — ${Math.round(tLenEff / 1e6)} Mb needs ` +
+          `~${gbLo}–${gbHi} GB of index RAM, over the current ${Math.round(ceiling / 1e6)} Mb ` +
+          `ceiling. Raise it if this machine can pay (type "off ${Math.ceil(tLenEff / 1e6)}M" ` +
+          `in sampling, engine limit ${EXACT_HARD_BP / 1e6} Mb), zoom in and Refine, or use ` +
+          'auto/numbered sampling.',
       );
     }
     return { stride: 1, qSample: 1 };

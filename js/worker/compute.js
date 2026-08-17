@@ -143,6 +143,7 @@ function computeKmer(id, tParsed, qParsed, optsIn, t0, window = null) {
     Math.max(1, opts.stride),
     tLenEff,
     qLenEff,
+    /** @type {number|undefined} */ (/** @type {any} */ (opts).exactMaxBp),
   );
 
   const qTotal = qParsed.catalog.total;

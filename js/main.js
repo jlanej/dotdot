@@ -482,18 +482,31 @@ function currentK() {
 }
 
 /**
- * Sampling field: 'auto' follows input size; 'off' (or 'exact'/'full') is
- * TRUE full density — every target k-mer indexed and every query position
- * tested (the worker refuses over 128 Mb rather than silently striding);
- * a number thins the query side only.
- * @returns {'auto' | 'off' | number}
+ * Sampling field grammar: 'auto' follows input size; 'off' (or
+ * 'exact'/'full') is TRUE full density — every target k-mer indexed and
+ * every query position tested, guarded at 128 Mb of target; an optional
+ * size raises that ceiling for this machine's RAM ("off 512M" — deep
+ * drills, publication figures); a bare number thins the query side only.
+ * @returns {{mode: 'auto' | 'off' | number, exactMaxBp?: number}}
  */
-function currentSample() {
+function parseSampleField() {
   const t = inSample.value.trim().toLowerCase();
-  if (t === '' || t === 'auto') return 'auto';
-  if (t === 'off' || t === 'exact' || t === 'full') return 'off';
+  if (t === '' || t === 'auto') return { mode: 'auto' };
+  const m = /^(?:off|exact|full)(?:[:\s]+(.+))?$/.exec(t);
+  if (m) {
+    if (m[1]) {
+      const cap = parseBp(m[1]);
+      if (Number.isFinite(cap) && cap > 0) return { mode: 'off', exactMaxBp: Math.round(cap) };
+    }
+    return { mode: 'off' };
+  }
   const v = parseBp(t);
-  return Number.isFinite(v) && v >= 1 ? Math.round(v) : 'auto';
+  return { mode: Number.isFinite(v) && v >= 1 ? Math.round(v) : 'auto' };
+}
+
+/** @returns {'auto' | 'off' | number} */
+function currentSample() {
+  return parseSampleField().mode;
 }
 
 /**
@@ -509,12 +522,14 @@ function currentBudget() {
 }
 
 function matchOpts() {
+  const sample = parseSampleField();
   return {
     k: currentK(),
     maxGap: parseLenOff(inGap.value, 64),
     maxOcc: Math.max(1, parseLenOff(inMaxOcc.value, 200) || 200),
     minRunLen: parseLenOff(inMinRun.value, 0),
-    sample: currentSample(),
+    sample: sample.mode,
+    exactMaxBp: sample.exactMaxBp,
     stride: 1,
     budgetX: currentBudget(),
   };
@@ -2629,7 +2644,11 @@ btnShare.addEventListener('click', async () => {
   if (mo.maxGap !== 64) q.set('gap', String(mo.maxGap));
   if (mo.maxOcc !== 200) q.set('occ', String(mo.maxOcc));
   if (mo.minRunLen !== 0) q.set('minrun', String(mo.minRunLen));
-  if (mo.sample !== 'auto') q.set('sample', String(mo.sample));
+  // The raw field text travels so exact mode keeps its raised ceiling
+  // ("off 512M") — the recipient's box gets the same words.
+  if (mo.sample !== 'auto') {
+    q.set('sample', mo.sample === 'off' ? inSample.value.trim().toLowerCase() : String(mo.sample));
+  }
   if (mo.budgetX !== 1) q.set('budget', String(mo.budgetX));
   const qs = q.toString();
   const url = `${location.origin}${location.pathname}${qs ? '?' + qs : ''}${hash}`;
@@ -2956,10 +2975,12 @@ const HELP = {
     'target index strides too) so chromosomes compute in minutes. A <b>number</b> pins the ' +
     'query-side interval only — the target may still stride, and the result note says when. ' +
     '<b>off</b> is <b>true full density</b>: every target k-mer indexed, every query position ' +
-    'tested, occurrence caps enforced in exact counts — allowed up to 128 Mb of target (the ' +
-    'index lives in RAM; ~0.5 GB per 50 Mb), refused with guidance beyond that, never silently ' +
-    'degraded. Tip: keep auto for the overview, zoom in, then <b>Refine view</b> for exact ' +
-    'windows.',
+    'tested, occurrence caps enforced in exact counts — guarded at 128 Mb of target because ' +
+    'the index lives in RAM (~0.5 GB per 50 Mb, about double for k &gt; 16). For deep drills ' +
+    'and publication figures, raise the ceiling yourself: <b>off 512M</b> allows exact up to ' +
+    '512 Mb on this machine’s RAM and travels in share links (engine limit 1 Gb). Refused ' +
+    'with guidance past the ceiling, never silently degraded. Tip: keep auto for the ' +
+    'overview, zoom in, then <b>Refine view</b> for exact windows.',
   annotations:
     'Axis-margin lanes. <b>k-mer multiplicity</b> comes from this plot’s own index — no ' +
     'download, works for any FASTA: ink darkens with log copy number (full ink ≈ 300×+), and ' +
