@@ -422,7 +422,11 @@ export function matchStrand(index, qCodes, qStarts, qTotal, tStarts, tTotal, opt
     const atEdge = q0 <= edgeLo || q1 >= edgeHi;
     if (len < minRunLen && !atEdge) return;
     if (out.x.n >= MAX_SEGMENTS) {
-      throw new Error('Too many match segments — raise k, lower max occurrences, or add a stride.');
+      throw new Error(
+        'Too many match segments (16M wall) — raise min match length, restore an occurrence ' +
+          'cap or sampling, or zoom in. The heatmap and multiplicity lane show full repeat ' +
+          'depth without enumerating it.',
+      );
     }
     out.x.push(t0);
     out.y.push(strandFlag === 0 ? q0 : qTotal - q1 - k);
@@ -583,6 +587,26 @@ export function matchStrand(index, qCodes, qStarts, qTotal, tStarts, tTotal, opt
   for (let j = 0; j < cap; j++) {
     if (keys[j] !== 0) emit(runQ0[j], runQ1[j], runT0[j], runGap[j]);
   }
+}
+
+/**
+ * Estimated anchor pairs one strand will enumerate at an effective cap —
+ * the same occ² volume model pickMaxOcc budgets with, summed over the
+ * classes the cap admits (the ≥1024 tail bin included once the cap clears
+ * it). This is what lets a compute predict "quadratic satellite grind"
+ * BEFORE matching starts instead of hitting the segment wall after minutes.
+ *
+ * @param {KmerIndex} index
+ * @param {number} maxOccEntries effective per-group entry cap (Infinity = none)
+ * @param {number} scale qLen·stride / tLen / qSample (see pickMaxOcc)
+ */
+export function estimateAnchors(index, maxOccEntries, scale) {
+  let est = 0;
+  for (let o = 1; o <= 1024; o++) {
+    if (o > maxOccEntries) break;
+    est += index.occSumSq[o] * scale;
+  }
+  return est;
 }
 
 /**

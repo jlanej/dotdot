@@ -1,6 +1,6 @@
 // @ts-check
 import { test, assert, assertEq, assertClose, mulberry32 } from './harness.js';
-import { buildIndex, matchStrand, pickMaxOcc, pickDensity, saturatedIntervals, spliceIntervals, multiplicityProfile, KMER_DEFAULTS } from '../js/core/kmer.js';
+import { buildIndex, matchStrand, pickMaxOcc, pickDensity, estimateAnchors, saturatedIntervals, spliceIntervals, multiplicityProfile, KMER_DEFAULTS } from '../js/core/kmer.js';
 import { reverseComplement } from '../js/core/dna.js';
 import { F64Vec, F32Vec, U8Vec } from '../js/core/vec.js';
 
@@ -447,4 +447,18 @@ test('kmer: pickMaxOcc with the budget off never tightens', () => {
   assertEq(pickMaxOcc(idx, 1e6, 1e6, 1, 500, Infinity), 500);
   // The same histogram under a finite budget still tightens.
   assert(Number.isFinite(pickMaxOcc(idx, 1e6, 1e6, 1, Infinity, 60e6)));
+});
+
+test('kmer: estimateAnchors sums the volume the cap admits', () => {
+  const occSumSq = new Float64Array(1025);
+  occSumSq[1] = 100;
+  occSumSq[10] = 1000;
+  occSumSq[1024] = 1e6; // the >=1024 tail bin
+  const idx = /** @type {import('../js/core/kmer.js').KmerIndex} */ (
+    /** @type {any} */ ({ occSumSq, stride: 1 })
+  );
+  assertEq(estimateAnchors(idx, 5, 1), 100); // cap 5 admits only class 1
+  assertEq(estimateAnchors(idx, 100, 1), 1100); // classes 1 + 10
+  assertEq(estimateAnchors(idx, Infinity, 1), 1001100); // tail included
+  assertEq(estimateAnchors(idx, Infinity, 2), 2002200); // scale multiplies
 });

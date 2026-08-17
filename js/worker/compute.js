@@ -9,7 +9,7 @@
 import { parseFasta, mergeParsedFasta } from '../io/fasta.js';
 import { maybeGunzip } from '../io/compress.js';
 import { parsePaf, parsePafOnto } from '../io/paf.js';
-import { buildIndex, matchStrand, pickMaxOcc, pickDensity, saturatedIntervals, multiplicityProfile, KMER_DEFAULTS, EXACT_MAX_BP, EXACT_HARD_BP } from '../core/kmer.js';
+import { buildIndex, matchStrand, pickMaxOcc, pickDensity, estimateAnchors, saturatedIntervals, multiplicityProfile, KMER_DEFAULTS, EXACT_MAX_BP, EXACT_HARD_BP } from '../core/kmer.js';
 import { reverseComplement } from '../core/dna.js';
 import { newSegmentVecs, vecsToSegments, segmentBuffers } from '../core/types.js';
 
@@ -218,6 +218,17 @@ function computeKmer(id, tParsed, qParsed, optsIn, t0, window = null) {
     index, qLenEff, tLenEff, qSample, userCapEntries,
     60e6 * (/** @type {any} */ (opts).budgetX || 1),
   );
+  // Anchor-volume pre-flight: with the caps loosened or off, satellite
+  // windows go quadratic. The histogram predicts the grind — ask before
+  // matching starts, not after minutes at the segment wall.
+  {
+    const scale = (qLenEff * stride) / Math.max(tLenEff, 1) / Math.max(qSample, 1);
+    const estTotal = 2 * estimateAnchors(index, maxOccEff, scale); // both strands
+    if (estTotal > 2e9 && !(/** @type {any} */ (opts).volumeConfirmed)) {
+      post({ id, type: 'confirmVolume', estAnchors: estTotal, tLenBp: tLenEff });
+      return;
+    }
+  }
   // Sampled runs cannot represent one- or two-anchor matches faithfully
   // anyway (sub-pixel at this scale) — require a few co-linear anchors of
   // evidence instead of letting tens of millions of repeat fragments exhaust

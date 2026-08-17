@@ -263,6 +263,11 @@ function spawnWorker() {
       // instead of refusing. The parse cache makes either answer cheap.
       setComputing(false);
       askExactConfirm(msg);
+    } else if (msg.type === 'confirmVolume') {
+      // The occurrence histogram predicts a quadratic satellite grind —
+      // ask before the minutes are spent, with a one-click fix.
+      setComputing(false);
+      askVolumeConfirm(msg);
     } else if (msg.type === 'needData') {
       // The worker's parse cache missed (e.g. fresh spawn) — resend with
       // full buffers, carrying any bound post-load actions forward.
@@ -2864,6 +2869,47 @@ function askExactConfirm(m) {
     inSample.value = 'auto';
     if (lastKmer) {
       submitKmer({ ...lastKmer.opts, sample: 'auto', exactMaxBp: undefined }, lastKmer.window);
+    }
+  });
+}
+
+/**
+ * Anchor-volume pre-flight ask: this window's repeat structure predicts a
+ * quadratic enumeration. Proceed grinds it out (and may hit the 16M-segment
+ * wall, which has its own error); the fix button keeps runs ≥ 300 bp —
+ * HOR-scale structure without monomer confetti — at similar compute time.
+ * @param {{estAnchors: number, tLenBp: number}} m
+ */
+function askVolumeConfirm(m) {
+  const minRunNow = parseLenOff(inMinRun.value, 0);
+  const fixLen = Math.max(300, minRunNow);
+  confirmPop.innerHTML =
+    `<div class="stats-card">` +
+    `<div class="stats-head"><h3>Deep repeat enumeration ahead</h3>` +
+    `<button class="stats-close" aria-label="close">×</button></div>` +
+    `<p class="stats-sum">At these settings this ${formatBp(m.tLenBp)} window enumerates ` +
+    `roughly <b>${formatCount(m.estAnchors)} anchor pairs</b> — satellite arrays are quadratic. ` +
+    `Expect a long grind, and likely the 16M-segment wall. The heatmap and k-mer multiplicity ` +
+    `lane already show this structure without enumerating it.</p>` +
+    `<div class="confirm-row">` +
+    `<button id="cv-minlen" class="btn primary">Keep matches ≥ ${formatBp(fixLen)}</button>` +
+    `<button id="cv-go" class="btn">Enumerate everything anyway</button>` +
+    `</div>` +
+    `<p class="stats-sum">The length filter drops monomer-scale confetti at emit time — ` +
+    `HOR-scale structure stays, segment counts collapse; compute time is similar either way.</p></div>`;
+  confirmPop.hidden = false;
+  confirmPop.querySelector('.stats-close')?.addEventListener('click', () => {
+    confirmPop.hidden = true;
+  });
+  confirmPop.querySelector('#cv-go')?.addEventListener('click', () => {
+    confirmPop.hidden = true;
+    if (lastKmer) submitKmer({ ...lastKmer.opts, volumeConfirmed: true }, lastKmer.window);
+  });
+  confirmPop.querySelector('#cv-minlen')?.addEventListener('click', () => {
+    confirmPop.hidden = true;
+    inMinRun.value = String(fixLen);
+    if (lastKmer) {
+      submitKmer({ ...lastKmer.opts, minRunLen: fixLen, volumeConfirmed: true }, lastKmer.window);
     }
   });
 }
