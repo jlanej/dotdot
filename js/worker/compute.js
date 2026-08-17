@@ -183,8 +183,11 @@ function computeKmer(id, tParsed, qParsed, optsIn, t0, window = null) {
   // Translate the user's occurrence cap (original-target semantics) into an
   // index-entry cap, then tighten it against the anchor budget using the
   // index's own occurrence histogram — repeat families, not sequence length,
-  // are what melt genome-scale runs.
-  const userCapEntries = Math.max(1, Math.floor(opts.maxOcc / stride));
+  // are what melt genome-scale runs. Infinity = "off": no occurrence
+  // masking; only the anchor budget may tighten, and says so when it does.
+  const userCapEntries = Number.isFinite(opts.maxOcc)
+    ? Math.max(1, Math.floor(opts.maxOcc / stride))
+    : Infinity;
   // Explicit refines may carry a raised anchor budget (opts.budgetX): the
   // user asked for depth, so the repeat cutoff loosens accordingly.
   const maxOccEff = pickMaxOcc(

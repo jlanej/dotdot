@@ -406,3 +406,32 @@ test('kmer: pickDensity exact ceiling is user-raisable, clamped to the engine li
   try { pickDensity('off', 1, 2_000_000_000, 2_000_000_000, 8_000_000_000); } catch (e) { hard = String(e); }
   assert(hard.includes('1000 Mb'), `hard limit should hold, got: ${hard}`);
 });
+
+test('kmer: maxOcc off (Infinity) disables occurrence masking end to end', () => {
+  // The repeat-explosion fixture that a cap of 20 suppresses: uncapped, all
+  // 60x60 tandem anchors enumerate.
+  const unit = randCodes(20, 71);
+  const t = new Uint8Array(20 * 60);
+  for (let i = 0; i < 60; i++) t.set(unit, i * 20);
+  const open = match(t, starts([1200]), unit.slice(), starts([20]), { maxOcc: Infinity });
+  assert(open.length > 50, `uncapped should enumerate the family, got ${open.length}`);
+});
+
+test('kmer: pickMaxOcc honors the full user cap when the tail bin fits the budget', () => {
+  /** @param {number} tail occSumSq mass in the >=1024 bin */
+  const mk = (tail) => {
+    const occSumSq = new Float64Array(1025);
+    for (let o = 1; o <= 1024; o++) occSumSq[o] = 1e3;
+    occSumSq[1024] = tail;
+    return /** @type {import('../js/core/kmer.js').KmerIndex} */ (
+      /** @type {any} */ ({ occSumSq, stride: 1 })
+    );
+  };
+  // Whole histogram (tail included) fits: 'off' stays off, big finite caps
+  // are honored above the 1024-class ceiling.
+  assertEq(pickMaxOcc(mk(1e3), 1e6, 1e6, 1, Infinity, 30e6), Infinity);
+  assertEq(pickMaxOcc(mk(1e3), 1e6, 1e6, 1, 5000, 30e6), 5000);
+  // A tail the budget cannot pay still tightens to a finite cutoff.
+  const tightened = pickMaxOcc(mk(1e15), 1e6, 1e6, 1, Infinity, 30e6);
+  assert(Number.isFinite(tightened) && tightened <= 1023, `expected finite, got ${tightened}`);
+});

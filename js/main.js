@@ -521,12 +521,23 @@ function currentBudget() {
   return Number.isFinite(v) && v >= 1 ? Math.min(64, v) : 1;
 }
 
+/**
+ * Occurrence-cap field: 'off'/'none' disables repeat masking entirely
+ * (Infinity — the anchor budget remains the volume guard); empty or
+ * garbage falls back to the 200 default; numbers are exact.
+ */
+function currentMaxOcc() {
+  const t = inMaxOcc.value.trim().toLowerCase();
+  if (t === 'off' || t === 'none' || t === '∞') return Infinity;
+  return Math.max(1, parseLenOff(t, 200) || 200);
+}
+
 function matchOpts() {
   const sample = parseSampleField();
   return {
     k: currentK(),
     maxGap: parseLenOff(inGap.value, 64),
-    maxOcc: Math.max(1, parseLenOff(inMaxOcc.value, 200) || 200),
+    maxOcc: currentMaxOcc(),
     minRunLen: parseLenOff(inMinRun.value, 0),
     sample: sample.mode,
     exactMaxBp: sample.exactMaxBp,
@@ -2642,7 +2653,7 @@ btnShare.addEventListener('click', async () => {
   const mo = /** @type {any} */ (matchOpts());
   if (mo.k !== 15) q.set('k', String(mo.k));
   if (mo.maxGap !== 64) q.set('gap', String(mo.maxGap));
-  if (mo.maxOcc !== 200) q.set('occ', String(mo.maxOcc));
+  if (mo.maxOcc !== 200) q.set('occ', mo.maxOcc === Infinity ? 'off' : String(mo.maxOcc));
   if (mo.minRunLen !== 0) q.set('minrun', String(mo.minRunLen));
   // The raw field text travels so exact mode keeps its raised ceiling
   // ("off 512M") — the recipient's box gets the same words.
@@ -2951,15 +2962,17 @@ const HELP = {
     'segments; the bridged mismatch shows up as reduced identity.',
   occ:
     'Skip k-mers occurring more often than this in the target — repeat masking. Any number ' +
-    'works; presets are suggestions. At genome scale the cutoff also auto-tightens using the ' +
-    'index’s own occurrence histogram, so Alu-scale repeat families can’t flood the plot. ' +
-    'Where the cutoff bites hardest, the plot says so: regions whose k-mers were mostly ' +
-    'over-cap are <b>hatched in the heatmap view</b> and counted in the scoreboard — an empty ' +
-    'square there means “not searched”, not “not similar”. Two fine points: the count is ' +
-    '<b>forward-strand</b> (reverse matches look up the reverse-complemented query in the same ' +
-    'index, so on a self-plot at cap 1 a unique inverted pair still draws — each direction is ' +
-    'unique); and on strided indexes the cap is enforced in sampled units, so tiny caps round ' +
-    '(a note says when; Refine view is exact).',
+    'works; presets are suggestions; <b>off</b> disables occurrence masking entirely (the ' +
+    'anchor budget then becomes the only limiter — raise the <b>repeat budget</b> to push it, ' +
+    'and expect long computes on satellite-heavy inputs). At genome scale the cutoff also ' +
+    'auto-tightens using the index’s own occurrence histogram, so Alu-scale repeat families ' +
+    'can’t flood the plot. Where the cutoff bites hardest, the plot says so: regions whose ' +
+    'k-mers were mostly over-cap are <b>hatched in the heatmap view</b> and counted in the ' +
+    'scoreboard — an empty square there means “not searched”, not “not similar”. Two fine ' +
+    'points: the count is <b>forward-strand</b> (reverse matches look up the ' +
+    'reverse-complemented query in the same index, so on a self-plot at cap 1 a unique ' +
+    'inverted pair still draws — each direction is unique); and on strided indexes the cap is ' +
+    'enforced in sampled units, so tiny caps round (a note says when; Refine view is exact).',
   budget:
     'How many match anchors a compute may spend (~60M per strand at <b>auto</b>). The budget is ' +
     'what auto-tightens the repeat cutoff on repeat-rich inputs; <b>2×/4×/8×</b> multiply it, ' +

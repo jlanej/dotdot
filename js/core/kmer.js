@@ -753,24 +753,36 @@ export function spliceIntervals(existing, lo, hi, replacement) {
  * ~occ*stride * qLen/tLen sampled query positions, each emitting occ
  * anchors -> occ^2 * stride scaling (occSumSq counts post-stride entries).
  *
+ * The histogram's last class bins everything >= 1024 together, so when the
+ * walk accepts that final bin the WHOLE tail's volume fits the budget and
+ * the user's cap is honored in full — including Infinity, which is how
+ * "skip k-mers: off" becomes genuinely no occurrence masking (the anchor
+ * budget stays as the volume guard and tightens only when it must, which
+ * the result note and saturation hatch then disclose).
+ *
  * @param {KmerIndex} index
  * @param {number} qLen query bases scanned per strand
  * @param {number} tLen target bases represented by the index (pre-stride)
  * @param {number} qSample query sampling interval
- * @param {number} userCapEntries hard upper bound (user maxOcc / stride)
+ * @param {number} userCapEntries hard upper bound (user maxOcc / stride;
+ *   Infinity = no occurrence cap requested)
  * @param {number} [budget] anchors per strand
  */
 export function pickMaxOcc(index, qLen, tLen, qSample, userCapEntries, budget = 60e6) {
   const scale = (qLen * (index.stride || 1)) / Math.max(tLen, 1) / Math.max(qSample, 1);
-  const cap = Math.max(1, Math.floor(userCapEntries));
+  const cap = userCapEntries === Infinity ? Infinity : Math.max(1, Math.floor(userCapEntries));
   let acc = 0;
   let chosen = 1;
-  for (let o = 1; o <= cap && o <= 1024; o++) {
+  for (let o = 1; o <= 1024; o++) {
+    if (o > cap) break;
     const add = index.occSumSq[o] * scale;
     if (acc + add > budget && o > 4) break;
     acc += add;
     chosen = o;
   }
+  // Accepted the >=1024 bin: nothing was excluded by budget, honor the cap
+  // as asked (finite values above 1024 included, or Infinity for "off").
+  if (chosen === 1024) return cap;
   return chosen;
 }
 
