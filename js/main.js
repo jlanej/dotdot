@@ -59,6 +59,7 @@ const inMinLen = /** @type {HTMLInputElement} */ ($('in-minlen'));
 const inMinLenRange = /** @type {HTMLInputElement} */ ($('in-minlen-range'));
 const outMinLen = $('out-minlen');
 const chkAutoRefine = /** @type {HTMLInputElement} */ ($('chk-autorefine'));
+const chkMult = /** @type {HTMLInputElement} */ ($('chk-mult'));
 const panelDetail = $('panel-detail');
 const inSample = /** @type {HTMLInputElement} */ ($('in-sample'));
 const inBudget = /** @type {HTMLInputElement} */ ($('in-budget'));
@@ -219,6 +220,7 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
   theme = readTheme();
   renderer.setTheme(mode);
   updateLegend();
+  lastAnnoSig = ''; // multiplicity-lane ink is theme-mixed; rebuild
   markDirty();
 });
 
@@ -988,6 +990,74 @@ function activeTracks() {
   return annoGenome().tracks.filter((t) => annoEnabled.get(t.id) ?? t.on);
 }
 
+/** The k-mer multiplicity lane: on, and this plot's index shipped a profile. */
+function activeMult() {
+  return chkMult.checked && !!state.data?.stats.kmer?.profile;
+}
+
+/**
+ * Ink color for a log-multiplicity fraction t (0 = unique, 1 = ≥~300×),
+ * as an "r,g,b" AnnoItem string for the active theme.
+ * @param {number} t
+ */
+function multRamp(t) {
+  const [a, b] =
+    mode === 'dark'
+      ? [[70, 76, 90], [212, 220, 235]]
+      : [[210, 214, 222], [40, 46, 58]];
+  const mix = (/** @type {number} */ i) => Math.round(a[i] + (b[i] - a[i]) * t);
+  return `${mix(0)},${mix(1)},${mix(2)}`;
+}
+
+/**
+ * Synthesize the k-mer multiplicity lane for one axis from the compute's
+ * index profile — repeat structure at every level, in every draw mode.
+ * Ink darkens with log copy number; unique-anchor territory stays blank.
+ * World coordinates: the profile is indexed by global target position, which
+ * IS both axes' world space (the query lane is only offered on self-plots).
+ * @param {number} w0 @param {number} w1 visible world range
+ * @param {number} pxSpan axis pixels, for bucket coarsening
+ * @returns {import('./render/axes.js').AnnoLane | null}
+ */
+function multLane(w0, w1, pxSpan) {
+  const km = state.data?.stats.kmer;
+  const prof = km?.profile;
+  if (!prof || w1 <= w0) return null;
+  // ≥2px buckets: tiles merge as you zoom out, stay hoverable zoomed in.
+  const bucketBp = Math.max(prof.tileBp, ((w1 - w0) / Math.max(pxSpan, 1)) * 2);
+  const approx = (km?.stride ?? 1) > 1 ? '~' : '';
+  /** @type {import('./render/axes.js').AnnoItem[]} */
+  const items = [];
+  for (let s = Math.max(0, Math.floor(w0 / bucketBp) * bucketBp); s < w1; s += bucketBp) {
+    const e = Math.min(w1, s + bucketBp);
+    const t0 = Math.max(0, Math.floor(s / prof.tileBp));
+    const t1 = Math.min(prof.mult.length, Math.ceil(e / prof.tileBp));
+    let sumLog = 0;
+    let uniq = 0;
+    let n = 0;
+    for (let t = t0; t < t1; t++) {
+      if (prof.mult[t] <= 0) continue;
+      sumLog += Math.log2(prof.mult[t]);
+      uniq += prof.uniqFrac[t];
+      n++;
+    }
+    if (n === 0) continue;
+    const mult = Math.pow(2, sumLog / n);
+    // log10 scale, full ink at ~300×: satellite fabric reads solid, segdup
+    // territory mid-gray, unique sequence blank.
+    const tt = Math.min(1, Math.log10(Math.max(mult, 1)) / 2.5);
+    if (tt < 0.03) continue;
+    items.push({
+      w0: s,
+      w1: e,
+      rgb: multRamp(tt),
+      name: `k-mers ${approx}${mult < 10 ? mult.toFixed(1) : String(Math.round(mult))}× · ${Math.round((uniq / n) * 100)}% unique`,
+      strand: null,
+    });
+  }
+  return { label: 'k-mer multiplicity', colored: true, items };
+}
+
 /**
  * Resolve an axis record name to a chromosome of the annotation genome.
  * @param {string} name @param {Map<string, {id:number, size:number}>} chroms
@@ -1089,7 +1159,8 @@ async function refreshAnnotations() {
   const d = state.data;
   if (!d || !state.view) return;
   const tracks = activeTracks();
-  if (tracks.length === 0) {
+  const multOn = activeMult();
+  if (tracks.length === 0 && !multOn) {
     annoLanes = { x: [], y: [] };
     syncAnnoLayout();
     markDirty();
@@ -1099,12 +1170,28 @@ async function refreshAnnotations() {
   const b = state.view.bounds(pw, ph);
   annoBusy = true;
   try {
-    const [lx, ly] = await Promise.all([
-      buildAxisLanes(d.target, Math.max(0, b.x0), Math.min(d.target.total, b.x1), tracks),
-      buildAxisLanes(d.query, Math.max(0, b.y0), Math.min(d.query.total, b.y1), tracks),
-    ]);
+    const [lx, ly] =
+      tracks.length > 0
+        ? await Promise.all([
+            buildAxisLanes(d.target, Math.max(0, b.x0), Math.min(d.target.total, b.x1), tracks),
+            buildAxisLanes(d.query, Math.max(0, b.y0), Math.min(d.query.total, b.y1), tracks),
+          ])
+        : [null, null];
     if (state.data === d) {
-      annoLanes = { x: lx ?? [], y: ly ?? [] };
+      const x = lx ?? [];
+      const y = ly ?? [];
+      if (multOn) {
+        // The profile describes the target concatenation; on self-plots the
+        // query axis is the same space, so it earns the mirror lane.
+        const mx = multLane(Math.max(0, b.x0), Math.min(d.target.total, b.x1), pw);
+        if (mx) x.push(mx);
+        if (!state.fileQuery) {
+          const my = multLane(Math.max(0, b.y0), Math.min(d.query.total, b.y1), ph);
+          if (my) y.push(my);
+        }
+      }
+      annoLanes = { x, y };
+      /** @type {any} */ (globalThis).__dotdotAnno = annoLanes; // debug/automation handle
       syncAnnoLayout();
       markDirty();
     }
@@ -1211,7 +1298,7 @@ selDrawMode.addEventListener('change', () => {
 /** Settle watcher for annotation fetches (rides the frame loop). @param {number} now */
 function annotationTick(now) {
   if (!state.data || annoBusy) return;
-  if (activeTracks().length === 0) {
+  if (activeTracks().length === 0 && !activeMult()) {
     if (annoLanes.x.length || annoLanes.y.length) {
       annoLanes = { x: [], y: [] };
       syncAnnoLayout();
@@ -1223,6 +1310,10 @@ function annotationTick(now) {
   lastAnnoSig = lastViewSig;
   void refreshAnnotations();
 }
+
+chkMult.addEventListener('change', () => {
+  lastAnnoSig = '';
+});
 
 /** Populate the sidebar track checkboxes for the current annotation genome. */
 function renderAnnoTracks() {
@@ -2862,13 +2953,15 @@ const HELP = {
     'density — exact but slow at chromosome scale. Tip: keep auto for the overview, zoom in, ' +
     'then hit <b>Refine view</b> to recompute just the window at full detail.',
   annotations:
-    'Reference annotation tracks, streamed on demand from UCSC bigBeds as <b>byte ranges</b> — ' +
-    'the track files never download. Lanes appear in the axis margins for any sequence named ' +
-    'like a chromosome of the annotation genome (the selected reference, else T2T) — including ' +
+    'Axis-margin lanes. <b>k-mer multiplicity</b> comes from this plot’s own index — no ' +
+    'download, works for any FASTA: ink darkens with log copy number (full ink ≈ 300×+), and ' +
+    '<b>blank stretches are unique-k-mer territory</b> — the reliable anchors. Hover reads ' +
+    '~N× and the unique fraction; on self-plots the query axis mirrors it. The other tracks ' +
+    'stream on demand from UCSC bigBeds as <b>byte ranges</b> for any sequence named like a ' +
+    'chromosome of the annotation genome (the selected reference, else T2T) — including ' +
     'reference slices like <b>chr17_ROI10.9</b>, placed by their true coordinates. Fetches ' +
-    'follow the view: pan or zoom and the lanes update when you settle. <b>Hover a lane item</b> ' +
-    'for its name, span, and strand. CenSat colors are the satellite-family colors from the ' +
-    'track itself.',
+    'follow the view; hover a lane item for its name, span, and strand. CenSat colors are the ' +
+    'satellite-family colors from the track itself.',
   drawmode:
     '<b>segments</b> draws every match as a line — the exact view. <b>identity heatmap</b> bins ' +
     'the visible matches into tiles colored by the best anchor identity seen in each (the ' +

@@ -38,7 +38,7 @@ export function setAnnotationLanes(nx, ny) {
  * @property {number} w1 world-coordinate end
  * @property {string | null} rgb itemRgb "r,g,b" or null
  * @property {string} name
- * @property {string} strand
+ * @property {string | null} strand '+'/'-'/'.'; null = not stranded
  */
 /**
  * @typedef {Object} AnnoLane
@@ -54,10 +54,10 @@ export function setAnnotationLanes(nx, ny) {
  * @param {AnnoLane} lane
  * @param {number} w0 @param {number} w1 @param {number} px
  * @param {string} accent fallback fill for tracks without itemRgb
- * @returns {{a: number, b: number, fill: string, name: string, strand: string}[]}
+ * @returns {{a: number, b: number, fill: string, name: string, strand: string | null}[]}
  */
 export function laneRects(lane, w0, w1, px, accent) {
-  /** @type {{a: number, b: number, fill: string, name: string, strand: string}[]} */
+  /** @type {{a: number, b: number, fill: string, name: string, strand: string | null}[]} */
   const out = [];
   const pxPerBp = px / Math.max(w1 - w0, 1e-9);
   for (const it of lane.items) {

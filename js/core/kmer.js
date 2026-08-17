@@ -590,6 +590,58 @@ export function saturatedIntervals(index, maxOccEntries, tLen, tileBp = 512) {
 }
 
 /**
+ * Per-tile k-mer multiplicity profile of the indexed target: the repeat
+ * structure at every level, not just the over-cap verdict. For each tile,
+ * the geometric mean of the estimated true copy number of its k-mers and
+ * the fraction that are unique in the index. Copy estimate per group:
+ * (occ − 1) · stride + 1 — exact at stride 1, unbiased at the unique end
+ * (a single sampled entry stays 1×, not stride×), →occ·stride for deep
+ * repeats. One pass over the index, cap-independent.
+ *
+ * @param {KmerIndex} index
+ * @param {number} tLen total target length in bp
+ * @param {number} [tileBp]
+ * @returns {{tileBp: number, mult: Float32Array, uniqFrac: Float32Array}}
+ *   mult[t] = 0 for tiles with no indexed k-mers (N runs)
+ */
+export function multiplicityProfile(index, tLen, tileBp = 512) {
+  const nTiles = Math.max(1, Math.ceil(tLen / tileBp));
+  const sumLog = new Float64Array(nTiles);
+  const cnt = new Uint32Array(nTiles);
+  const uniq = new Uint32Array(nTiles);
+  const stride = index.stride || 1;
+  const { kmers, pos, bucketStarts } = index;
+  const nBuckets = bucketStarts.length - 1;
+  for (let b = 0; b < nBuckets; b++) {
+    const hiB = bucketStarts[b + 1];
+    let g = bucketStarts[b];
+    while (g < hiB) {
+      const kv = kmers[g];
+      let e = g + 1;
+      while (e < hiB && kmers[e] === kv) e++;
+      const occ = e - g;
+      const lg = Math.log2((occ - 1) * stride + 1);
+      for (let j = g; j < e; j++) {
+        const t = (pos[j] / tileBp) | 0;
+        sumLog[t] += lg;
+        cnt[t]++;
+        if (occ === 1) uniq[t]++;
+      }
+      g = e;
+    }
+  }
+  const mult = new Float32Array(nTiles);
+  const uniqFrac = new Float32Array(nTiles);
+  for (let t = 0; t < nTiles; t++) {
+    if (cnt[t] > 0) {
+      mult[t] = Math.pow(2, sumLog[t] / cnt[t]);
+      uniqFrac[t] = uniq[t] / cnt[t];
+    }
+  }
+  return { tileBp, mult, uniqFrac };
+}
+
+/**
  * Replace the [lo, hi) span of a sorted interval list with new intervals
  * (already confined to that span) — how a window refine's saturation result
  * updates the whole-plot picture, since its looser cap may de-saturate the

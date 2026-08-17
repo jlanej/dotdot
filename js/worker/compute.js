@@ -9,7 +9,7 @@
 import { parseFasta, mergeParsedFasta } from '../io/fasta.js';
 import { maybeGunzip } from '../io/compress.js';
 import { parsePaf, parsePafOnto } from '../io/paf.js';
-import { buildIndex, matchStrand, pickMaxOcc, saturatedIntervals, KMER_DEFAULTS } from '../core/kmer.js';
+import { buildIndex, matchStrand, pickMaxOcc, saturatedIntervals, multiplicityProfile, KMER_DEFAULTS } from '../core/kmer.js';
 import { reverseComplement } from '../core/dna.js';
 import { newSegmentVecs, vecsToSegments, segmentBuffers } from '../core/types.js';
 
@@ -207,6 +207,10 @@ function computeKmer(id, tParsed, qParsed, optsIn, t0, window = null) {
   const saturated = saturatedIntervals(index, maxOccEff, tParsed.codes.length);
   let satBp = 0;
   for (let i = 0; i < saturated.length; i += 2) satBp += saturated[i + 1] - saturated[i];
+  // Cap-independent repeat topology along the target — feeds the k-mer
+  // multiplicity axis lane (blank = unique-anchor territory). Skipped for
+  // refine windows: the lane keeps the whole-plot profile.
+  const profile = window ? undefined : multiplicityProfile(index, tParsed.codes.length);
   /** @type {import('../core/types.js').KmerStats} */
   const kmerStats = {
     k: opts.k,
@@ -221,6 +225,7 @@ function computeKmer(id, tParsed, qParsed, optsIn, t0, window = null) {
     })(),
     occCount: index.occCount,
     saturated,
+    profile,
   };
   const budgetX = /** @type {any} */ (opts).budgetX || 1;
   const samplingNote =
@@ -240,7 +245,7 @@ function computeKmer(id, tParsed, qParsed, optsIn, t0, window = null) {
   const capNote =
     stride > 1 && maxOccEff === userCapEntries && maxOccEff * stride !== opts.maxOcc
       ? `occurrence cap ${opts.maxOcc}× rounds to ~${maxOccEff * stride}× ` +
-        `(index samples 1/${stride} target k-mers; Refine view enforces it exactly)`
+        `(index samples 1/${stride} target k-mers; zoom under 48 Mb and Refine for exact)`
       : '';
   const note = [samplingNote, capNote, satNote].filter(Boolean).join(' · ');
 

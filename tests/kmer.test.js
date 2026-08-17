@@ -1,6 +1,6 @@
 // @ts-check
 import { test, assert, assertEq, assertClose, mulberry32 } from './harness.js';
-import { buildIndex, matchStrand, pickMaxOcc, saturatedIntervals, spliceIntervals, KMER_DEFAULTS } from '../js/core/kmer.js';
+import { buildIndex, matchStrand, pickMaxOcc, saturatedIntervals, spliceIntervals, multiplicityProfile, KMER_DEFAULTS } from '../js/core/kmer.js';
 import { reverseComplement } from '../js/core/dna.js';
 import { F64Vec, F32Vec, U8Vec } from '../js/core/vec.js';
 
@@ -350,4 +350,23 @@ test('kmer: occ cap 1 on a self-plot — forward off-diagonals impossible, inver
   assertEq(rev[1].x, 400);
   assertEq(rev[1].y, 100);
   assertEq(rev[0].len, 60);
+});
+
+test('kmer: multiplicityProfile maps repeat depth and unique territory', () => {
+  const t = new Uint8Array(6144);
+  t.set(randCodes(2048, 41), 0);
+  for (let i = 2048; i < 4096; i++) t[i] = i % 2 === 0 ? 0 : 1; // deep AC repeat
+  t.set(randCodes(2048, 42), 4096);
+  const prof = multiplicityProfile(buildIndex(t, starts([6144]), 8, 1), 6144, 512);
+  assertEq(prof.mult.length, 12);
+  // Unique flank: ~1x, almost all k-mers unique.
+  assert(prof.mult[0] < 1.2, `flank mult ${prof.mult[0]}`);
+  assert(prof.uniqFrac[0] > 0.9, `flank uniq ${prof.uniqFrac[0]}`);
+  // Repeat core: ~1000x, nothing unique.
+  assert(prof.mult[5] > 500, `core mult ${prof.mult[5]}`);
+  assertEq(prof.uniqFrac[5], 0);
+  // Stride bias guard: unique sequence sampled 1/2 still reads ~1x, not 2x
+  // (copy estimate is (occ-1)*stride + 1).
+  const strided = multiplicityProfile(buildIndex(t, starts([6144]), 8, 2), 6144, 512);
+  assert(strided.mult[0] < 1.2, `strided flank mult ${strided.mult[0]}`);
 });

@@ -50,6 +50,9 @@ import { F64Vec, F32Vec, U8Vec } from './vec.js';
  * @property {Float64Array} saturated merged target [start,end) pairs where
  *   most k-mers were over the repeat cutoff — matches there were never
  *   enumerated (see saturatedIntervals in core/kmer.js)
+ * @property {{tileBp:number, mult:Float32Array, uniqFrac:Float32Array}} [profile]
+ *   per-tile k-mer copy-number estimate + unique fraction along the target
+ *   (multiplicityProfile; absent on refine-window results)
  */
 
 /**
