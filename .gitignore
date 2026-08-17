@@ -1,6 +1,7 @@
 .DS_Store
 *.local
 .tmp*/
+future-directions/
 testdata/*.fa
 testdata/demo/*.fa
 testdata/real/*

@@ -325,3 +325,29 @@ test('kmer: spliceIntervals truncates at the window and inserts the replacement'
   const merged = spliceIntervals(Float64Array.from([0, 100]), 100, 200, Float64Array.from([100, 150]));
   assertEq(Array.from(merged).join(','), '0,150');
 });
+
+test('kmer: occ cap 1 on a self-plot — forward off-diagonals impossible, inverted pairs pass', () => {
+  // The user-discovered probe: self-plot at cap 1. Forward: any off-diagonal
+  // match needs the k-mer twice on the forward strand -> occ 2 -> skipped
+  // (the diagonal itself splits where the duplicated k-mers were skipped).
+  const dupT = randCodes(600, 31);
+  dupT.set(dupT.slice(100, 160), 400); // same segment, same strand, twice
+  const dup = match(dupT, starts([600]), dupT.slice(), starts([600]), { maxOcc: 1, maxGap: 0 });
+  assertEq(dup.filter((s) => s.strand === 0 && s.x !== s.y).length, 0);
+  assert(dup.filter((s) => s.strand === 0).length >= 2, 'diagonal split around the skipped dup');
+
+  // But the cap counts FORWARD occurrences only: a k-mer unique forward whose
+  // reverse complement is also unique forward passes cap 1 on both lookups —
+  // unique inverted pairs still draw, as reverse off-diagonals.
+  const invT = randCodes(600, 32);
+  invT.set(reverseComplement(invT.slice(100, 160)), 400);
+  const inv = match(invT, starts([600]), invT.slice(), starts([600]), { maxOcc: 1, maxGap: 0 });
+  assertEq(inv.filter((s) => s.strand === 0 && s.x !== s.y).length, 0);
+  const rev = inv.filter((s) => s.strand === 1).sort((a, b) => a.x - b.x);
+  assertEq(rev.length, 2); // the pair and its mirror
+  assertEq(rev[0].x, 100);
+  assertEq(rev[0].y, 400);
+  assertEq(rev[1].x, 400);
+  assertEq(rev[1].y, 100);
+  assertEq(rev[0].len, 60);
+});

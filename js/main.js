@@ -2841,7 +2841,11 @@ const HELP = {
     'index’s own occurrence histogram, so Alu-scale repeat families can’t flood the plot. ' +
     'Where the cutoff bites hardest, the plot says so: regions whose k-mers were mostly ' +
     'over-cap are <b>hatched in the heatmap view</b> and counted in the scoreboard — an empty ' +
-    'square there means “not searched”, not “not similar”.',
+    'square there means “not searched”, not “not similar”. Two fine points: the count is ' +
+    '<b>forward-strand</b> (reverse matches look up the reverse-complemented query in the same ' +
+    'index, so on a self-plot at cap 1 a unique inverted pair still draws — each direction is ' +
+    'unique); and on strided indexes the cap is enforced in sampled units, so tiny caps round ' +
+    '(a note says when; Refine view is exact).',
   budget:
     'How many match anchors a compute may spend (~60M per strand at <b>auto</b>). The budget is ' +
     'what auto-tightens the repeat cutoff on repeat-rich inputs; <b>2×/4×/8×</b> multiply it, ' +

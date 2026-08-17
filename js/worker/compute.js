@@ -233,7 +233,16 @@ function computeKmer(id, tParsed, qParsed, optsIn, t0, window = null) {
       ? `${Math.round((satBp / tLenEff) * 100)}% of the target is repeats above the cutoff — ` +
         'hatched in the heatmap view, not searched'
       : '';
-  const note = [samplingNote, satNote].filter(Boolean).join(' · ');
+  // A strided index counts occurrences in sampled entries, so a cap that
+  // isn't a multiple of the stride can only be enforced approximately —
+  // worst at tiny caps (cap 1 at stride 2 admits some true-2× k-mers). Say
+  // so instead of silently rounding.
+  const capNote =
+    stride > 1 && maxOccEff === userCapEntries && maxOccEff * stride !== opts.maxOcc
+      ? `occurrence cap ${opts.maxOcc}× rounds to ~${maxOccEff * stride}× ` +
+        `(index samples 1/${stride} target k-mers; Refine view enforces it exactly)`
+      : '';
+  const note = [samplingNote, capNote, satNote].filter(Boolean).join(' · ');
 
   if (pooled) {
     progress(id, 'Preparing shared memory', 0.5);
