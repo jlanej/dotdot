@@ -166,6 +166,28 @@ const MULT_ENDS = {
   dark: { lo: '#464c5a', hi: '#d4dceb' },
 };
 
+// The ANI heatmap's ramp: multi-hue sequential (viridis anchors, CVD-safe,
+// the visual language of published identity heatmaps). Satellite arrays sit
+// in a narrow high-identity band; a single-hue ramp compresses 97 vs 99.5
+// vs 100% into near-identical shades, while hue changes keep them apart.
+// Interpolated in OKLab; theme-independent by design (self-contained scale).
+const ANI_ANCHORS = ['#440154', '#46327e', '#365c8d', '#277f8e', '#1fa187', '#4ac16d', '#a0da39', '#fde725'];
+
+/** @param {number} t 0..1 @returns {[number, number, number]} */
+function sampleAniRamp(t) {
+  const x = Math.min(1, Math.max(0, t)) * (ANI_ANCHORS.length - 1);
+  const i = Math.min(ANI_ANCHORS.length - 2, Math.floor(x));
+  const f = x - i;
+  const a = srgbToOklab(...hexToRgb(ANI_ANCHORS[i]));
+  const b = srgbToOklab(...hexToRgb(ANI_ANCHORS[i + 1]));
+  const rgb = oklabToSrgbRaw(
+    a[0] + f * (b[0] - a[0]),
+    a[1] + f * (b[1] - a[1]),
+    a[2] + f * (b[2] - a[2]),
+  );
+  return rgb ?? hexToRgb(ANI_ANCHORS[i + 1]);
+}
+
 /**
  * OKLab-interpolated neutral ramp sample for the multiplicity scale.
  * @param {'light'|'dark'} mode @param {number} t 0..1
@@ -229,6 +251,22 @@ export function buildColormap(mode) {
       for (let i = 0; i <= 6; i++) {
         const t = i / 6;
         stops.push(`${rgbToHex(sampleRamp(anchors, t))} ${Math.round(t * 100)}%`);
+      }
+      return `linear-gradient(90deg, ${stops.join(', ')})`;
+    },
+    /** 256×1 RGBA pixels of the ANI ramp — CPU heatmap painting only
+     * (kept out of the GL colormap texture so shader row math stays put). */
+    aniData: (() => {
+      const a = new Uint8Array(256 * 4);
+      for (let i = 0; i < 256; i++) writeRgba(a, i, sampleAniRamp(i / 255));
+      return a;
+    })(),
+    /** CSS gradient for the ANI legend swatch. */
+    aniRampCss() {
+      const stops = [];
+      for (let i = 0; i <= 7; i++) {
+        const t = i / 7;
+        stops.push(`${rgbToHex(sampleAniRamp(t))} ${Math.round(t * 100)}%`);
       }
       return `linear-gradient(90deg, ${stops.join(', ')})`;
     },

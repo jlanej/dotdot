@@ -12,6 +12,7 @@ test('share: view state round-trips through the hash', () => {
     len: '2kb',
     ident: 0.95,
     draw: 'heat',
+    col: 2,
     fwd: true,
     rev: false,
     auto: true,
@@ -25,6 +26,7 @@ test('share: view state round-trips through the hash', () => {
   assertEq(parsed.len, '2kb');
   assertEq(parsed.ident, 0.95);
   assertEq(parsed.draw, 'heat');
+  assertEq(parsed.col, 2);
   assertEq(parsed.fwd, true);
   assertEq(parsed.rev, false);
   assertEq(parsed.auto, true);
@@ -33,7 +35,7 @@ test('share: view state round-trips through the hash', () => {
 test('share: defaults stay out of the hash and come back as defaults', () => {
   const hash = buildViewHash({
     x0: 0, x1: 100, y0: 0, y1: 200,
-    len: 'off', ident: 0, draw: 'seg', fwd: true, rev: true, auto: false,
+    len: 'off', ident: 0, draw: 'seg', col: 0, fwd: true, rev: true, auto: false,
   });
   assertEq(hash, '#v=0-100:0-200');
   const parsed = parseViewHash(hash);
@@ -41,6 +43,7 @@ test('share: defaults stay out of the hash and come back as defaults', () => {
   assertEq(parsed.len, 'off');
   assertEq(parsed.ident, 0);
   assertEq(parsed.draw, 'seg');
+  assertEq(parsed.col, 0);
   assertEq(parsed.fwd, true);
   assertEq(parsed.rev, true);
   assertEq(parsed.auto, false);

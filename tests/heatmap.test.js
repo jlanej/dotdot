@@ -167,3 +167,13 @@ test('colormap: buildMultiplicityTex downsamples the profile log-wise', () => {
   assertEq(tex[1], 255); // deep repeat (log10(1000)/2.5 clamps to 1)
   assertEq(tex[2], 0); // no indexed k-mers -> quiet
 });
+
+test('colormap: the ANI ramp is a distinct multi-hue scale', () => {
+  const cm = buildColormap('dark');
+  assertEq(cm.aniData.length, 256 * 4);
+  // Ends match the viridis anchors (dark purple -> bright yellow).
+  assert(cm.aniData[0] > 40 && cm.aniData[2] > 60, 'low end purple-ish');
+  assert(cm.aniData[255 * 4] > 220 && cm.aniData[255 * 4 + 1] > 200, 'high end yellow');
+  // Multi-hue: green channel rises far more than a single-hue ramp would.
+  assert(cm.aniData[128 * 4 + 1] > 80, 'midpoint carries green');
+});

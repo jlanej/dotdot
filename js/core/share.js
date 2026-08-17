@@ -13,6 +13,7 @@
  * @property {string} len min-segment-length field text ('off' or a bp expression)
  * @property {number} ident min identity 0..1
  * @property {'seg'|'heat'|'ani'} draw
+ * @property {number} col color mode (0 identity, 1 strand, 2 multiplicity)
  * @property {boolean} fwd @property {boolean} rev
  * @property {boolean} auto auto-refine enabled
  */
@@ -28,6 +29,7 @@ export function buildViewHash(v) {
   if (v.len && v.len !== 'off' && v.len !== '0') parts.push(`len=${encodeURIComponent(v.len)}`);
   if (v.ident > 0) parts.push(`ident=${v.ident.toFixed(3)}`);
   if (v.draw === 'heat' || v.draw === 'ani') parts.push(`draw=${v.draw}`);
+  if (v.col === 1 || v.col === 2) parts.push(`col=${v.col}`);
   if (!v.fwd || !v.rev) parts.push(`str=${(v.fwd ? 'f' : '') + (v.rev ? 'r' : '')}`);
   if (v.auto) parts.push('auto=1');
   return '#' + parts.join('&');
@@ -62,6 +64,7 @@ export function parseViewHash(hash) {
     len: q.get('len') ?? 'off',
     ident: Number.isFinite(ident) ? Math.min(1, Math.max(0, ident)) : 0,
     draw: q.get('draw') === 'heat' || q.get('draw') === 'ani' ? /** @type {'heat'|'ani'} */ (q.get('draw')) : 'seg',
+    col: q.get('col') === '1' ? 1 : q.get('col') === '2' ? 2 : 0,
     fwd: str === null ? true : str.includes('f'),
     rev: str === null ? true : str.includes('r'),
     auto: q.get('auto') === '1',

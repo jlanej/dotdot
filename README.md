@@ -66,12 +66,30 @@ same view live:
   load a FASTA afterwards and it dots against the reference window. Axes,
   hover, and region jumps all speak **true genomic coordinates**, and that
   bookkeeping survives Refine view.
+- **Three ways to read identity** — **segments** (every match a line, shaded
+  by **anchor identity**: exact k-mer anchor coverage of each run —
+  deliberately neither StainedGlass's alignment identity nor ModDotPlot's
+  ANI, and named honestly everywhere); the **identity heatmap**
+  (StainedGlass-style tile binning of the matches, with capped regions
+  explicitly **hatched**); and the **ANI heatmap** — cap-free tile-pair
+  identity by exact multiset containment, the satellite view that needs no
+  enumeration at all (see below).
+- **Honest by construction** — every approximation is either visible or
+  consented to: capped repeat regions hatch and count in the scoreboard, the
+  effective cutoff prints in a note when it tightens, quadratic satellite
+  windows are *predicted* from the occurrence histogram and asked about
+  before the grind (with a one-click fix), exact mode over 128 Mb asks with a
+  real RAM estimate instead of refusing, and `off` means off on every dial —
+  occurrence cap, sampling, and anchor budget can each be truly disabled.
 - **Annotation lanes from UCSC tracks** — CenSat satellite families (in the
   track's own colors), CAT/Liftoff genes, and SEDEF segmental duplications
   stream on demand as **bigBed byte ranges** into lanes along both axes, for
   any sequence named like a reference chromosome — streamed slices included,
   placed by their true coordinates. Fetches follow the view as you pan and
-  zoom; the track files themselves never download.
+  zoom; the track files themselves never download. A fourth lane needs no
+  download at all: **k-mer multiplicity** from the plot's own index — blank =
+  unique-anchor territory, ink = repeat depth — for any FASTA, reference or
+  not (and the same scale can color the whole plot).
 - **True genome-scale precision** — coordinates are carried as split float
   pairs into WebGL (relative-to-center, Sterbenz-exact), so the view stays
   sub-bp crisp at position 2,950,000,000 as at position 100. Axis ticks switch
@@ -161,6 +179,54 @@ and HSat blocks as a sharp-edged mosaic — including whole **inverted
 domains** standing out in orange around 124.4–124.8 Mb. Live:
 [`?ref=t2t&refregion=chr1:121.7M-125.1M`](https://jlanej.github.io/dotdot/?ref=t2t&refregion=chr1:121.7M-125.1M).*
 
+## Identity without enumeration: the ANI heatmap
+
+Satellite arrays are quadratic: N repeat copies really do match N² ways, so
+the chr8 centromere alone would need ~6 *billion* anchor pairs — no segment
+budget reaches that, and every dot-plot tool that caps repeat k-mers quietly
+renders "too deep to enumerate" the same as "not similar". dotdot refuses the
+lie twice. In match modes, capped regions wear an explicit **hatch** ("not
+searched", counted in the scoreboard, bought back with the **repeat budget**
+dial). And the **ANI heatmap** draw mode escapes the trap altogether: every
+pair of tiles in the visible window is compared by the **multiset
+containment** of its exact k-mer counts, mapped to ANI = c^(1/k) — no matches
+enumerated, no occurrence cap, nothing skipped. Cost scales with *tiles*,
+never occurrences, so the deepest satellite core prices the same as unique
+sequence.
+
+![the chr8 centromere as a complete ANI mosaic: viridis identity landscape with the young HOR core in yellow](docs/ani_chr8_cen.png)
+
+*The same chr8 centromere as the headliner above, as a **1024×1024 cap-free
+ANI mosaic** (2 kb per tile, seconds to compute): the youngest, most
+homogeneous HOR block glows yellow around chr8:45.2–45.6 Mb, mid-identity
+fabric reads green, diverged bands teal, and the divergent flanks edge the
+array in purple — the full kinship structure of ~6 billion implied pairs,
+none of them enumerated. Count-weighted containment is the accuracy edge of
+an exact index: sketch-based set containment saturates in tandem arrays.
+Resolution is per-window (zooming refines it), auto-sized to your display,
+or pinned with the **ANI tiles** dial. Live:
+[`?ref=t2t&refregion=chr8:44.2M-46.33M&anitiles=1024` + `draw=ani`](https://jlanej.github.io/dotdot/?ref=t2t&refregion=chr8%3A44.2M-46.33M&anitiles=1024#v=-63900-2193901:-63900-2193901&draw=ani).*
+
+## Repeat structure at every level: k-mer multiplicity
+
+Every alignment-free compute also profiles its own index: per 512 bp of
+target, the geometric-mean **copy number** of its k-mers and the fraction
+that are unique. That one profile powers a **k-mer multiplicity lane** along
+the axes (ink darkens with log copy number; blank stretches are unique-anchor
+territory — hover reads "~421× · 2% unique"), and a **color-by-multiplicity**
+segment mode where the same scale paints the plot itself:
+
+![chr22 proximal arm colored by k-mer multiplicity: repeat families light up as families, the unique diagonal recedes](docs/multiplicity_chr22.png)
+
+*chr22:10–13 Mb self-compared, segments **colored by k-mer multiplicity**:
+the HSat3 block at 10.7–10.9 Mb blazes at full ink, segmental-duplication
+lattices read mid-gray, and the unique diagonal recedes to a whisper —
+repeat families as families, regardless of strand. The margin lanes agree:
+CenSat names the blocks (`hsat3_22_17`, `mon_22_7`…) while the multiplicity
+lane traces the same topology from the index alone — no annotation needed,
+so it works on any FASTA. Live:
+[`?ref=t2t&refregion=chr22:10M-13M` + `col=2`](https://jlanej.github.io/dotdot/?ref=t2t&refregion=chr22%3A10%2C000%2C000-13%2C000%2C000#v=0-3000001:0-3000001&len=100&col=2).*
+
 ### Reference genomes, no downloads
 
 The **Reference** dropdown gives instant material with no files at all:
@@ -193,8 +259,8 @@ on all CPU cores; without them it runs the identical single-worker path.
 | Many FASTAs | file buttons multi-select to stack several files on one axis; dropping 3+ makes the first the target and the rest the query — each sequence keeps its own ruler, with alternating band shading separating regions |
 | PAF / PAF.gz | optional aligner audit: any PAF-emitting aligner's output on the same axes |
 | Reference dropdown | T2T-CHM13v2.0 / GRCh38 windows streamed from UCSC 2bit files — self-plot, or the target for added FASTAs |
-| URL parameters | `?demo=1` · `?ref=t2t&refregion=chrX:57.8M-60.7M` · `?target=<url>&query=<url>[&overlay=<paf-url>]` · `?paf=<url>` · plus `k=`, `gap=`, `occ=`, `minrun=`, `sample=`, `region=`, and a `#v=` view fragment |
-| Share view | one click copies a link reproducing the exact data, viewport, display settings, and non-default matching options — every finding becomes a URL |
+| URL parameters | `?demo=1` · `?ref=t2t&refregion=chrX:57.8M-60.7M` · `?target=<url>&query=<url>[&overlay=<paf-url>]` · `?paf=<url>` · plus `k=`, `gap=`, `occ=` (`off` = no repeat masking), `minrun=`, `sample=` (`off` = truly exact, `off 512M` pre-approves the RAM), `budget=` (`off` = unbounded anchors), `anitiles=`, `region=`, and a `#v=` view fragment carrying viewport, draw mode (`draw=heat`/`ani`), color mode, and filters |
+| Share view | one click copies a link reproducing the exact data, viewport, draw and color modes, display settings, and non-default matching options — every finding becomes a URL |
 
 Practical envelope: up to ~50 Mb of combined sequence the engine runs dense
 and exact (bacteria, fungi, chromosome pairs, plasmids, viral genomes).
@@ -202,8 +268,13 @@ Beyond that it switches itself into a sampled genome mode — target-index
 striding, query-position sampling, an occurrence cutoff chosen from the
 index's own repeat histogram to meet an anchor budget, and a minimum-evidence
 run filter — which carries it to full human chromosomes (see below), with
-multi-core matching when cross-origin isolation is available. Try the
-committed sample:
+multi-core matching when cross-origin isolation is available. Every one of
+those dials also goes to a true **off**: `sampling: off` is genuinely exact
+on both axes (guarded by a consent popup with the real RAM number past
+128 Mb of target, pre-approvable as `off 512M`, engine wall at ~1 Gb), and
+the occurrence cap and anchor budget disable outright — verified by the
+self-plot litmus that every k-mer of chr22 indexes with zero cap leaks. Try
+the committed sample:
 [`?target=testdata/target.fa&query=testdata/query.fa`](http://127.0.0.1:8420/?target=testdata/target.fa&query=testdata/query.fa)
 (regenerate the FASTAs with `scripts/make_testdata.py`).
 
@@ -247,8 +318,10 @@ heterozygous 4.9 kb deletion at chr17:10.895 Mb) and **Full chr17**
 ## Progressive detail: sampling and Refine view
 
 At chromosome scale the engine samples (the `sampling` field: `auto` sizes it
-to the data, `off` forces full density, any number pins it). That makes the
-overview fast — and **Refine view** closes the loop: it recomputes the
+to the data, any number pins the query-side interval, and `off` is **true
+full density on both axes** — consent-gated past 128 Mb of target rather
+than silently degraded). That makes the overview fast — and **Refine view**
+closes the loop: it recomputes the
 currently visible window at full density and merges the result in place, so
 the plot stays one continuous coordinate space with coarse context everywhere
 and exact k-mer structure where you're looking. The **Detail** panel keeps
@@ -304,12 +377,19 @@ CPU core — treat them as generous upper bounds on what a foreground tab does.
 - Broken diagonals are indels; off-diagonal blocks are duplications or
   translocations; vertical/horizontal dashed columns are repeats hitting the
   occurrence cap.
-- **Diagonal hatching** in the heatmap view marks regions whose k-mers exceed
-  the repeat cutoff: matches there were **never enumerated**, so an empty
-  square means "not searched", not "not similar" — the classic dot-plot lie
-  in satellite DNA, refused. The scoreboard counts the capped fraction, and a
-  **repeat budget** control (2×/4×/8×) buys back depth where the repeat
-  period allows it.
+- **Diagonal hatching** in the identity-heatmap view marks regions whose
+  k-mers exceed the repeat cutoff: matches there were **never enumerated**,
+  so an empty square means "not searched", not "not similar" — the classic
+  dot-plot lie in satellite DNA, refused. The scoreboard counts the capped
+  fraction, and a **repeat budget** control (2×/4×/8×/off) buys back depth
+  where the repeat period allows it. Where it doesn't (period &lt; k), the
+  **ANI heatmap** is the answer — it never enumerates, so it has no cap and
+  no hatch.
+- The **k-mer multiplicity lane** (and the matching segment color mode) reads
+  repeat depth on a neutral→ink log scale: blank = unique-anchor territory,
+  full ink ≈ 300×+ copies. The ANI heatmap uses a viridis-style multi-hue
+  ramp so the narrow high-identity band of satellite arrays stays visually
+  separable.
 
 ## Architecture
 
@@ -348,13 +428,16 @@ open http://127.0.0.1:8420/tests/typecheck.html   # strict typecheck in the brow
 ```
 
 - Tests are dependency-free dual-runtime suites: the same files run in the
-  browser page and under `deno test tests/` in CI (113 tests: engine
+  browser page and under `deno test tests/` in CI (143 tests: engine
   coordinates on both strands and all k, reverse-complement mapping, gap
   bridging, boundary discipline, range-restricted indexing/matching,
-  multicore chunk-stitch parity against single-core, parsers, BGZF/gzip
-  fixtures, 2bit and bigBed decoding against in-memory fixtures, camera
-  math, picking, region expressions with true-coordinate offsets, colormap
-  monotonicity, formatting).
+  multicore chunk-stitch parity against single-core, sampling/density
+  resolution and the exact-mode guards, occurrence-cap semantics including
+  true off, saturation intervals and hatch painting, the multiplicity
+  profile and its ramps, multiset-containment ANI grids, share-link
+  round-trips, parsers, BGZF/gzip fixtures, 2bit and bigBed decoding against
+  in-memory fixtures, camera math, picking, region expressions with
+  true-coordinate offsets, colormap monotonicity, formatting).
 - `tests/typecheck.html` runs the real TypeScript compiler (fetched from a
   CDN at dev time — nothing installs) over the same entry points CI checks
   with `deno check`, so type errors surface locally on a machine with no

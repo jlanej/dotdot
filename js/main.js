@@ -688,6 +688,7 @@ function onData(data, reqId = -1) {
     chkFwd.checked = v.fwd;
     chkRev.checked = v.rev;
     chkAutoRefine.checked = v.auto;
+    if (v.col === 1 || v.col === 2) selColorMode.value = String(v.col);
     if (v.draw === 'heat' || v.draw === 'ani') selDrawMode.value = v.draw;
     const { pw, ph } = state.sizes;
     state.view.fitRect(v.x0, v.y0, v.x1, v.y1, pw, ph);
@@ -1422,7 +1423,10 @@ function onContainResult(msg) {
   heatSat = null; // nothing was skipped — that is the point
   heatRange = binStretch(heatBin);
   const cm = buildColormap(mode);
-  const img = paintHeatmap(heatBin, cm.data, 0, heatRange.lo, heatRange.hi);
+  // The ANI ramp is multi-hue (viridis anchors): satellite windows live in a
+  // narrow high-identity band, and hue separates 97/99.5/100% where a
+  // single-hue ramp compresses them.
+  const img = paintHeatmap(heatBin, cm.aniData, 0, heatRange.lo, heatRange.hi);
   if (!heatCanvas) heatCanvas = document.createElement('canvas');
   heatCanvas.width = msg.nx;
   heatCanvas.height = msg.ny;
@@ -2763,6 +2767,7 @@ btnShare.addEventListener('click', async () => {
     // The slider's floor position means "off" — only a raised value travels.
     ident: Number(inMinIdent.value) > state.identLo ? Number(inMinIdent.value) : 0,
     draw: heatMode() ? 'heat' : aniMode() ? 'ani' : 'seg',
+    col: Number(selColorMode.value),
     fwd: chkFwd.checked,
     rev: chkRev.checked,
     auto: chkAutoRefine.checked,
@@ -2843,7 +2848,7 @@ function updateLegend() {
       ? ` · ${heatBin.nx}×${heatBin.ny} tiles (${formatBp((heatBin.x1 - heatBin.x0) / heatBin.nx)} each — zoom to refine)`
       : '';
     legendEl.innerHTML =
-      `<div class="row"><span class="lab">tile</span><span class="ramp" style="background:${cm.rampCss(0)}"></span></div>` +
+      `<div class="row"><span class="lab">tile</span><span class="ramp" style="background:${cm.aniRampCss()}"></span></div>` +
       `<div class="row"><span class="lab"></span><span class="lab">${(heatRange.lo * 100).toFixed(1)}% k-mer ANI</span><span style="flex:1"></span><span class="lab">${(heatRange.hi * 100).toFixed(1)}%</span></div>` +
       `<div class="row"><span class="lab" style="white-space:normal">multiset containment — no cap, nothing skipped${res}</span></div>`;
   } else if (heatMode()) {
