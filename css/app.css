@@ -712,7 +712,8 @@ input.combo:focus,
   width: 100%;
   margin-top: 8px;
 }
-#stats-pop {
+#stats-pop,
+#confirm-pop {
   position: fixed;
   inset: 0;
   background: color-mix(in srgb, var(--page) 55%, transparent);
@@ -721,8 +722,15 @@ input.combo:focus,
   justify-content: center;
   z-index: 40;
 }
-#stats-pop[hidden] {
+#stats-pop[hidden],
+#confirm-pop[hidden] {
   display: none;
+}
+.confirm-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 12px 0 4px;
 }
 .stats-card {
   background: var(--panel);

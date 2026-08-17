@@ -258,6 +258,11 @@ function spawnWorker() {
     } else if (msg.type === 'regionResult') {
       setComputing(false);
       onRegionRefined(msg);
+    } else if (msg.type === 'confirmExact') {
+      // Exact mode over the consent threshold: ask with the real numbers
+      // instead of refusing. The parse cache makes either answer cheap.
+      setComputing(false);
+      askExactConfirm(msg);
     } else if (msg.type === 'needData') {
       // The worker's parse cache missed (e.g. fresh spawn) — resend with
       // full buffers, carrying any bound post-load actions forward.
@@ -511,12 +516,14 @@ function currentSample() {
 
 /**
  * Repeat budget: 'auto' = the standard 60M-anchor budget; "2×"/"4"/… multiply
- * it, loosening the auto repeat cutoff for users who'd rather spend RAM and
- * minutes than sample repeats. Clamped to 1..64.
+ * it (clamped to 1..64), loosening the auto repeat cutoff for users who'd
+ * rather spend RAM and minutes than sample repeats; 'off' removes the anchor
+ * budget entirely — the 16M-segment wall becomes the only volume guard.
  */
 function currentBudget() {
   const t = inBudget.value.trim().toLowerCase().replace(/[x×]\s*$/, '');
   if (t === '' || t === 'auto') return 1;
+  if (t === 'off' || t === 'none' || t === '∞') return Infinity;
   const v = Number(t);
   return Number.isFinite(v) && v >= 1 ? Math.min(64, v) : 1;
 }
@@ -2660,7 +2667,7 @@ btnShare.addEventListener('click', async () => {
   if (mo.sample !== 'auto') {
     q.set('sample', mo.sample === 'off' ? inSample.value.trim().toLowerCase() : String(mo.sample));
   }
-  if (mo.budgetX !== 1) q.set('budget', String(mo.budgetX));
+  if (mo.budgetX !== 1) q.set('budget', mo.budgetX === Infinity ? 'off' : String(mo.budgetX));
   const qs = q.toString();
   const url = `${location.origin}${location.pathname}${qs ? '?' + qs : ''}${hash}`;
   try {
@@ -2812,6 +2819,54 @@ document.body.append(statsPop);
 statsPop.addEventListener('click', (e) => {
   if (e.target === statsPop) closeStatsPop();
 });
+
+// ---- exact-mode consent popup ---------------------------------------------
+// Sampling "off" is unbounded by policy; over the consent threshold (128 Mb
+// default, or a typed "off 512M") the worker asks here with the real RAM
+// estimate. Proceeding resubmits options-only — the parse cache is warm.
+
+const confirmPop = document.createElement('div');
+confirmPop.id = 'confirm-pop';
+confirmPop.hidden = true;
+document.body.append(confirmPop);
+confirmPop.addEventListener('click', (e) => {
+  if (e.target === confirmPop) confirmPop.hidden = true;
+});
+
+/** @param {{tLenBp: number, gbLo: number, gbHi: number}} m */
+function askExactConfirm(m) {
+  const mb = Math.ceil(m.tLenBp / 1e6);
+  const ram = (/** @type {number} */ gb) =>
+    gb >= 1 ? `${gb.toFixed(1)} GB` : `${Math.max(1, Math.round(gb * 1000))} MB`;
+  confirmPop.innerHTML =
+    `<div class="stats-card">` +
+    `<div class="stats-head"><h3>Exact mode wants real memory</h3>` +
+    `<button class="stats-close" aria-label="close">×</button></div>` +
+    `<p class="stats-sum">True full density on <b>${formatBp(m.tLenBp)}</b> of target indexes ` +
+    `every k-mer: roughly <b>${ram(m.gbLo)}–${ram(m.gbHi)}</b> of index RAM and a ` +
+    `long compute. Nothing sampled, nothing skipped.</p>` +
+    `<div class="confirm-row">` +
+    `<button id="cf-go" class="btn primary">Compute exact — spend the RAM</button>` +
+    `<button id="cf-auto" class="btn">Use auto sampling</button>` +
+    `</div>` +
+    `<p class="stats-sum">Pre-approve next time: type <b>off ${mb}M</b> in sampling — it rides ` +
+    `share links, and this ask is skipped.</p></div>`;
+  confirmPop.hidden = false;
+  confirmPop.querySelector('.stats-close')?.addEventListener('click', () => {
+    confirmPop.hidden = true;
+  });
+  confirmPop.querySelector('#cf-go')?.addEventListener('click', () => {
+    confirmPop.hidden = true;
+    if (lastKmer) submitKmer({ ...lastKmer.opts, exactConfirmed: true }, lastKmer.window);
+  });
+  confirmPop.querySelector('#cf-auto')?.addEventListener('click', () => {
+    confirmPop.hidden = true;
+    inSample.value = 'auto';
+    if (lastKmer) {
+      submitKmer({ ...lastKmer.opts, sample: 'auto', exactMaxBp: undefined }, lastKmer.window);
+    }
+  });
+}
 
 function closeStatsPop() {
   statsPop.hidden = true;
@@ -2976,10 +3031,12 @@ const HELP = {
   budget:
     'How many match anchors a compute may spend (~60M per strand at <b>auto</b>). The budget is ' +
     'what auto-tightens the repeat cutoff on repeat-rich inputs; <b>2×/4×/8×</b> multiply it, ' +
-    'loosening that cutoff — deeper repeat structure for more time and RAM. <b>Refine view</b> ' +
-    'always runs at ≥4×. Two hard walls remain regardless: a 16M-segment ceiling protects your ' +
-    'GPU/RAM, and satellite families with repeat period &lt; k (HSat2/3) are unenumerable at ' +
-    'any budget — those regions stay hatched in the heatmap, which is the honest display.',
+    'loosening that cutoff — deeper repeat structure for more time and RAM. <b>off</b> removes ' +
+    'it entirely: no anchor-volume tightening at all, leaving the 16M-segment ceiling (a hard ' +
+    'GPU/RAM wall with its own error) and your patience as the only limits — combine with ' +
+    '“skip k-mers: off” for a fully unbounded compute. <b>Refine view</b> always runs at ≥4×. ' +
+    'One caution stands at any budget: satellite families with repeat period &lt; k (HSat2/3) ' +
+    'are unenumerable in principle — expect the segment wall there, and trust the hatch.',
   minrun:
     'Drop merged runs shorter than this at compute time ("off", "30", "1kb", any value). At ' +
     'genome scale a small evidence filter applies automatically.',
@@ -2987,12 +3044,12 @@ const HELP = {
     '<b>auto</b> thins matching on big inputs (every Nth query position, and past 48 Mb the ' +
     'target index strides too) so chromosomes compute in minutes. A <b>number</b> pins the ' +
     'query-side interval only — the target may still stride, and the result note says when. ' +
-    '<b>off</b> is <b>true full density</b>: every target k-mer indexed, every query position ' +
-    'tested, occurrence caps enforced in exact counts — guarded at 128 Mb of target because ' +
-    'the index lives in RAM (~0.5 GB per 50 Mb, about double for k &gt; 16). For deep drills ' +
-    'and publication figures, raise the ceiling yourself: <b>off 512M</b> allows exact up to ' +
-    '512 Mb on this machine’s RAM and travels in share links (engine limit 1 Gb). Refused ' +
-    'with guidance past the ceiling, never silently degraded. Tip: keep auto for the ' +
+    '<b>off</b> is <b>true full density</b>, unbounded: every target k-mer indexed, every ' +
+    'query position tested, occurrence caps in exact counts. Because the index lives in RAM ' +
+    '(~0.5 GB per 50 Mb, about double for k &gt; 16), going past 128 Mb of target first ' +
+    '<b>asks</b> with the real estimate — one click to proceed or fall back. Pre-approve with ' +
+    '<b>off 512M</b> (skips the ask up to 512 Mb; travels in share links). The only hard wall ' +
+    'is ~1 Gb, where the browser cannot allocate the index at all. Tip: keep auto for the ' +
     'overview, zoom in, then <b>Refine view</b> for exact windows.',
   annotations:
     'Axis-margin lanes. <b>k-mer multiplicity</b> comes from this plot’s own index — no ' +
@@ -3109,6 +3166,7 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     closeHelp();
     closeStatsPop();
+    confirmPop.hidden = true;
   }
 });
 
@@ -3125,7 +3183,10 @@ async function initFromUrl() {
   if (p.has('occ')) inMaxOcc.value = p.get('occ') ?? inMaxOcc.value;
   if (p.has('minrun')) inMinRun.value = p.get('minrun') ?? inMinRun.value;
   if (p.has('sample')) inSample.value = p.get('sample') ?? inSample.value;
-  if (p.has('budget')) inBudget.value = `${p.get('budget')}×`;
+  if (p.has('budget')) {
+    const b = /** @type {string} */ (p.get('budget'));
+    inBudget.value = /^\d/.test(b) ? `${b}×` : b;
+  }
   const urlRegion = p.get('region');
   if (urlRegion) queuedActions = { ...(queuedActions ?? {}), region: urlRegion };
   try {

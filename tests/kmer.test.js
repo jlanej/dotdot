@@ -435,3 +435,16 @@ test('kmer: pickMaxOcc honors the full user cap when the tail bin fits the budge
   const tightened = pickMaxOcc(mk(1e15), 1e6, 1e6, 1, Infinity, 30e6);
   assert(Number.isFinite(tightened) && tightened <= 1023, `expected finite, got ${tightened}`);
 });
+
+test('kmer: pickMaxOcc with the budget off never tightens', () => {
+  const occSumSq = new Float64Array(1025);
+  for (let o = 1; o <= 1024; o++) occSumSq[o] = 1e12; // huge everywhere
+  const idx = /** @type {import('../js/core/kmer.js').KmerIndex} */ (
+    /** @type {any} */ ({ occSumSq, stride: 1 })
+  );
+  // Budget off honors the cap in full, whatever the volume.
+  assertEq(pickMaxOcc(idx, 1e6, 1e6, 1, Infinity, Infinity), Infinity);
+  assertEq(pickMaxOcc(idx, 1e6, 1e6, 1, 500, Infinity), 500);
+  // The same histogram under a finite budget still tightens.
+  assert(Number.isFinite(pickMaxOcc(idx, 1e6, 1e6, 1, Infinity, 60e6)));
+});

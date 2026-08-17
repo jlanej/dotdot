@@ -9,7 +9,7 @@
 import { parseFasta, mergeParsedFasta } from '../io/fasta.js';
 import { maybeGunzip } from '../io/compress.js';
 import { parsePaf, parsePafOnto } from '../io/paf.js';
-import { buildIndex, matchStrand, pickMaxOcc, pickDensity, saturatedIntervals, multiplicityProfile, KMER_DEFAULTS } from '../core/kmer.js';
+import { buildIndex, matchStrand, pickMaxOcc, pickDensity, saturatedIntervals, multiplicityProfile, KMER_DEFAULTS, EXACT_MAX_BP, EXACT_HARD_BP } from '../core/kmer.js';
 import { reverseComplement } from '../core/dna.js';
 import { newSegmentVecs, vecsToSegments, segmentBuffers } from '../core/types.js';
 
@@ -138,12 +138,36 @@ function computeKmer(id, tParsed, qParsed, optsIn, t0, window = null) {
   // full density on both axes (or a refusal — never a silent stride).
   const tLenEff = window ? Math.max(1, window.tx1 - window.tx0) : tParsed.codes.length;
   const qLenEff = window ? Math.max(1, window.qy1 - window.qy0) : qParsed.codes.length;
+  // Exact mode is unbounded by policy, bounded by consent: over the default
+  // (or pre-approved "off 512M") threshold, ask the user with the real RAM
+  // number instead of refusing — the confirmed resubmit is an options-only
+  // message, the parse cache keeps it free. Only the allocation wall is a
+  // hard no: past ~1 Gb the proceed button would just be an OOM button.
+  if (opts.sample === 'off') {
+    if (tLenEff > EXACT_HARD_BP) {
+      throw new Error(
+        `Exact mode on ${Math.round(tLenEff / 1e6)} Mb is past the ${EXACT_HARD_BP / 1e6} Mb ` +
+          'engine allocation limit — zoom in and Refine the window instead.',
+      );
+    }
+    const consent = /** @type {number|undefined} */ (/** @type {any} */ (opts).exactMaxBp) || EXACT_MAX_BP;
+    if (tLenEff > consent && !(/** @type {any} */ (opts).exactConfirmed)) {
+      post({
+        id,
+        type: 'confirmExact',
+        tLenBp: tLenEff,
+        gbLo: (tLenEff * 8) / 1e9,
+        gbHi: (tLenEff * 12) / 1e9,
+      });
+      return;
+    }
+  }
   const { stride, qSample } = pickDensity(
     /** @type {'auto'|'off'|number|undefined} */ (opts.sample),
     Math.max(1, opts.stride),
     tLenEff,
     qLenEff,
-    /** @type {number|undefined} */ (/** @type {any} */ (opts).exactMaxBp),
+    tLenEff, // consent already granted above; the engine wall still backstops
   );
 
   const qTotal = qParsed.catalog.total;
@@ -230,10 +254,11 @@ function computeKmer(id, tParsed, qParsed, optsIn, t0, window = null) {
     profile,
   };
   const budgetX = /** @type {any} */ (opts).budgetX || 1;
+  const budgetLabel = budgetX === Infinity ? 'budget off' : `budget ${budgetX}×`;
   const samplingNote =
     stride > 1 || qSample > 1 || maxOccEff < userCapEntries
       ? `large input: sampling 1/${stride} target k-mers, 1/${qSample} query positions; ` +
-        `repeat cutoff ${maxOccEff * stride}× (auto${budgetX > 1 ? `, budget ${budgetX}×` : ''})`
+        `repeat cutoff ${maxOccEff * stride}× (auto${budgetX > 1 ? `, ${budgetLabel}` : ''})`
       : '';
   const satNote =
     satBp > 0.01 * tLenEff
