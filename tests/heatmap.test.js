@@ -1,6 +1,7 @@
 // @ts-check
 import { test, assert, assertEq } from './harness.js';
 import { binIdentity, paintHeatmap, heatAt, binStretch, buildSatMask } from '../js/render/heatmap.js';
+import { buildColormap, buildMultiplicityTex, multT } from '../js/render/colormap.js';
 
 /**
  * @param {[number, number, number, number, number, number][]} rows [x, y, dx, dy, strand, identity]
@@ -138,4 +139,31 @@ test('heatmap: self-plot masks hatch only where both axes are capped', () => {
   assertEq(img.data[px(1, 0) + 3], 200);
   // Row 1 is not: on-stripe cell (0,1) stays clear.
   assertEq(img.data[px(0, 1) + 3], 0);
+});
+
+test('colormap: multiplicity rows exist, match, and scale log-wise', () => {
+  for (const mode of /** @type {const} */ (['light', 'dark'])) {
+    const cm = buildColormap(mode);
+    assertEq(cm.height, 6);
+    assertEq(cm.data.length, 256 * 6 * 4);
+    // Rows 4 and 5 are the same ramp (strand-agnostic in the shader's
+    // row = strand + mode*2 arithmetic).
+    for (const i of [0, 128, 255]) {
+      for (let c = 0; c < 4; c++) {
+        assertEq(cm.data[(4 * 256 + i) * 4 + c], cm.data[(5 * 256 + i) * 4 + c], `${mode} i=${i}`);
+      }
+    }
+  }
+  assertEq(multT(1), 0);
+  assertEq(multT(1000), 1); // clamps past ~316x
+  assert(Math.abs(multT(Math.pow(10, 1.25)) - 0.5) < 1e-9);
+});
+
+test('colormap: buildMultiplicityTex downsamples the profile log-wise', () => {
+  const profile = { tileBp: 512, mult: Float32Array.from([1, 1, 1000, 1000, 0, 0]) };
+  const tex = buildMultiplicityTex(profile, 3);
+  assertEq(tex.length, 3);
+  assertEq(tex[0], 0); // unique
+  assertEq(tex[1], 255); // deep repeat (log10(1000)/2.5 clamps to 1)
+  assertEq(tex[2], 0); // no indexed k-mers -> quiet
 });

@@ -5,7 +5,7 @@
  * anyway and PNG is the right tool.
  */
 import { LAYOUT, LANE_H, computeTicks, boundaryLines, bandLabels, bandStripes, STRIPE_ALPHA, laneRects } from '../render/axes.js';
-import { buildColormap } from '../render/colormap.js';
+import { buildColormap, multT } from '../render/colormap.js';
 import { segmentEndpoints, segmentVisible } from '../core/types.js';
 import { downloadBlob } from './download.js';
 
@@ -23,9 +23,11 @@ const CAP = 60_000;
  * @param {import('../render/axes.js').Theme} p.theme
  * @param {'light'|'dark'} p.mode
  * @param {{showFwd:boolean, showRev:boolean, minIdentity:number, minLenBp:number,
- *          identLo:number, colorMode:0|1, widthPx:number}} p.opts
+ *          identLo:number, colorMode:0|1|2, widthPx:number}} p.opts
  * @param {import('../render/axes.js').AnnoLane[]} [p.annoX]
  * @param {import('../render/axes.js').AnnoLane[]} [p.annoY]
+ * @param {{tileBp:number, mult:Float32Array} | null} [p.profile] target
+ *   multiplicity profile — required for colorMode 2 parity with the screen
  * @param {string} p.filename
  */
 export function exportSvg(p) {
@@ -47,12 +49,26 @@ export function exportSvg(p) {
   }
 
   const cm = buildColormap(p.mode);
+  const prof = p.profile ?? null;
   /**
    * @param {number} i
    */
   const color = (i) => {
-    const t = Math.min(1, Math.max(0, (s.identity[i] - opts.identLo) / Math.max(1 - opts.identLo, 1e-6)));
-    const row = (opts.colorMode === 1 ? 2 : 0) + s.strand[i];
+    let row;
+    let t;
+    if (opts.colorMode === 2 && prof) {
+      // Multiplicity of the segment's target midpoint, same scale as the GL
+      // texture and the axis lane.
+      const tile = Math.min(
+        prof.mult.length - 1,
+        Math.max(0, Math.floor((s.x[i] + s.dx[i] / 2) / prof.tileBp)),
+      );
+      t = multT(prof.mult[tile]);
+      row = 4;
+    } else {
+      t = Math.min(1, Math.max(0, (s.identity[i] - opts.identLo) / Math.max(1 - opts.identLo, 1e-6)));
+      row = (opts.colorMode === 1 ? 2 : 0) + s.strand[i];
+    }
     const o = (row * 256 + Math.round(t * 255)) * 4;
     return `rgb(${cm.data[o]},${cm.data[o + 1]},${cm.data[o + 2]})`;
   };

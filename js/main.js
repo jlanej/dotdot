@@ -15,7 +15,7 @@ import { resolveRegion, parseBp } from './core/region.js';
 import { buildViewHash, parseViewHash } from './core/share.js';
 import { GlRenderer } from './render/gl.js';
 import { drawUnderlay, drawOverlay, LAYOUT, setAnnotationLanes } from './render/axes.js';
-import { buildColormap, hexToRgb } from './render/colormap.js';
+import { buildColormap, buildMultiplicityTex, multT, hexToRgb } from './render/colormap.js';
 import { segmentDistributions, occupancyBins, groupedBarsSVG, ladderLabels } from './render/charts.js';
 import { formatBp, formatInt, formatCount } from './render/format.js';
 import { looksLikePaf } from './io/paf.js';
@@ -564,7 +564,7 @@ function displayOpts() {
     showRev: chkRev.checked,
     minIdentity: Number(inMinIdent.value),
     minLenBp: parseLenOff(inMinLen.value, 0),
-    colorMode: /** @type {0|1} */ (Number(selColorMode.value)),
+    colorMode: /** @type {0|1|2} */ (Number(selColorMode.value)),
     widthPx: Number(inWidth.value),
     minLenPx: chkMinPx.checked ? 2.2 : 0,
     identLo: state.identLo,
@@ -592,6 +592,11 @@ function onData(data, reqId = -1) {
   rowOverlay.hidden = true;
   if (data.source === 'kmer') setChip('chip-paf', null);
   renderer.setData(data.segments);
+  // Target multiplicity profile → GPU texture, so color-by-multiplicity
+  // recolors 16M segments with zero buffer churn.
+  renderer.setMultTex(
+    data.stats.kmer?.profile ? buildMultiplicityTex(data.stats.kmer.profile) : null,
+  );
   glcanvas.hidden = false;
   emptyState.hidden = true;
 
@@ -1036,20 +1041,6 @@ function activeMult() {
 }
 
 /**
- * Ink color for a log-multiplicity fraction t (0 = unique, 1 = ≥~300×),
- * as an "r,g,b" AnnoItem string for the active theme.
- * @param {number} t
- */
-function multRamp(t) {
-  const [a, b] =
-    mode === 'dark'
-      ? [[70, 76, 90], [212, 220, 235]]
-      : [[210, 214, 222], [40, 46, 58]];
-  const mix = (/** @type {number} */ i) => Math.round(a[i] + (b[i] - a[i]) * t);
-  return `${mix(0)},${mix(1)},${mix(2)}`;
-}
-
-/**
  * Synthesize the k-mer multiplicity lane for one axis from the compute's
  * index profile — repeat structure at every level, in every draw mode.
  * Ink darkens with log copy number; unique-anchor territory stays blank.
@@ -1063,6 +1054,7 @@ function multLane(w0, w1, pxSpan) {
   const km = state.data?.stats.kmer;
   const prof = km?.profile;
   if (!prof || w1 <= w0) return null;
+  const cm = buildColormap(mode);
   // ≥2px buckets: tiles merge as you zoom out, stay hoverable zoomed in.
   const bucketBp = Math.max(prof.tileBp, ((w1 - w0) / Math.max(pxSpan, 1)) * 2);
   const approx = (km?.stride ?? 1) > 1 ? '~' : '';
@@ -1083,14 +1075,15 @@ function multLane(w0, w1, pxSpan) {
     }
     if (n === 0) continue;
     const mult = Math.pow(2, sumLog / n);
-    // log10 scale, full ink at ~300×: satellite fabric reads solid, segdup
-    // territory mid-gray, unique sequence blank.
-    const tt = Math.min(1, Math.log10(Math.max(mult, 1)) / 2.5);
+    // Shared log scale (multT): full ink at ~300× — satellite fabric reads
+    // solid, segdup territory mid-gray, unique sequence blank. The same ramp
+    // colors segments in color-by-multiplicity mode.
+    const tt = multT(mult);
     if (tt < 0.03) continue;
     items.push({
       w0: s,
       w1: e,
-      rgb: multRamp(tt),
+      rgb: cm.multRgb(tt),
       name: `k-mers ${approx}${mult < 10 ? mult.toFixed(1) : String(Math.round(mult))}× · ${Math.round((uniq / n) * 100)}% unique`,
       strand: null,
     });
@@ -1857,6 +1850,7 @@ function draw(dpr) {
       minLenPx: d.minLenPx,
       alpha: 0.85,
       colorMode: d.colorMode,
+      totalX: state.data.target.total,
       identLo: d.identLo,
       // Heatmap mode hides the base segment layer with the strand uniforms
       // (zero GPU churn); the aligner overlay still draws on top.
@@ -2710,6 +2704,7 @@ btnSvg.addEventListener('click', () => {
       opts: displayOpts(),
       annoX: annoLanes.x,
       annoY: annoLanes.y,
+      profile: state.data.stats.kmer?.profile ?? null,
       filename: 'dotdot.svg',
     });
   } catch (err) {
@@ -2739,7 +2734,11 @@ function updateLegend() {
       legendEl.innerHTML +=
         `<div class="row"><span class="swatch swatch-hatch"></span> capped repeats — not searched</div>`;
     }
-  } else if (colorMode === 0) {
+  } else if (colorMode === 2 && state.data.stats.kmer?.profile) {
+    legendEl.innerHTML =
+      `<div class="row"><span class="lab">seg</span><span class="ramp" style="background:${cm.multRampCss()}"></span></div>` +
+      `<div class="row"><span class="lab"></span><span class="lab">1× unique</span><span style="flex:1"></span><span class="lab">≥300× k-mers</span></div>`;
+  } else if (colorMode === 0 || colorMode === 2) {
     const lo = `${Math.round(state.identLo * 100)}%`;
     legendEl.innerHTML =
       `<div class="row"><span class="lab">fwd</span><span class="ramp" style="background:${cm.rampCss(0)}"></span></div>` +
@@ -3144,8 +3143,12 @@ const HELP = {
     'Forward matches are blue; reverse-complement matches are orange — inversions appear as ' +
     'orange anti-diagonals. Toggle with keys <kbd>1</kbd> and <kbd>2</kbd>.',
   colorby:
-    '“identity” shades each segment by its matched fraction (legend ramps); “strand only” uses ' +
-    'flat blue/orange.',
+    '“identity” shades each segment by anchor identity (legend ramps); “strand only” uses flat ' +
+    'blue/orange. “<b>k-mer multiplicity</b>” recolors every segment by the copy number of the ' +
+    'target sequence it sits on — the same neutral→ink scale as the axis lane (1× unique pale, ' +
+    '≥300× full ink), from this plot’s own index. Repeat families light up as families; unique ' +
+    'anchors recede. Long segments shade along their length as they cross repeat boundaries. ' +
+    'Alignment-free plots only; strand toggles and filters still apply.',
   minpx:
     'Stretch tiny matches to a minimum on-screen size so small features remain visible when ' +
     'zoomed way out.',

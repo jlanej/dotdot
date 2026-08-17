@@ -30,9 +30,11 @@ uniform float uMinLenPx;                // minimum drawn length, device px
 uniform vec2 uStrandVisible;            // (fwd, rev) 0/1
 uniform float uMinIdentity;
 uniform float uMinLenBp;
+uniform float uTotalX;                  // target axis length (multiplicity lookup)
 
 out float vAcross;
 out float vIdentity;
+out float vXNorm;
 flat out float vStrand;
 
 void main() {
@@ -51,8 +53,15 @@ void main() {
     vAcross = 0.0;
     vIdentity = 0.0;
     vStrand = 0.0;
+    vXNorm = 0.0;
     return;
   }
+
+  // Absolute target position of this corner, normalized for the multiplicity
+  // texture — long segments shade along their length. Float32 rounding at Gb
+  // scale (~hundreds of bp) is far below one texel.
+  float wx = mix(aP0Hi.x + aP0Lo.x, aP1Hi.x + aP1Lo.x, aCorner.x);
+  vXNorm = wx / max(uTotalX, 1.0);
 
   vec2 s0 = rel0 * uPxPerBp;
   vec2 s1 = rel1 * uPxPerBp;
@@ -78,10 +87,12 @@ precision highp float;
 
 in float vAcross;
 in float vIdentity;
+in float vXNorm;
 flat in float vStrand;
 
-uniform sampler2D uColormap;   // 256 x 4: ramps (rows 0,1), flats (rows 2,3)
-uniform float uColorMode;      // 0 = identity ramp, 1 = flat strand color
+uniform sampler2D uColormap;   // 256 x 6: ramps (0,1), flats (2,3), multiplicity (4,5)
+uniform sampler2D uMultTex;    // 1D log-multiplicity profile along the target
+uniform float uColorMode;      // 0 = identity ramp, 1 = flat strand, 2 = multiplicity
 uniform float uIdentLo;        // identity mapped to ramp start
 uniform float uAlpha;
 uniform float uWidthPx;
@@ -90,9 +101,10 @@ uniform vec4 uForceColor;      // a > 0 overrides (highlight pass)
 out vec4 outColor;
 
 void main() {
-  float t = clamp((vIdentity - uIdentLo) / max(1.0 - uIdentLo, 1e-6), 0.0, 1.0);
+  float identT = clamp((vIdentity - uIdentLo) / max(1.0 - uIdentLo, 1e-6), 0.0, 1.0);
+  float t = uColorMode > 1.5 ? texture(uMultTex, vec2(vXNorm, 0.5)).r : identT;
   float row = vStrand + uColorMode * 2.0;
-  vec2 uv = vec2(t * (255.0 / 256.0) + 0.5 / 256.0, (row + 0.5) / 4.0);
+  vec2 uv = vec2(t * (255.0 / 256.0) + 0.5 / 256.0, (row + 0.5) / 6.0);
   vec3 rgb = texture(uColormap, uv).rgb;
   if (uForceColor.a > 0.0) rgb = uForceColor.rgb;
 

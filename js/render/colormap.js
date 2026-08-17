@@ -159,14 +159,46 @@ function sampleRamp(anchors, t) {
   return oklchToSrgb(a.L + f * (b.L - a.L), a.C + f * (b.C - a.C), a.h + f * (b.h - a.h));
 }
 
+// Multiplicity ramp endpoints (neutral -> ink, matching the axis lane):
+// unique sequence stays quiet, deep repeat families carry the ink.
+const MULT_ENDS = {
+  light: { lo: '#d2d6de', hi: '#282e3a' },
+  dark: { lo: '#464c5a', hi: '#d4dceb' },
+};
+
 /**
- * Build the 256x4 RGBA colormap texture:
+ * OKLab-interpolated neutral ramp sample for the multiplicity scale.
+ * @param {'light'|'dark'} mode @param {number} t 0..1
+ * @returns {[number, number, number]}
+ */
+function sampleMultRamp(mode, t) {
+  const a = srgbToOklab(...hexToRgb(MULT_ENDS[mode].lo));
+  const b = srgbToOklab(...hexToRgb(MULT_ENDS[mode].hi));
+  const f = Math.min(1, Math.max(0, t));
+  const rgb = oklabToSrgbRaw(
+    a[0] + f * (b[0] - a[0]),
+    a[1] + f * (b[1] - a[1]),
+    a[2] + f * (b[2] - a[2]),
+  );
+  return rgb ?? hexToRgb(MULT_ENDS[mode].hi);
+}
+
+/** Log scale shared by every multiplicity display: 1× → 0, ≥~316× → 1.
+ * @param {number} mult */
+export function multT(mult) {
+  return Math.min(1, Math.log10(Math.max(mult, 1)) / 2.5);
+}
+
+/**
+ * Build the 256x6 RGBA colormap texture:
  * row 0 = forward identity ramp, row 1 = reverse identity ramp,
- * row 2 = forward flat, row 3 = reverse flat.
+ * row 2 = forward flat, row 3 = reverse flat,
+ * rows 4+5 = multiplicity ramp (identical, so the shader's
+ * strand + mode*2 row arithmetic lands on it for either strand).
  * @param {'light'|'dark'} mode
  */
 export function buildColormap(mode) {
-  const data = new Uint8Array(256 * 4 * 4);
+  const data = new Uint8Array(256 * 6 * 4);
   const fwdAnchors = rampAnchors(mode, 0);
   const revAnchors = rampAnchors(mode, 1);
   const fwdFlat = hexToRgb(SLOTS[mode].fwd);
@@ -177,11 +209,14 @@ export function buildColormap(mode) {
     writeRgba(data, 1 * 256 + i, sampleRamp(revAnchors, t));
     writeRgba(data, 2 * 256 + i, fwdFlat);
     writeRgba(data, 3 * 256 + i, revFlat);
+    const m = sampleMultRamp(mode, t);
+    writeRgba(data, 4 * 256 + i, m);
+    writeRgba(data, 5 * 256 + i, m);
   }
   return {
     data,
     width: 256,
-    height: 4,
+    height: 6,
     fwdFlat: SLOTS[mode].fwd,
     revFlat: SLOTS[mode].rev,
     /**
@@ -197,7 +232,49 @@ export function buildColormap(mode) {
       }
       return `linear-gradient(90deg, ${stops.join(', ')})`;
     },
+    /** CSS gradient for the multiplicity legend swatch. */
+    multRampCss() {
+      const stops = [];
+      for (let i = 0; i <= 6; i++) {
+        const t = i / 6;
+        stops.push(`${rgbToHex(sampleMultRamp(mode, t))} ${Math.round(t * 100)}%`);
+      }
+      return `linear-gradient(90deg, ${stops.join(', ')})`;
+    },
+    /** "r,g,b" string at a multiplicity fraction, for canvas/lane consumers. */
+    multRgb(/** @type {number} */ t) {
+      const rgb = sampleMultRamp(mode, t);
+      return rgb.map((c) => Math.round(c * 255)).join(',');
+    },
   };
+}
+
+/**
+ * Downsample the per-tile multiplicity profile into a width-wide R8 texture
+ * of log-scaled fractions (see multT) for the shader's color-by-multiplicity
+ * mode — the mean of log-multiplicity per texel, matching the axis lane's
+ * bucketing.
+ * @param {{tileBp: number, mult: Float32Array}} profile
+ * @param {number} [width]
+ * @returns {Uint8Array}
+ */
+export function buildMultiplicityTex(profile, width = 8192) {
+  const n = profile.mult.length;
+  const w = Math.max(1, Math.min(width, n));
+  const out = new Uint8Array(w);
+  for (let x = 0; x < w; x++) {
+    const t0 = Math.floor((x * n) / w);
+    const t1 = Math.max(t0 + 1, Math.floor(((x + 1) * n) / w));
+    let sum = 0;
+    let cnt = 0;
+    for (let t = t0; t < t1 && t < n; t++) {
+      if (profile.mult[t] <= 0) continue;
+      sum += Math.log10(profile.mult[t]);
+      cnt++;
+    }
+    out[x] = cnt === 0 ? 0 : Math.round(Math.min(1, sum / cnt / 2.5) * 255);
+  }
+  return out;
 }
 
 /**

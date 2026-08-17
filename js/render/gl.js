@@ -72,6 +72,10 @@ export class GlRenderer {
     this.highlightVao = null;
     /** @type {WebGLTexture | null} */
     this.colormapTex = null;
+    /** @type {WebGLTexture | null} */
+    this.multTex = null;
+    /** @type {Uint8Array | null} */
+    this.multTexData = null;
     this.highlightScratch = new Float32Array(FLOATS_PER_INSTANCE);
     /** @type {Float32Array | null} */
     this.chunkScratch = null;
@@ -114,6 +118,8 @@ export class GlRenderer {
       identLo: gl.getUniformLocation(this.program, 'uIdentLo'),
       alpha: gl.getUniformLocation(this.program, 'uAlpha'),
       forceColor: gl.getUniformLocation(this.program, 'uForceColor'),
+      multTex: gl.getUniformLocation(this.program, 'uMultTex'),
+      totalX: gl.getUniformLocation(this.program, 'uTotalX'),
     };
 
     // Shared quad-corner buffer: (along 0..1, across -1..1) triangle strip.
@@ -145,6 +151,18 @@ export class GlRenderer {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     this.uploadColormap();
+
+    // The multiplicity profile texture (unit 1): 1×N R8 of log-scaled copy
+    // number along the target. A zero placeholder keeps the sampler valid;
+    // NOTE this.multTexData survives init() and re-uploads on restore, like
+    // the overlay store above.
+    this.multTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, this.multTex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    this.setMultTex(this.multTexData ?? null);
 
     gl.disable(gl.DEPTH_TEST);
     gl.enable(gl.BLEND);
@@ -182,6 +200,22 @@ export class GlRenderer {
   setTheme(mode) {
     this.mode = mode;
     this.uploadColormap();
+  }
+
+  /**
+   * Upload (or clear) the target multiplicity profile for the
+   * color-by-multiplicity mode.
+   * @param {Uint8Array | null} data width-long log-scaled fractions, or null
+   */
+  setMultTex(data) {
+    /** @type {Uint8Array | null} */
+    this.multTexData = data;
+    const gl = this.gl;
+    const tex = data ?? new Uint8Array([0]);
+    gl.bindTexture(gl.TEXTURE_2D, this.multTex);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, tex.length, 1, 0, gl.RED, gl.UNSIGNED_BYTE, tex);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
   }
 
   /** @param {SegmentStore} store */
@@ -252,7 +286,8 @@ export class GlRenderer {
    * @param {number} opts.widthPx CSS px line width
    * @param {number} opts.minLenPx CSS px minimum drawn segment length
    * @param {number} opts.alpha
-   * @param {0|1} opts.colorMode
+   * @param {0|1|2} opts.colorMode 0 = identity ramp, 1 = flat strand, 2 = multiplicity
+   * @param {number} [opts.totalX] target axis length (multiplicity mode)
    * @param {number} opts.identLo
    * @param {boolean} opts.showFwd
    * @param {boolean} opts.showRev
@@ -294,7 +329,15 @@ export class GlRenderer {
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.colormapTex);
     gl.uniform1i(this.u.colormap, 0);
-    gl.uniform1f(this.u.colorMode, opts.colorMode);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.multTex);
+    gl.uniform1i(this.u.multTex, 1);
+    gl.activeTexture(gl.TEXTURE0);
+    // Multiplicity mode needs a loaded profile; without one, fall back to
+    // the identity ramp rather than painting from the zero placeholder.
+    const colorMode = opts.colorMode === 2 && !this.multTexData ? 0 : opts.colorMode;
+    gl.uniform1f(this.u.colorMode, colorMode);
+    gl.uniform1f(this.u.totalX, opts.totalX ?? 1);
     gl.uniform1f(this.u.identLo, opts.identLo);
     gl.uniform1f(this.u.alpha, opts.alpha);
     gl.uniform4f(this.u.forceColor, 0, 0, 0, 0);
