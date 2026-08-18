@@ -9,6 +9,7 @@
 import { VERT, FRAG } from './shaders.js';
 import { segmentEndpoints } from '../core/types.js';
 import { buildColormap } from './colormap.js';
+import { MAX_SEGMENTS } from '../core/kmer.js';
 
 /** @typedef {import('../core/types.js').SegmentStore} SegmentStore */
 /** @typedef {import('../core/transform.js').View} View */
@@ -228,6 +229,14 @@ export class GlRenderer {
     // interleaving 8M+ segments into one giant Float32Array spiked the JS
     // heap by hundreds of MB exactly when overall memory already peaks.
     gl.bufferData(gl.ARRAY_BUFFER, store.count * BYTES_PER_INSTANCE, gl.STATIC_DRAW);
+    // User-raised segment walls can push this allocation past what the GPU
+    // accepts — say so instead of drawing nothing.
+    if (store.count > MAX_SEGMENTS && gl.getError() === gl.OUT_OF_MEMORY) {
+      throw new Error(
+        `The GPU refused a ${Math.round((store.count * BYTES_PER_INSTANCE) / 1e6)} MB segment ` +
+          'buffer — lower the segment wall (raise min match length or sampling instead).',
+      );
+    }
     const CHUNK = 262_144; // instances per staging fill
     const scratchLen = Math.min(Math.max(store.count, 1), CHUNK) * FLOATS_PER_INSTANCE;
     if (!this.chunkScratch || this.chunkScratch.length < scratchLen) {

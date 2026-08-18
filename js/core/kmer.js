@@ -29,6 +29,9 @@
  * @property {number} [qSample]  test every qSample-th query position (1 = all).
  *   Sampling both sides thins anchors on a diagonal to ~every stride*qSample bp;
  *   run merging bridges those sampling holes without an identity penalty.
+ * @property {number} [maxSegments] segment ceiling override (default
+ *   MAX_SEGMENTS; clamped to MAX_SEGMENTS_HARD) — ~70 bytes of RAM+GPU per
+ *   segment, redrawn every frame, so doubling it halves the frame budget
  */
 
 /**
@@ -71,6 +74,10 @@ export const KMER_DEFAULTS = Object.freeze({
 });
 
 export const MAX_SEGMENTS = 16_000_000;
+
+/** Ceiling for user-raised segment walls: past this the GPU instance buffer
+ * alone is ~2.6 GB — allocation refusal territory on most hardware. */
+export const MAX_SEGMENTS_HARD = 64_000_000;
 
 /** Default largest target an exact (sampling off) compute may index: every
  * k-mer of the worked extent lives in RAM, ~8–12 bytes per base. The user
@@ -392,6 +399,12 @@ export function matchStrand(index, qCodes, qStarts, qTotal, tStarts, tTotal, opt
     throw new Error('Combined sequence length too large for in-browser matching — import a minimap2 PAF instead.');
   }
 
+  // User-raisable segment wall (see the recovery card / ?wall= param).
+  const segCap = Math.min(
+    MAX_SEGMENTS_HARD,
+    Math.max(1, Math.floor(opts.maxSegments || MAX_SEGMENTS)),
+  );
+
   // Chunk-cut awareness, active only when the caller tracks edge flags
   // (pool workers): a run near enough to a cut that its continuation may
   // live in the neighboring chunk is emitted even below minRunLen and
@@ -421,11 +434,11 @@ export function matchStrand(index, qCodes, qStarts, qTotal, tStarts, tTotal, opt
     const len = q1 - q0 + k;
     const atEdge = q0 <= edgeLo || q1 >= edgeHi;
     if (len < minRunLen && !atEdge) return;
-    if (out.x.n >= MAX_SEGMENTS) {
+    if (out.x.n >= segCap) {
       throw new Error(
-        'Too many match segments (16M wall) — raise min match length, restore an occurrence ' +
-          'cap or sampling, or zoom in. The heatmap and multiplicity lane show full repeat ' +
-          'depth without enumerating it.',
+        `Too many match segments (${Math.round(segCap / 1e6)}M wall) — raise min match ` +
+          'length, restore an occurrence cap or sampling, or zoom in. The heatmap and ' +
+          'multiplicity lane show full repeat depth without enumerating it.',
       );
     }
     out.x.push(t0);

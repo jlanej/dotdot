@@ -12,7 +12,7 @@
  * k-1 bp overlap between split pieces, so the output-space join gap for a
  * bridgeable anchor gap g is g - (k - 1) — hence the tolerance below.
  */
-import { MAX_SEGMENTS } from '../core/kmer.js';
+import { MAX_SEGMENTS, MAX_SEGMENTS_HARD } from '../core/kmer.js';
 import { allocSegments, copySegmentRow } from '../core/types.js';
 
 /** @typedef {import('../core/types.js').SegmentStore} SegmentStore */
@@ -21,7 +21,7 @@ import { allocSegments, copySegmentRow } from '../core/types.js';
  */
 
 /**
- * @param {{shared: {opts: {k:number, maxGap:number, minRunLen:number, qSample?:number, stride?:number}}, target: {starts: Float64Array}, query: {starts: Float64Array}}} plan
+ * @param {{shared: {opts: {k:number, maxGap:number, minRunLen:number, qSample?:number, stride?:number, maxSegments?:number}}, target: {starts: Float64Array}, query: {starts: Float64Array}}} plan
  * @param {PartResult[]} parts
  * @returns {{segments: SegmentStore, identMin: number}}
  */
@@ -149,11 +149,15 @@ export function assemblePool(plan, parts) {
   }
   const mergedKept = mergedRows.filter((m) => m.len >= minRunLen);
   total += mergedKept.length;
-  if (total > MAX_SEGMENTS) {
+  const segCap = Math.min(
+    MAX_SEGMENTS_HARD,
+    Math.max(1, Math.floor(opts.maxSegments || MAX_SEGMENTS)),
+  );
+  if (total > segCap) {
     throw new Error(
-      'Too many match segments (16M wall) — raise min match length, restore an occurrence ' +
-        'cap or sampling, or zoom in. The heatmap and multiplicity lane show full repeat ' +
-        'depth without enumerating it.',
+      `Too many match segments (${Math.round(segCap / 1e6)}M wall) — raise min match ` +
+        'length, restore an occurrence cap or sampling, or zoom in. The heatmap and ' +
+        'multiplicity lane show full repeat depth without enumerating it.',
     );
   }
 

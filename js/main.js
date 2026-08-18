@@ -242,6 +242,10 @@ let lastKmer = null;
 let lastContain = null;
 /** Which request kind a worker needData reply should resubmit. */
 let lastSubmitKind = 'kmer';
+/** User-raised segment wall in segments (0 = the 16M default). ~70 B of
+ * RAM+GPU per segment redrawn every frame: a sizing default, not physics —
+ * raisable with consent like every other ceiling here. */
+let wallOverride = 0;
 
 function spawnWorker() {
   workerGen = -1;
@@ -565,6 +569,7 @@ function matchOpts() {
     exactMaxBp: sample.exactMaxBp,
     stride: 1,
     budgetX: currentBudget(),
+    maxSegments: wallOverride || undefined,
   };
 }
 
@@ -601,7 +606,11 @@ function onData(data, reqId = -1) {
   renderer.setOverlay(null);
   rowOverlay.hidden = true;
   if (data.source === 'kmer') setChip('chip-paf', null);
-  renderer.setData(data.segments);
+  try {
+    renderer.setData(data.segments);
+  } catch (err) {
+    toast(err instanceof Error ? err.message : String(err), true);
+  }
   // Target multiplicity profile → GPU texture, so color-by-multiplicity
   // recolors 16M segments with zero buffer churn.
   renderer.setMultTex(
@@ -950,10 +959,15 @@ async function loadRefRegion(text) {
     const sum = (/** @type {{start0:number,end0:number}[]} */ rs) =>
       rs.reduce((a, r) => a + (r.end0 - r.start0), 0);
     const total = sum(tRegions) + (qRegions ? sum(qRegions) : 0);
-    if (total > 300e6) {
-      toast('Regions too large — 300 Mb max combined.', true);
+    if (total > 1e9) {
+      toast('Regions too large — 1 Gb max combined (the engine addresses 32-bit coordinates).', true);
       return;
     }
+    // Big is allowed, informed: past 300 Mb combined, state the real costs
+    // and ask — the chr1-vs-chr2 class of comparison is one click, not a
+    // refusal.
+    if (total > 300e6 && !(await askStreamConfirm(total))) return;
+    if (gen !== refLoadGen) return;
     const tLabel = regionsLabel(tRegions);
     const label = qRegions ? `${tLabel} vs ${regionsLabel(qRegions)}` : tLabel;
     toast(
@@ -976,6 +990,41 @@ async function loadRefRegion(text) {
   } catch (err) {
     toast(err instanceof Error ? err.message : String(err), true);
   }
+}
+
+/**
+ * Consent card for very large reference streams: the honest costs (transfer
+ * is total/4 — 2bit is 2 bits/base — plus several× that in RAM once parsed
+ * and matched), one click to proceed.
+ * @param {number} totalBp
+ * @returns {Promise<boolean>}
+ */
+function askStreamConfirm(totalBp) {
+  return new Promise((resolve) => {
+    const mb = Math.round(totalBp / 4 / 1e6);
+    const gb = ((totalBp * 3) / 1e9).toFixed(1);
+    confirmPop.innerHTML =
+      `<div class="stats-card">` +
+      `<div class="stats-head"><h3>Large reference stream</h3>` +
+      `<button class="stats-close" aria-label="close">×</button></div>` +
+      `<p class="stats-sum">${formatBp(totalBp)} of sequence ≈ a <b>${mb} MB</b> download from ` +
+      `UCSC and roughly <b>${gb} GB</b> of RAM once parsed and matched (the compute itself ` +
+      `auto-samples at this scale). Chromosome-vs-chromosome comparisons are minutes, not ` +
+      `seconds.</p>` +
+      `<div class="confirm-row">` +
+      `<button id="cs-go" class="btn primary">Stream it</button>` +
+      `<button id="cs-no" class="btn">Cancel</button>` +
+      `</div></div>`;
+    confirmPop.hidden = false;
+    /** @param {boolean} ok */
+    const done = (ok) => {
+      confirmPop.hidden = true;
+      resolve(ok);
+    };
+    confirmPop.querySelector('.stats-close')?.addEventListener('click', () => done(false));
+    confirmPop.querySelector('#cs-no')?.addEventListener('click', () => done(false));
+    confirmPop.querySelector('#cs-go')?.addEventListener('click', () => done(true));
+  });
 }
 
 /** @type {Map<string, {pEnd: number, qStart: number}>} */
@@ -2650,7 +2699,7 @@ function onRegionRefined(msg) {
     if (!inside) keep.push(i);
   }
   const total = keep.length + ns.count;
-  if (total > 20_000_000) {
+  if (total > Math.max(20_000_000, (wallOverride || 16_000_000) * 1.25)) {
     toast('Refining this window would exceed the segment budget — narrow the view or raise min match length.', true);
     return;
   }
@@ -2659,7 +2708,11 @@ function onRegionRefined(msg) {
   blitSegments(merged, keep.length, ns);
 
   d.segments = merged;
-  renderer.setData(merged);
+  try {
+    renderer.setData(merged);
+  } catch (err) {
+    toast(err instanceof Error ? err.message : String(err), true);
+  }
   state.grid = null;
   state.hoverIndex = null;
   lastHeatSig = ''; // refined data: rebin on next settle
@@ -2821,6 +2874,7 @@ btnShare.addEventListener('click', async () => {
   }
   if (mo.budgetX !== 1) q.set('budget', mo.budgetX === Infinity ? 'off' : String(mo.budgetX));
   if (currentAniTiles() > 0) q.set('anitiles', String(currentAniTiles()));
+  if (wallOverride) q.set('wall', `${Math.round(wallOverride / 1e6)}M`);
   const qs = q.toString();
   const url = `${location.origin}${location.pathname}${qs ? '?' + qs : ''}${hash}`;
   try {
@@ -3047,19 +3101,27 @@ function wallRecovery(message) {
   if (!message.startsWith('Too many match segments') || !lastKmer) return false;
   const minRunNow = parseLenOff(inMinRun.value, 0);
   const fixLen = Math.max(300, minRunNow * 2);
+  const wallNow = wallOverride || 16_000_000;
+  const wallNext = Math.min(64_000_000, wallNow * 2);
+  const canRaise = wallNext > wallNow;
   confirmPop.innerHTML =
     `<div class="stats-card">` +
-    `<div class="stats-head"><h3>Hit the 16M-segment wall</h3>` +
+    `<div class="stats-head"><h3>Hit the ${Math.round(wallNow / 1e6)}M-segment wall</h3>` +
     `<button class="stats-close" aria-label="close">×</button></div>` +
-    `<p class="stats-sum">This window's repeat structure produces more than 16M match segments ` +
-    `at these settings — the one ceiling that protects your GPU. Two ways through:</p>` +
+    `<p class="stats-sum">This window's repeat structure produces more than ` +
+    `${Math.round(wallNow / 1e6)}M match segments at these settings. Ways through:</p>` +
     `<div class="confirm-row">` +
     `<button id="cw-minlen" class="btn primary">Keep matches ≥ ${formatBp(fixLen)}</button>` +
     `<button id="cw-sample" class="btn">Sample every 4th position</button>` +
+    (canRaise
+      ? `<button id="cw-wall" class="btn">Raise the wall to ${Math.round(wallNext / 1e6)}M</button>`
+      : '') +
     `</div>` +
     `<p class="stats-sum">The length filter keeps long-range structure and drops repeat ` +
-    `confetti; sampling thins everything evenly. The ANI heatmap draw mode shows full repeat ` +
-    `depth without enumerating anything at all.</p></div>`;
+    `confetti; sampling thins everything evenly. Raising the wall recomputes and keeps ` +
+    `everything — ~${Math.round(wallNext * 70 / 1e9)} GB of RAM+GPU at ${Math.round(wallNext / 1e6)}M, ` +
+    `frame rate roughly halves per doubling, and your GPU may refuse the buffer (64M is the ` +
+    `engine's hard limit). The ANI heatmap shows full repeat depth without enumerating at all.</p></div>`;
   confirmPop.hidden = false;
   confirmPop.querySelector('.stats-close')?.addEventListener('click', () => {
     confirmPop.hidden = true;
@@ -3076,6 +3138,16 @@ function wallRecovery(message) {
     inSample.value = '4';
     if (lastKmer) {
       submitKmer({ ...lastKmer.opts, sample: 4, volumeConfirmed: true }, lastKmer.window);
+    }
+  });
+  confirmPop.querySelector('#cw-wall')?.addEventListener('click', () => {
+    confirmPop.hidden = true;
+    wallOverride = wallNext;
+    if (lastKmer) {
+      submitKmer(
+        { ...lastKmer.opts, maxSegments: wallNext, volumeConfirmed: true },
+        lastKmer.window,
+      );
     }
   });
   return true;
@@ -3289,9 +3361,12 @@ const HELP = {
     'How many match anchors a compute may spend (~60M per strand at <b>auto</b>). The budget is ' +
     'what auto-tightens the repeat cutoff on repeat-rich inputs; <b>2×/4×/8×</b> multiply it, ' +
     'loosening that cutoff — deeper repeat structure for more time and RAM. <b>off</b> removes ' +
-    'it entirely: no anchor-volume tightening at all, leaving the 16M-segment ceiling (a hard ' +
-    'GPU/RAM wall with its own error) and your patience as the only limits — combine with ' +
-    '“skip k-mers: off” for a fully unbounded compute. <b>Refine view</b> always runs at ≥4×. ' +
+    'it entirely: no anchor-volume tightening at all, leaving the segment wall and your ' +
+    'patience as the only limits — combine with “skip k-mers: off” for a fully unbounded ' +
+    'compute. The <b>segment wall</b> itself defaults to 16M (~1 GB of RAM+GPU, redrawn every ' +
+    'frame — a sizing default, not physics) and is raisable to <b>64M</b> from its recovery ' +
+    'card or a <b>?wall=32M</b> link: frame rate roughly halves per doubling, and past 64M ' +
+    'the GPU buffer outgrows most hardware. <b>Refine view</b> always runs at ≥4×. ' +
     'One caution stands at any budget: satellite families with repeat period &lt; k (HSat2/3) ' +
     'are unenumerable in principle — expect the segment wall there, and trust the hatch.',
   minrun:
@@ -3460,6 +3535,10 @@ async function initFromUrl() {
     inBudget.value = /^\d/.test(b) ? `${b}×` : b;
   }
   if (p.has('anitiles')) inAniTiles.value = p.get('anitiles') ?? inAniTiles.value;
+  if (p.has('wall')) {
+    const w = parseBp(/** @type {string} */ (p.get('wall')));
+    if (Number.isFinite(w) && w > 16_000_000) wallOverride = Math.min(64_000_000, Math.round(w));
+  }
   const urlRegion = p.get('region');
   if (urlRegion) queuedActions = { ...(queuedActions ?? {}), region: urlRegion };
   try {

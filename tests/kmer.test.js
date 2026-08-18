@@ -491,3 +491,20 @@ test('kmer: containmentGrid — cap-free tile identity from exact counts', () =>
   const off = containmentGrid(index, 0, 1024, 1024, 2048, 1, 1, 12);
   assert(off.grid[0] > 0.999, `windowed copy ${off.grid[0]}`);
 });
+
+test('kmer: the segment wall is an option, clamped to the hard limit', () => {
+  // The repeat fixture from the maxOcc test: uncapped it emits ~3.5k runs.
+  const unit = randCodes(20, 7);
+  const t = new Uint8Array(20 * 60);
+  for (let i = 0; i < 60; i++) t.set(unit, i * 20);
+  let msg = '';
+  try {
+    match(t, starts([1200]), unit.slice(), starts([20]), { maxOcc: 100, maxSegments: 10 });
+  } catch (e) {
+    msg = String(e);
+  }
+  assert(msg.includes('Too many match segments'), `tiny wall should trip: ${msg}`);
+  // A wall above the emission count passes untouched.
+  const ok = match(t, starts([1200]), unit.slice(), starts([20]), { maxOcc: 100, maxSegments: 1_000_000 });
+  assert(ok.length > 50, `raised wall passes: ${ok.length}`);
+});
