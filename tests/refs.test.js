@@ -1,6 +1,6 @@
 // @ts-check
 import { test, assert, assertEq } from './harness.js';
-import { parseBrowserRegion, splitRegionList, REFERENCES } from '../js/refs.js';
+import { parseBrowserRegion, splitRegionList, splitCrossSpec, REFERENCES } from '../js/refs.js';
 
 test('refs: genome-browser region syntax parses', () => {
   const r = parseBrowserRegion('chrX:57,820,000-60,670,000');
@@ -77,12 +77,28 @@ test('refs: region lists split on ; and on commas before letters only', () => {
   assertEq(splitRegionList('  ').length, 0);
 });
 
+test('refs: vs splits target from query axis; each side stays a list', () => {
+  assertEq(splitCrossSpec('chr21p vs chr22p').target, 'chr21p');
+  assertEq(splitCrossSpec('chr21p vs chr22p').query, 'chr22p');
+  assertEq(splitCrossSpec('chr13p,chr14p VS chr21p,chr22p').query, 'chr21p,chr22p');
+  assertEq(splitCrossSpec('chr8:44.2M-46.33M vs. chrX:57.8M-60.7M').query, 'chrX:57.8M-60.7M');
+  // No vs → whole text is the target, query null.
+  assertEq(splitCrossSpec('chr21p,chr22p').query, null);
+  assertEq(splitCrossSpec('chr21p,chr22p').target, 'chr21p,chr22p');
+  // 'vs' needs whitespace on both sides — sequence names keep their letters.
+  assertEq(splitCrossSpec('tig_vs_1:1k-2k').query, null);
+});
+
 test('refs: every registry preset and default region parses', () => {
   for (const ref of REFERENCES) {
     assert(parseBrowserRegion(ref.defaultRegion) !== null, `${ref.id} defaultRegion`);
     for (const p of ref.presets) {
-      for (const part of splitRegionList(p.region)) {
-        assert(parseBrowserRegion(part) !== null, `${ref.id} preset ${p.label}: ${part}`);
+      const cross = splitCrossSpec(p.region);
+      for (const side of [cross.target, cross.query]) {
+        if (side === null) continue;
+        for (const part of splitRegionList(side)) {
+          assert(parseBrowserRegion(part) !== null, `${ref.id} preset ${p.label}: ${part}`);
+        }
       }
     }
   }

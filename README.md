@@ -237,7 +237,10 @@ units and commas welcome; a bare name loads the whole sequence), a
 cytogenetic **arm** (`chr13p`, resolved from the streamed cytoband track),
 or a **list** — `chr13p,chr14p,chr15p,chr21p,chr22p` lays all five
 acrocentric short arms on one axis for a 70 Mb self-comparison of the
-rDNA-bearing arms (also a showcase preset). Or pick any preset (chrX DXZ1,
+rDNA-bearing arms (also a showcase preset). **`vs` splits the axes**:
+`chr21p vs chr22p` streams the left side as the target and the right side
+as the query — the direct cross-comparison with no self quadrants, each
+side a full list if you like (and the ANI heatmap works across it). Or pick any preset (chrX DXZ1,
 chr8 and chr17 centromeres, a chr1 pericentromere, the acrocentrics). With a reference window loaded, added FASTAs dot **against
 it** — the demo above is exactly that pattern. The axis rulers, hover, the
 readout, and `G` region jumps all speak true genomic coordinates

@@ -406,9 +406,12 @@ async function handleContainment(req) {
   const t0 = performance.now();
   /** @type {{catalog: any, codes: Uint8Array}} */
   let tParsed;
+  /** @type {{catalog: any, codes: Uint8Array} | null} */
+  let qBase;
   if (!req.target) {
     if (parsedCache && parsedCache.gen === req.gen) {
       tParsed = parsedCache.tParsed;
+      qBase = parsedCache.qParsed;
     } else {
       post({ id: req.id, type: 'needData', gen: req.gen });
       return;
@@ -416,22 +419,63 @@ async function handleContainment(req) {
   } else {
     progress(req.id, 'Reading files', 0);
     tParsed = await parseSlot(req.target, 'target');
-    const qBase = req.query ? await parseSlot(req.query, 'query') : null;
+    qBase = req.query ? await parseSlot(req.query, 'query') : null;
     parsedCache = { gen: req.gen ?? -1, tParsed, qParsed: qBase };
   }
   const w = req.window;
   const k = Math.min(26, Math.max(4, Math.round(req.opts.k || 15)));
-  const lo = Math.max(0, Math.floor(Math.min(w.tx0, w.qy0)));
-  const hi = Math.min(tParsed.codes.length, Math.ceil(Math.max(w.tx1, w.qy1)));
-  const span = Math.max(1, hi - lo);
-  // Stride subsamples both tiles' multisets identically, so the containment
-  // ratio is robust to it — index budget applies as usual.
-  const stride = Math.max(1, Math.ceil(span / 48_000_000));
   progress(req.id, 'Indexing window', 0);
-  const index = buildIndex(
-    tParsed.codes, tParsed.catalog.starts, k, stride,
-    (d, t) => progress(req.id, 'Indexing window', d / t), lo, hi,
-  );
+  /** @type {import('../core/kmer.js').KmerIndex} */
+  let index;
+  /** @type {{x0: number, x1: number, y0: number, y1: number}} */
+  let tileRanges;
+  if (!qBase) {
+    // Self-plot: both tile ranges live in target coordinates — one windowed
+    // index over their union span covers everything.
+    const lo = Math.max(0, Math.floor(Math.min(w.tx0, w.qy0)));
+    const hi = Math.min(tParsed.codes.length, Math.ceil(Math.max(w.tx1, w.qy1)));
+    const span = Math.max(1, hi - lo);
+    // Stride subsamples both tiles' multisets identically, so the containment
+    // ratio is robust to it — index budget applies as usual.
+    const stride = Math.max(1, Math.ceil(span / 48_000_000));
+    index = buildIndex(
+      tParsed.codes, tParsed.catalog.starts, k, stride,
+      (d, t) => progress(req.id, 'Indexing window', d / t), lo, hi,
+    );
+    tileRanges = { x0: w.tx0, x1: w.tx1, y0: w.qy0, y1: w.qy1 };
+  } else {
+    // Cross-plot: the two axes are different sequences, so slice both
+    // visible windows, concatenate them into one local coordinate space
+    // (junction and record boundaries preserved so k-mers never roll
+    // across), and index that — containmentGrid then compares target tiles
+    // [0, txSpan) against query tiles [txSpan, txSpan + qySpan).
+    const txLo = Math.max(0, Math.floor(w.tx0));
+    const txHi = Math.min(tParsed.codes.length, Math.ceil(w.tx1));
+    const qyLo = Math.max(0, Math.floor(w.qy0));
+    const qyHi = Math.min(qBase.codes.length, Math.ceil(w.qy1));
+    const txSpan = Math.max(0, txHi - txLo);
+    const qySpan = Math.max(0, qyHi - qyLo);
+    const combined = new Uint8Array(txSpan + qySpan);
+    combined.set(tParsed.codes.subarray(txLo, txHi), 0);
+    combined.set(qBase.codes.subarray(qyLo, qyHi), txSpan);
+    /** @type {number[]} */
+    const bounds = [0];
+    for (const b of tParsed.catalog.starts) {
+      if (b > txLo && b < txHi) bounds.push(b - txLo);
+    }
+    bounds.push(txSpan);
+    for (const b of qBase.catalog.starts) {
+      if (b > qyLo && b < qyHi) bounds.push(b - qyLo + txSpan);
+    }
+    bounds.push(txSpan + qySpan);
+    const starts = Float64Array.from([...new Set(bounds)].sort((a, b) => a - b));
+    const stride = Math.max(1, Math.ceil(Math.max(1, combined.length) / 48_000_000));
+    index = buildIndex(
+      combined, starts, k, stride,
+      (d, t) => progress(req.id, 'Indexing window', d / t),
+    );
+    tileRanges = { x0: 0, x1: txSpan, y0: txSpan, y1: txSpan + qySpan };
+  }
   // Resolution by work budget: a group touching many tiles costs
   // nnz_x * nnz_y. Estimate touched tiles with the birthday bound
   // n·(1 − e^(−occ/n)) — much tighter than min(occ, n) for mid-depth
@@ -458,7 +502,7 @@ async function handleContainment(req) {
     }
   }
   const { grid } = containmentGrid(
-    index, w.tx0, w.tx1, w.qy0, w.qy1, n, n, k,
+    index, tileRanges.x0, tileRanges.x1, tileRanges.y0, tileRanges.y1, n, n, k,
     (d, t) => progress(req.id, `Comparing ${n}×${n} tiles`, d / t),
   );
   post(

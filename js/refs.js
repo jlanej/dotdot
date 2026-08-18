@@ -45,6 +45,7 @@ export const REFERENCES = [
       { label: 'chr17 centromere — D17Z1 α-satellite', region: 'chr17:23,900,000-27,000,000' },
       { label: 'chr1 pericentromere — αSat/HSat mosaic', region: 'chr1:121,700,000-125,100,000' },
       { label: 'acrocentric p arms — all five short arms vs themselves', region: 'chr13p,chr14p,chr15p,chr21p,chr22p' },
+      { label: 'chr21p vs chr22p — two acrocentric arms, directly', region: 'chr21p vs chr22p' },
     ],
     cytoband: 'https://hgdownload.soe.ucsc.edu/gbdb/hs1/cytoBandMapped/cytoBandMapped.bb',
     tracks: [
@@ -78,6 +79,20 @@ export const REFERENCES = [
     tracks: [],
   },
 ];
+
+/**
+ * Split a cross-comparison spec: `chr21p vs chr22p` puts the left side on
+ * the target (x) axis and the right side on the query (y) axis — each side
+ * may itself be a region list. Without a ` vs ` the whole text is the
+ * target (self-plot semantics as before).
+ * @param {string} text
+ * @returns {{target: string, query: string | null}}
+ */
+export function splitCrossSpec(text) {
+  const m = /^(.*?)\s+vs\.?\s+(.*)$/i.exec(text.trim());
+  if (m && m[1].trim() && m[2].trim()) return { target: m[1].trim(), query: m[2].trim() };
+  return { target: text.trim(), query: null };
+}
 
 /**
  * Split a region-list expression. `;` always delimits; `,` delimits only

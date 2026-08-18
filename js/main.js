@@ -21,7 +21,7 @@ import { formatBp, formatInt, formatCount } from './render/format.js';
 import { looksLikePaf } from './io/paf.js';
 import { RemoteTwoBit, regionToFasta } from './io/twobit.js';
 import { RemoteBigBed } from './io/bigbed.js';
-import { REFERENCES, parseBrowserRegion, splitRegionList } from './refs.js';
+import { REFERENCES, parseBrowserRegion, splitRegionList, splitCrossSpec } from './refs.js';
 import { exportPng, compositeCanvases } from './export/png.js';
 import { exportSvg } from './export/svg.js';
 
@@ -289,7 +289,7 @@ function spawnWorker() {
       else setComputing(false);
     } else if (msg.type === 'error') {
       setComputing(false);
-      toast(msg.message, true);
+      if (!wallRecovery(msg.message)) toast(msg.message, true);
     }
   };
   worker.onerror = (e) => {
@@ -405,7 +405,7 @@ function runPool(plan) {
       } else if (m.type === 'error') {
         stopPool();
         setComputing(false);
-        toast(m.message, true);
+        if (!wallRecovery(m.message)) toast(m.message, true);
       }
     };
     w.onerror = (e) => {
@@ -434,7 +434,8 @@ function finishPool(plan, results, req) {
     assembled = assemblePool(plan, results);
   } catch (err) {
     setComputing(false);
-    toast(err instanceof Error ? err.message : String(err), true);
+    const message = err instanceof Error ? err.message : String(err);
+    if (!wallRecovery(message)) toast(message, true);
     return;
   }
   setComputing(false);
@@ -859,82 +860,118 @@ function applyRefSelection(autoload) {
 }
 
 /**
- * Fetch a reference region (browser coordinates, 1-based) and install it as
- * the target: self-plot when no query FASTA is loaded, query-vs-reference
- * otherwise. The synthesized FASTA carries an `@offset=` token so every
- * coordinate the app shows for it is a true genomic coordinate.
- * @param {string} text
+ * Resolve one region-list expression to concrete 0-based windows (arms via
+ * the cytoband track, bare names to whole sequences). Returns null after
+ * toasting on any problem, or when the load generation moved on.
+ * @param {import('./refs.js').ReferenceGenome} ref
+ * @param {string} listText
+ * @param {number} gen
+ * @returns {Promise<{chrom: string, start0: number, end0: number, name?: string}[] | null>}
  */
-async function loadRefRegion(text) {
-  const ref = currentRef();
-  if (!ref) return;
-  const exprs = splitRegionList(text);
+async function resolveRegions(ref, listText, gen) {
+  const exprs = splitRegionList(listText);
   /** @type {NonNullable<ReturnType<typeof parseBrowserRegion>>[]} */
   const parsedList = [];
   for (const e of exprs) {
     const p = parseBrowserRegion(e);
     if (!p) {
       toast(`Could not parse region “${e}” — try chrX:57.8M-60.7M, chr13p, or a comma/;-separated list.`, true);
-      return;
+      return null;
     }
     if (p.arm && p.start1 !== null) {
       toast(`Use either an arm (${p.chrom}${p.arm}) or coordinates — not both.`, true);
-      return;
+      return null;
     }
     parsedList.push(p);
   }
-  if (parsedList.length === 0) return;
+  if (parsedList.length === 0) return null;
+  const tb = getTwoBit(ref);
+  /** @type {{chrom: string, start0: number, end0: number, name?: string}[]} */
+  const regions = [];
+  for (const p of parsedList) {
+    const meta = await tb.seqMeta(p.chrom).catch(async (err) => {
+      const names = await tb.names().catch(() => []);
+      throw new Error(
+        (err instanceof Error ? err.message : String(err)) +
+          (names.length ? ` Available: ${names.slice(0, 8).join(', ')}…` : ''),
+      );
+    });
+    if (gen !== refLoadGen) return null;
+    if (p.arm) {
+      const [a0, a1] = await armRange(ref, p.chrom, p.arm, meta.dnaSize);
+      if (a1 <= a0) {
+        toast(`${p.chrom}${p.arm} is empty in this cytoband set.`, true);
+        return null;
+      }
+      regions.push({ chrom: p.chrom, start0: a0, end0: a1, name: `${p.chrom}${p.arm}` });
+    } else {
+      const start0 = p.start1 !== null ? p.start1 - 1 : 0;
+      const end0 = Math.min(p.end1 ?? meta.dnaSize, meta.dnaSize);
+      if (end0 - start0 <= 0) {
+        toast(`${p.chrom} is only ${formatBp(meta.dnaSize)} long.`, true);
+        return null;
+      }
+      regions.push({ chrom: p.chrom, start0, end0 });
+    }
+  }
+  return regions;
+}
+
+/** @param {{chrom: string, start0: number, end0: number, name?: string}[]} regions */
+function regionsLabel(regions) {
+  if (regions.length > 1) return `${regions.length} regions`;
+  if (regions[0].name) return regions[0].name;
+  return `${regions[0].chrom}:${formatInt(regions[0].start0 + 1)}-${formatInt(regions[0].end0)}`;
+}
+
+/**
+ * Fetch a reference region (browser coordinates, 1-based) and install it as
+ * the target: self-plot when no query FASTA is loaded, query-vs-reference
+ * otherwise. `chr21p vs chr22p` streams the left side as the target axis and
+ * the right side as the query axis — the direct cross-comparison, no quad
+ * tiles. The synthesized FASTA carries an `@offset=` token so every
+ * coordinate the app shows for it is a true genomic coordinate.
+ * @param {string} text
+ */
+async function loadRefRegion(text) {
+  const ref = currentRef();
+  if (!ref) return;
+  const cross = splitCrossSpec(text);
   // Anything the user does after this (own FASTA, another selection, Clear)
   // bumps the generation; a slow fetch must then discard itself instead of
   // clobbering the newer data.
   const gen = ++refLoadGen;
   try {
-    const tb = getTwoBit(ref);
-    /** @type {{chrom: string, start0: number, end0: number, name?: string}[]} */
-    const regions = [];
-    for (const p of parsedList) {
-      const meta = await tb.seqMeta(p.chrom).catch(async (err) => {
-        const names = await tb.names().catch(() => []);
-        throw new Error(
-          (err instanceof Error ? err.message : String(err)) +
-            (names.length ? ` Available: ${names.slice(0, 8).join(', ')}…` : ''),
-        );
-      });
-      if (gen !== refLoadGen) return;
-      if (p.arm) {
-        const [a0, a1] = await armRange(ref, p.chrom, p.arm, meta.dnaSize);
-        if (a1 <= a0) {
-          toast(`${p.chrom}${p.arm} is empty in this cytoband set.`, true);
-          return;
-        }
-        regions.push({ chrom: p.chrom, start0: a0, end0: a1, name: `${p.chrom}${p.arm}` });
-      } else {
-        const start0 = p.start1 !== null ? p.start1 - 1 : 0;
-        const end0 = Math.min(p.end1 ?? meta.dnaSize, meta.dnaSize);
-        if (end0 - start0 <= 0) {
-          toast(`${p.chrom} is only ${formatBp(meta.dnaSize)} long.`, true);
-          return;
-        }
-        regions.push({ chrom: p.chrom, start0, end0 });
-      }
-    }
+    const tRegions = await resolveRegions(ref, cross.target, gen);
+    if (!tRegions || gen !== refLoadGen) return;
+    const qRegions = cross.query ? await resolveRegions(ref, cross.query, gen) : null;
+    if (cross.query && !qRegions) return;
     if (gen !== refLoadGen) return;
-    const total = regions.reduce((a, r) => a + (r.end0 - r.start0), 0);
+    const sum = (/** @type {{start0:number,end0:number}[]} */ rs) =>
+      rs.reduce((a, r) => a + (r.end0 - r.start0), 0);
+    const total = sum(tRegions) + (qRegions ? sum(qRegions) : 0);
     if (total > 300e6) {
       toast('Regions too large — 300 Mb max combined.', true);
       return;
     }
-    let label;
-    if (regions.length > 1) label = `${regions.length} regions`;
-    else if (regions[0].name) label = regions[0].name;
-    else label = `${regions[0].chrom}:${formatInt(regions[0].start0 + 1)}-${formatInt(regions[0].end0)}`;
+    const tLabel = regionsLabel(tRegions);
+    const label = qRegions ? `${tLabel} vs ${regionsLabel(qRegions)}` : tLabel;
     toast(
       `Fetching ${label} (${formatBp(total)}) from ${ref.label}…` +
         (total > 33e6 ? ' Large region — this will take a while.' : ''),
     );
-    const buf = await streamRefRegions(ref, regions);
+    const tBuf = await streamRefRegions(ref, tRegions);
     if (gen !== refLoadGen) return;
-    setFasta('target', { name: `${label} · ${ref.label}`, buf: buf.buffer });
+    if (qRegions) {
+      const qBuf = await streamRefRegions(ref, qRegions);
+      if (gen !== refLoadGen) return;
+      // Query first, target second, same tick: the debounced autocompute
+      // runs exactly once, on the pair (the demo loads the same way).
+      setFasta('query', { name: `${regionsLabel(qRegions)} · ${ref.label}`, buf: qBuf.buffer });
+      setFasta('target', { name: `${tLabel} · ${ref.label}`, buf: tBuf.buffer });
+    } else {
+      setFasta('target', { name: `${tLabel} · ${ref.label}`, buf: tBuf.buffer });
+    }
     shareBase = new URLSearchParams({ ref: ref.id, refregion: text }).toString();
   } catch (err) {
     toast(err instanceof Error ? err.message : String(err), true);
@@ -1342,10 +1379,8 @@ selDrawMode.addEventListener('change', () => {
   if (heatMode()) {
     rebuildHeatmap();
   } else if (aniMode()) {
-    // Self-plots only for now: containment needs k-mer counts for both axes,
-    // and the index covers the target.
-    if (state.fileQuery || (state.data && state.data.source !== 'kmer')) {
-      toast('The ANI heatmap works on alignment-free self-plots (no query FASTA) for now.');
+    if (state.data && state.data.source !== 'kmer') {
+      toast('The ANI heatmap needs an alignment-free plot (FASTA inputs).');
       selDrawMode.value = 'seg';
     } else {
       heatBin = null;
@@ -1367,7 +1402,7 @@ let lastContainSig = '';
 /** @param {number} now */
 function containTick(now) {
   if (!aniMode() || !state.data || !state.view || state.computing) return;
-  if (state.fileQuery || state.data.source !== 'kmer' || !state.fileTarget) return;
+  if (state.data.source !== 'kmer' || !state.fileTarget) return;
   if (now - viewSettledAt < 500 || lastViewSig === lastContainSig || lastViewSig === '') return;
   lastContainSig = lastViewSig;
   const { pw, ph } = state.sizes;
@@ -3000,6 +3035,53 @@ function askExactConfirm(m) {
 }
 
 /**
+ * The 16M-segment wall was actually hit (the volume pre-flight predicts most
+ * cases, but segment counts aren't exactly predictable from anchors —
+ * satellite-rich cross-plots at full density can slip through). Instead of a
+ * dead-end toast after minutes of compute, offer the two remedies that
+ * actually work, one click each.
+ * @param {string} message the wall error text
+ * @returns {boolean} true when the recovery card was shown
+ */
+function wallRecovery(message) {
+  if (!message.startsWith('Too many match segments') || !lastKmer) return false;
+  const minRunNow = parseLenOff(inMinRun.value, 0);
+  const fixLen = Math.max(300, minRunNow * 2);
+  confirmPop.innerHTML =
+    `<div class="stats-card">` +
+    `<div class="stats-head"><h3>Hit the 16M-segment wall</h3>` +
+    `<button class="stats-close" aria-label="close">×</button></div>` +
+    `<p class="stats-sum">This window's repeat structure produces more than 16M match segments ` +
+    `at these settings — the one ceiling that protects your GPU. Two ways through:</p>` +
+    `<div class="confirm-row">` +
+    `<button id="cw-minlen" class="btn primary">Keep matches ≥ ${formatBp(fixLen)}</button>` +
+    `<button id="cw-sample" class="btn">Sample every 4th position</button>` +
+    `</div>` +
+    `<p class="stats-sum">The length filter keeps long-range structure and drops repeat ` +
+    `confetti; sampling thins everything evenly. The ANI heatmap draw mode shows full repeat ` +
+    `depth without enumerating anything at all.</p></div>`;
+  confirmPop.hidden = false;
+  confirmPop.querySelector('.stats-close')?.addEventListener('click', () => {
+    confirmPop.hidden = true;
+  });
+  confirmPop.querySelector('#cw-minlen')?.addEventListener('click', () => {
+    confirmPop.hidden = true;
+    inMinRun.value = String(fixLen);
+    if (lastKmer) {
+      submitKmer({ ...lastKmer.opts, minRunLen: fixLen, volumeConfirmed: true }, lastKmer.window);
+    }
+  });
+  confirmPop.querySelector('#cw-sample')?.addEventListener('click', () => {
+    confirmPop.hidden = true;
+    inSample.value = '4';
+    if (lastKmer) {
+      submitKmer({ ...lastKmer.opts, sample: 4, volumeConfirmed: true }, lastKmer.window);
+    }
+  });
+  return true;
+}
+
+/**
  * Anchor-volume pre-flight ask: this window's repeat structure predicts a
  * quadratic enumeration. Proceed grinds it out (and may hit the 16M-segment
  * wall, which has its own error); the fix button keeps runs ≥ 300 bp —
@@ -3173,9 +3255,12 @@ const HELP = {
     '(<b>chrX:57.8M-60.7M</b>, 1-based), a cytogenetic <b>arm</b> (<b>chr13p</b>, resolved from ' +
     'the streamed cytoband track), or a <b>list</b> — comma or ; separated, e.g. ' +
     '<b>chr13p,chr14p,chr15p,chr21p,chr22p</b> lays all five acrocentric short arms on one ' +
-    'axis (commas inside numbers are safe). With no query FASTA the regions plot against ' +
-    'themselves; with a query loaded, the query dots against them. All coordinates shown are ' +
-    'true genomic positions. Shareable: ?ref=t2t&refregion=chr13p,chr14p.',
+    'axis (commas inside numbers are safe). <b>vs</b> splits the axes: ' +
+    '<b>chr21p vs chr22p</b> streams the left side as the target (x) and the right side as ' +
+    'the query (y) — the direct cross-comparison, no self quadrants; each side may be a full ' +
+    'list. Without vs: no query FASTA → the regions plot against themselves; query loaded → ' +
+    'it dots against them. All coordinates shown are true genomic positions. Shareable: ' +
+    '?ref=t2t&refregion=chr21p+vs+chr22p.',
   matching:
     'These change what is <i>computed</i> — press Recompute after editing. The Display section ' +
     'below applies instantly, without recomputing.',
@@ -3242,9 +3327,9 @@ const HELP = {
     'entirely: every tile pair is compared by the <b>multiset containment</b> of its exact ' +
     'k-mer counts, mapped to ANI = c^(1/k) (the Mash/ModDotPlot estimator, made ' +
     'count-weighted) — no matches enumerated, no occurrence cap, no hatch, satellite cores ' +
-    'included; it recomputes for the visible window when you rest (self-plots, ' +
-    'alignment-free). Hover reads a tile; the aligner overlay still draws on top. PNG ' +
-    'captures the heatmaps (SVG stays segment-only).',
+    'included; it recomputes for the visible window when you rest, on self-plots and ' +
+    'cross-plots alike (alignment-free inputs). Hover reads a tile; the aligner overlay ' +
+    'still draws on top. PNG captures the heatmaps (SVG stays segment-only).',
   anitiles:
     'Grid resolution of the ANI heatmap. <b>auto</b> sizes to your display and a work budget ' +
     '(satellite-dense windows may coarsen — the legend reports the tiles and their bp size). ' +

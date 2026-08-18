@@ -150,7 +150,11 @@ export function assemblePool(plan, parts) {
   const mergedKept = mergedRows.filter((m) => m.len >= minRunLen);
   total += mergedKept.length;
   if (total > MAX_SEGMENTS) {
-    throw new Error('Too many match segments — raise k, lower max occurrences, or add a stride.');
+    throw new Error(
+      'Too many match segments (16M wall) — raise min match length, restore an occurrence ' +
+        'cap or sampling, or zoom in. The heatmap and multiplicity lane show full repeat ' +
+        'depth without enumerating it.',
+    );
   }
 
   const segments = allocSegments(total);
