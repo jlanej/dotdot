@@ -42,7 +42,7 @@ const BYTE_BASES = (() => {
 export class RemoteTwoBit {
   /**
    * @param {string} url
-   * @param {{fetchRange?: (start: number, endEx: number) => Promise<Uint8Array>}} [io]
+   * @param {{fetchRange?: (start: number, endEx: number, onProgress?: (done: number, total: number) => void) => Promise<Uint8Array>}} [io]
    *   injectable transport (tests provide an in-memory fixture)
    */
   constructor(url, io = {}) {
@@ -131,9 +131,11 @@ export class RemoteTwoBit {
   /**
    * Fetch [start, end) of a sequence as uppercase ASCII bases (ACGTN).
    * @param {string} name @param {number} start @param {number} end 0-based half-open
+   * @param {(doneBytes: number, totalBytes: number) => void} [onProgress]
+   *   chunk progress for whole-chromosome streams (tens of MB)
    * @returns {Promise<Uint8Array>}
    */
-  async fetchRegion(name, start, end) {
+  async fetchRegion(name, start, end, onProgress) {
     const meta = await this.seqMeta(name);
     const s = Math.max(0, Math.floor(start));
     const e = Math.min(meta.dnaSize, Math.ceil(end));
@@ -141,7 +143,7 @@ export class RemoteTwoBit {
 
     const byteA = meta.dnaOffset + (s >> 2);
     const byteB = meta.dnaOffset + ((e - 1) >> 2) + 1;
-    const packed = await this.fetchRange(byteA, byteB);
+    const packed = await this.fetchRange(byteA, byteB, onProgress);
 
     const out = new Uint8Array(e - s);
     const b0 = s >> 2;

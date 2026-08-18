@@ -337,6 +337,10 @@ function submit(payload) {
 function cancelCompute() {
   supersede();
   activeReq = -1;
+  // Also invalidates any in-flight reference stream: its generation checks
+  // stop it applying (remaining chunk downloads wind down harmlessly).
+  refLoadGen++;
+  progressEl.hidden = true;
   toast('Canceled.');
 }
 
@@ -970,21 +974,41 @@ async function loadRefRegion(text) {
     if (gen !== refLoadGen) return;
     const tLabel = regionsLabel(tRegions);
     const label = qRegions ? `${tLabel} vs ${regionsLabel(qRegions)}` : tLabel;
-    toast(
-      `Fetching ${label} (${formatBp(total)}) from ${ref.label}…` +
-        (total > 33e6 ? ' Large region — this will take a while.' : ''),
-    );
-    const tBuf = await streamRefRegions(ref, tRegions);
-    if (gen !== refLoadGen) return;
-    if (qRegions) {
-      const qBuf = await streamRefRegions(ref, qRegions);
+    toast(`Fetching ${label} (${formatBp(total)}) from ${ref.label}…`);
+    // Whole-chromosome streams take minutes: show live MB progress through
+    // the standard progress chrome (Cancel bumps the load generation).
+    const tBytes = Math.ceil(sum(tRegions) / 4);
+    const qBytes = qRegions ? Math.ceil(sum(qRegions) / 4) : 0;
+    const grandBytes = tBytes + qBytes;
+    const showProgress = total > 32e6;
+    const streamTick = (/** @type {number} */ done) => {
       if (gen !== refLoadGen) return;
-      // Query first, target second, same tick: the debounced autocompute
-      // runs exactly once, on the pair (the demo loads the same way).
-      setFasta('query', { name: `${regionsLabel(qRegions)} · ${ref.label}`, buf: qBuf.buffer });
-      setFasta('target', { name: `${tLabel} · ${ref.label}`, buf: tBuf.buffer });
-    } else {
-      setFasta('target', { name: `${tLabel} · ${ref.label}`, buf: tBuf.buffer });
+      progressLabel.textContent =
+        `Streaming ${label} — ${Math.round(done / 1e6)} / ${Math.round(grandBytes / 1e6)} MB`;
+      progressBar.style.width = `${Math.round((done / Math.max(1, grandBytes)) * 100)}%`;
+    };
+    if (showProgress) {
+      progressEl.hidden = false;
+      streamTick(0);
+    }
+    try {
+      const tBuf = await streamRefRegions(ref, tRegions, showProgress ? streamTick : undefined);
+      if (gen !== refLoadGen) return;
+      if (qRegions) {
+        const qBuf = await streamRefRegions(
+          ref, qRegions,
+          showProgress ? (d) => streamTick(tBytes + d) : undefined,
+        );
+        if (gen !== refLoadGen) return;
+        // Query first, target second, same tick: the debounced autocompute
+        // runs exactly once, on the pair (the demo loads the same way).
+        setFasta('query', { name: `${regionsLabel(qRegions)} · ${ref.label}`, buf: qBuf.buffer });
+        setFasta('target', { name: `${tLabel} · ${ref.label}`, buf: tBuf.buffer });
+      } else {
+        setFasta('target', { name: `${tLabel} · ${ref.label}`, buf: tBuf.buffer });
+      }
+    } finally {
+      if (showProgress && !state.computing) progressEl.hidden = true;
     }
     shareBase = new URLSearchParams({ ref: ref.id, refregion: text }).toString();
   } catch (err) {
@@ -1064,10 +1088,23 @@ async function armRange(ref, chrom, arm, dnaSize) {
  * displayed coordinates can never drift from what was fetched.
  * @param {import('./refs.js').ReferenceGenome} ref
  * @param {{chrom: string, start0: number, end0: number, name?: string}[]} regions
+ * @param {(doneBytes: number, totalBytes: number) => void} [onProgress]
  */
-async function streamRefRegions(ref, regions) {
+async function streamRefRegions(ref, regions, onProgress) {
   const tb = getTwoBit(ref);
-  const parts = await Promise.all(regions.map((r) => tb.fetchRegion(r.chrom, r.start0, r.end0)));
+  // 2bit is 2 bits/base: transfer ≈ span/4 per region; aggregate progress
+  // across the parallel fetches so whole-chromosome streams stay visibly
+  // alive for their minutes of download.
+  const doneBy = new Array(regions.length).fill(0);
+  const totalEst = regions.reduce((a, r) => a + Math.ceil((r.end0 - r.start0) / 4), 0);
+  const parts = await Promise.all(
+    regions.map((r, i) =>
+      tb.fetchRegion(r.chrom, r.start0, r.end0, (d) => {
+        doneBy[i] = d;
+        if (onProgress) onProgress(doneBy.reduce((a, b) => a + b, 0), totalEst);
+      }),
+    ),
+  );
   const fastas = regions.map((r, i) => {
     const label = `${r.chrom}:${formatInt(r.start0 + 1)}-${formatInt(r.end0)}`;
     return regionToFasta(r.name ?? r.chrom, `${ref.label} ${label}`, r.start0, parts[i]);

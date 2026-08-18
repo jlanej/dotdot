@@ -1,6 +1,7 @@
 // @ts-check
 import { test, assert, assertEq } from './harness.js';
 import { RemoteTwoBit, regionToFasta } from '../js/io/twobit.js';
+import { makeRangeFetcher } from '../js/io/ranged.js';
 import { parseFasta } from '../js/io/fasta.js';
 import { codesToString } from '../js/core/dna.js';
 
@@ -140,4 +141,51 @@ test('twobit: regionToFasta round-trips through parseFasta with offsets', async 
   assert(parsed.catalog.offsets !== undefined, 'offsets present');
   assertEq(/** @type {Float64Array} */ (parsed.catalog.offsets)[0], 4);
   assertEq(codesToString(parsed.codes), 'CCCCAAAAGGGG');
+});
+
+test('ranged: large spans stream in chunks with progress and one retry', async () => {
+  const FILE = new Uint8Array(5000);
+  for (let i = 0; i < FILE.length; i++) FILE[i] = i & 0xff;
+  /** @type {string[]} */
+  const ranges = [];
+  let failedOnce = false;
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = /** @type {any} */ (
+    async (/** @type {any} */ _url, /** @type {any} */ init) => {
+      const m = /bytes=(\d+)-(\d+)/.exec(init.headers.Range);
+      if (!m) throw new Error('no Range header');
+      const s = Number(m[1]);
+      const e = Number(m[2]) + 1;
+      ranges.push(`${s}-${e}`);
+      if (s === 2000 && !failedOnce) {
+        failedOnce = true;
+        throw new Error('transient network hiccup');
+      }
+      return new Response(FILE.slice(s, e), { status: 206 });
+    }
+  );
+  try {
+    const fetchRange = makeRangeFetcher('http://example.test/genome.2bit', 1000);
+    /** @type {number[]} */
+    const prog = [];
+    const out = await fetchRange(0, 5000, (d) => prog.push(d));
+    assertEq(out.length, 5000);
+    let ok = true;
+    for (let i = 0; i < 5000; i++) {
+      if (out[i] !== (i & 0xff)) {
+        ok = false;
+        break;
+      }
+    }
+    assert(ok, 'bytes reassembled in order across chunks');
+    assertEq(prog.join(','), '1000,2000,3000,4000,5000');
+    assert(failedOnce, 'the transient failure was hit');
+    assertEq(ranges.filter((r) => r === '2000-3000').length, 2); // retried once
+    // Small spans stay one request (the historical fast path).
+    ranges.length = 0;
+    await fetchRange(0, 500);
+    assertEq(ranges.length, 1);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
 });
