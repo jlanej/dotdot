@@ -10,9 +10,9 @@ import { segmentEndpoints, allocSegments, copySegmentRow, blitSegments, segmentV
 import { assemblePool } from './worker/assemble.js';
 import { locate, bandsInRange } from './core/catalog.js';
 import { binIdentity, paintHeatmap, heatAt, binStretch, buildSatMask } from './render/heatmap.js';
-import { spliceIntervals } from './core/kmer.js';
+import { spliceIntervals, SEGMENT_WALL_ERROR } from './core/kmer.js';
 import { resolveRegion, parseBp } from './core/region.js';
-import { buildViewHash, parseViewHash } from './core/share.js';
+import { buildViewHash, parseViewHash, writeMatchParams, readMatchParams } from './core/share.js';
 import { GlRenderer } from './render/gl.js';
 import { drawUnderlay, drawOverlay, LAYOUT, LANE_H, LANE_X0, LANE_Y0, setAnnotationLanes } from './render/axes.js';
 import { buildColormap, buildMultiplicityTex, multT, hexToRgb } from './render/colormap.js';
@@ -3205,29 +3205,13 @@ btnShare.addEventListener('click', async () => {
   // Non-default compute options ride along so the recipient's plot matches —
   // taken from the options that actually PRODUCED this plot, not the current
   // field values (editing a dial without Recompute must not change the link).
+  // The grammar itself lives in core/share.js, round-trip-tested with
+  // readMatchParams.
   const q = new URLSearchParams(shareBase ?? '');
-  const mo = /** @type {any} */ (
+  const mo = /** @type {import('./core/share.js').MatchShareOpts} */ (
     state.data.source === 'kmer' && lastBaseKmer ? lastBaseKmer : matchOpts()
   );
-  if (mo.k !== 15) q.set('k', String(mo.k));
-  if (mo.maxGap !== 64) q.set('gap', String(mo.maxGap));
-  if (mo.maxOcc !== 200) q.set('occ', mo.maxOcc === Infinity ? 'off' : String(mo.maxOcc));
-  if (mo.minRunLen !== 0) q.set('minrun', String(mo.minRunLen));
-  // Exact mode keeps its raised ceiling ("off 512M") so publication computes
-  // reproduce — reconstructed from the options, not the (editable) field.
-  if (mo.sample !== 'auto') {
-    q.set(
-      'sample',
-      mo.sample === 'off'
-        ? mo.exactMaxBp
-          ? `off ${Math.round(mo.exactMaxBp / 1e6)}M`
-          : 'off'
-        : String(mo.sample),
-    );
-  }
-  if (mo.budgetX !== 1) q.set('budget', mo.budgetX === Infinity ? 'off' : String(mo.budgetX));
-  if (currentAniTiles() > 0) q.set('anitiles', String(currentAniTiles()));
-  if (mo.maxSegments) q.set('wall', `${Math.round(mo.maxSegments / 1e6)}M`);
+  writeMatchParams(q, mo, currentAniTiles());
   const qs = q.toString();
   const url = `${location.origin}${location.pathname}${qs ? '?' + qs : ''}${hash}`;
   // A local query riding a linkable target (reference window vs local FASTA)
@@ -3549,7 +3533,7 @@ function askExactConfirm(m) {
  * @returns {boolean} true when the recovery card was shown
  */
 function wallRecovery(message) {
-  if (!message.startsWith('Too many match segments') || !lastKmer) return false;
+  if (!message.startsWith(SEGMENT_WALL_ERROR) || !lastKmer) return false;
   closeConfirm(); // settle any dialog this card replaces
   const gen = dataGen;
   const job = lastKmer;
@@ -4045,23 +4029,20 @@ window.addEventListener('keydown', (e) => {
 
 async function initFromUrl() {
   const p = new URLSearchParams(location.search);
-  if (p.has('k')) {
-    inKNum.value = p.get('k') ?? inKNum.value;
+  // The matching-params grammar is pure and round-trip-tested in
+  // core/share.js — this side only pours the parsed texts into the fields.
+  const mp = readMatchParams(p, parseBp);
+  if (mp.k !== undefined) {
+    inKNum.value = mp.k;
     inK.value = String(Math.min(26, Math.max(8, currentK())));
   }
-  if (p.has('gap')) inGap.value = p.get('gap') ?? inGap.value;
-  if (p.has('occ')) inMaxOcc.value = p.get('occ') ?? inMaxOcc.value;
-  if (p.has('minrun')) inMinRun.value = p.get('minrun') ?? inMinRun.value;
-  if (p.has('sample')) inSample.value = p.get('sample') ?? inSample.value;
-  if (p.has('budget')) {
-    const b = /** @type {string} */ (p.get('budget'));
-    inBudget.value = /^\d/.test(b) ? `${b}×` : b;
-  }
-  if (p.has('anitiles')) inAniTiles.value = p.get('anitiles') ?? inAniTiles.value;
-  if (p.has('wall')) {
-    const w = parseBp(/** @type {string} */ (p.get('wall')));
-    if (Number.isFinite(w) && w > 16_000_000) wallOverride = Math.min(64_000_000, Math.round(w));
-  }
+  if (mp.gap !== undefined) inGap.value = mp.gap;
+  if (mp.occ !== undefined) inMaxOcc.value = mp.occ;
+  if (mp.minrun !== undefined) inMinRun.value = mp.minrun;
+  if (mp.sample !== undefined) inSample.value = mp.sample;
+  if (mp.budget !== undefined) inBudget.value = mp.budget;
+  if (mp.anitiles !== undefined) inAniTiles.value = mp.anitiles;
+  if (mp.wall) wallOverride = mp.wall;
   const urlRegion = p.get('region');
   if (urlRegion) queuedActions = { ...(queuedActions ?? {}), region: urlRegion };
   // URL fetches can be slow; anything the user loads meanwhile bumps the

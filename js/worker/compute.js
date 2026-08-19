@@ -9,7 +9,7 @@
 import { parseFasta, mergeParsedFasta, looksLikeFasta } from '../io/fasta.js';
 import { maybeGunzip } from '../io/compress.js';
 import { parsePaf, parsePafOnto, looksLikePaf } from '../io/paf.js';
-import { buildIndex, matchStrand, pickMaxOcc, pickDensity, estimateAnchors, saturatedIntervals, multiplicityProfile, containmentGrid, KMER_DEFAULTS, EXACT_MAX_BP, EXACT_HARD_BP } from '../core/kmer.js';
+import { buildIndex, matchStrand, pickMaxOcc, pickDensity, estimateAnchors, anchorScale, saturatedIntervals, multiplicityProfile, containmentGrid, KMER_DEFAULTS, EXACT_MAX_BP, EXACT_HARD_BP } from '../core/kmer.js';
 import { reverseComplement } from '../core/dna.js';
 import { newSegmentVecs, vecsToSegments, segmentBuffers } from '../core/types.js';
 
@@ -65,34 +65,41 @@ self.onmessage = async (ev) => {
  */
 let parsedCache = null;
 
+/** @typedef {{catalog: any, codes: Uint8Array, warnings?: string[]}} ParsedSlot */
+
+/**
+ * Resolve a request's parsed inputs through the generation cache — the one
+ * preamble both kmer and containment requests share. Cached generation →
+ * reuse; fresh buffers → parse and cache; a miss without buffers asks main
+ * to resend ('needData') and returns null (the caller just returns).
+ * @param {{id:number, gen?:number, target:ArrayBuffer[]|ArrayBuffer|null, query:ArrayBuffer[]|ArrayBuffer|null}} req
+ * @returns {Promise<{tParsed: ParsedSlot, qBase: ParsedSlot | null} | null>}
+ */
+async function resolveParsed(req) {
+  if (!req.target) {
+    if (parsedCache && parsedCache.gen === req.gen) {
+      return { tParsed: parsedCache.tParsed, qBase: parsedCache.qParsed };
+    }
+    post({ id: req.id, type: 'needData', gen: req.gen });
+    return null;
+  }
+  progress(req.id, 'Reading files', 0);
+  const tParsed = await parseSlot(req.target, 'target');
+  const qBase = req.query ? await parseSlot(req.query, 'query') : null;
+  parsedCache = { gen: req.gen ?? -1, tParsed, qParsed: qBase };
+  return { tParsed, qBase };
+}
+
 /** @param {{id:number, gen?:number, target:ArrayBuffer[]|ArrayBuffer|null, query:ArrayBuffer[]|ArrayBuffer|null, opts:object, window?:RefineWindow}} req */
 async function handleKmer(req) {
   const t0 = performance.now();
-  /** @type {{catalog: any, codes: Uint8Array}} */
-  let tParsed;
-  /** @type {{catalog: any, codes: Uint8Array} | null} */
-  let qBase;
-  if (!req.target) {
-    if (parsedCache && parsedCache.gen === req.gen) {
-      tParsed = parsedCache.tParsed;
-      qBase = parsedCache.qParsed;
-    } else {
-      post({ id: req.id, type: 'needData', gen: req.gen });
-      return;
-    }
-  } else {
-    progress(req.id, 'Reading files', 0);
-    tParsed = await parseSlot(req.target, 'target');
-    qBase = req.query ? await parseSlot(req.query, 'query') : null;
-    parsedCache = { gen: req.gen ?? -1, tParsed, qParsed: qBase };
-  }
+  const parsed = await resolveParsed(req);
+  if (!parsed) return;
+  const { tParsed, qBase } = parsed;
   const qParsed = qBase ?? selfPlotView(tParsed);
   // Parser warnings (duplicate names, swallowed headers, empty records)
   // ride the result note — suspicious inputs are disclosed, never silent.
-  const parseNotes = [
-    .../** @type {{warnings?: string[]}} */ (tParsed).warnings ?? [],
-    ...(qBase ? (/** @type {{warnings?: string[]}} */ (qBase).warnings ?? []) : []),
-  ];
+  const parseNotes = [...(tParsed.warnings ?? []), ...(qBase?.warnings ?? [])];
   computeKmer(req.id, tParsed, qParsed, req.opts, t0, req.window ?? null, parseNotes);
 }
 
@@ -243,7 +250,7 @@ function computeKmer(id, tParsed, qParsed, optsIn, t0, window = null, parseNotes
   // diagonal costs ~28 B live — background anchors at low k land on
   // mostly-distinct diagonals, and nothing else bounds that table).
   {
-    const scale = (qLenEff * stride) / Math.max(tLenEff, 1) / Math.max(qSample, 1);
+    const scale = anchorScale(index, qLenEff, tLenEff, qSample);
     const estTotal = 2 * estimateAnchors(index, maxOccEff, scale); // both strands
     // With a finite cap past the histogram's 1024-entry tail bin, the tail's
     // full occ² mass is included even for groups the cap will trim — the
@@ -444,24 +451,9 @@ function computeKmer(id, tParsed, qParsed, optsIn, t0, window = null, parseNotes
  */
 async function handleContainment(req) {
   const t0 = performance.now();
-  /** @type {{catalog: any, codes: Uint8Array}} */
-  let tParsed;
-  /** @type {{catalog: any, codes: Uint8Array} | null} */
-  let qBase;
-  if (!req.target) {
-    if (parsedCache && parsedCache.gen === req.gen) {
-      tParsed = parsedCache.tParsed;
-      qBase = parsedCache.qParsed;
-    } else {
-      post({ id: req.id, type: 'needData', gen: req.gen });
-      return;
-    }
-  } else {
-    progress(req.id, 'Reading files', 0);
-    tParsed = await parseSlot(req.target, 'target');
-    qBase = req.query ? await parseSlot(req.query, 'query') : null;
-    parsedCache = { gen: req.gen ?? -1, tParsed, qParsed: qBase };
-  }
+  const parsed = await resolveParsed(req);
+  if (!parsed) return;
+  const { tParsed, qBase } = parsed;
   const w = req.window;
   const k = Math.min(26, Math.max(4, Math.round(req.opts.k || 15)));
   progress(req.id, 'Indexing window', 0);

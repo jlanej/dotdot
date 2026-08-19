@@ -1,6 +1,7 @@
 // @ts-check
 import { test, assert, assertEq } from './harness.js';
-import { buildViewHash, parseViewHash } from '../js/core/share.js';
+import { buildViewHash, parseViewHash, writeMatchParams, readMatchParams } from '../js/core/share.js';
+import { parseBp } from '../js/core/region.js';
 
 test('share: view state round-trips through the hash', () => {
   /** @type {import('../js/core/share.js').ViewState} */
@@ -63,4 +64,62 @@ test('share: unknown keys are ignored, partial settings tolerated', () => {
   assert(parsed !== null);
   assertEq(parsed.ident, 0); // nonsense clamps to default
   assertEq(parsed.draw, 'seg');
+});
+
+test('share: default match options write no params at all', () => {
+  const q = new URLSearchParams();
+  writeMatchParams(q, { k: 15, maxGap: 64, maxOcc: 200, minRunLen: 0, sample: 'auto', budgetX: 1 });
+  assertEq(q.toString(), '');
+});
+
+test('share: every non-default option round-trips through the grammar', () => {
+  const q = new URLSearchParams();
+  writeMatchParams(
+    q,
+    {
+      k: 21,
+      maxGap: 256,
+      maxOcc: Infinity,
+      minRunLen: 300,
+      sample: 'off',
+      exactMaxBp: 512_000_000,
+      budgetX: Infinity,
+      maxSegments: 32_000_000,
+    },
+    1024,
+  );
+  const r = readMatchParams(q, parseBp);
+  assertEq(r.k, '21');
+  assertEq(r.gap, '256');
+  assertEq(r.occ, 'off');
+  assertEq(r.minrun, '300');
+  assertEq(r.sample, 'off 512M'); // the raised RAM ceiling survives the trip
+  assertEq(r.budget, 'off');
+  assertEq(r.anitiles, '1024');
+  assertEq(r.wall, 32_000_000);
+});
+
+test('share: numeric budget re-suffixes as a multiplier; words pass through', () => {
+  const q = new URLSearchParams('budget=4');
+  assertEq(readMatchParams(q, parseBp).budget, '4×');
+  const q2 = new URLSearchParams();
+  writeMatchParams(q2, { k: 15, maxGap: 64, maxOcc: 200, minRunLen: 0, sample: 'auto', budgetX: 4 });
+  assertEq(readMatchParams(q2, parseBp).budget, '4×');
+});
+
+test('share: the wall param only raises — lowerings and garbage are ignored', () => {
+  assertEq(readMatchParams(new URLSearchParams('wall=32M'), parseBp).wall, 32_000_000);
+  assertEq(readMatchParams(new URLSearchParams('wall=8M'), parseBp).wall, 0); // below the 16M default
+  assertEq(readMatchParams(new URLSearchParams('wall=999M'), parseBp).wall, 64_000_000); // hard clamp
+  assertEq(readMatchParams(new URLSearchParams('wall=banana'), parseBp).wall, 0);
+  assertEq(readMatchParams(new URLSearchParams(), parseBp).wall, 0);
+});
+
+test('share: numbered sampling and finite caps write plainly', () => {
+  const q = new URLSearchParams();
+  writeMatchParams(q, { k: 15, maxGap: 64, maxOcc: 1000, minRunLen: 0, sample: 8, budgetX: 1 });
+  const r = readMatchParams(q, parseBp);
+  assertEq(r.occ, '1000');
+  assertEq(r.sample, '8');
+  assertEq(r.k, undefined); // defaults stay absent
 });

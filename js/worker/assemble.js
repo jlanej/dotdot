@@ -12,7 +12,7 @@
  * k-1 bp overlap between split pieces, so the output-space join gap for a
  * bridgeable anchor gap g is g - (k - 1) — hence the tolerance below.
  */
-import { MAX_SEGMENTS, MAX_SEGMENTS_HARD } from '../core/kmer.js';
+import { MAX_SEGMENTS, MAX_SEGMENTS_HARD, SEGMENT_WALL_ERROR } from '../core/kmer.js';
 import { allocSegments, copySegmentRow } from '../core/types.js';
 
 /** @typedef {import('../core/types.js').SegmentStore} SegmentStore */
@@ -155,7 +155,7 @@ export function assemblePool(plan, parts) {
   );
   if (total > segCap) {
     throw new Error(
-      `Too many match segments (${Math.round(segCap / 1e6)}M wall) — raise min match ` +
+      `${SEGMENT_WALL_ERROR} (${Math.round(segCap / 1e6)}M wall) — raise min match ` +
         'length, restore an occurrence cap or sampling, or zoom in. The heatmap and ' +
         'multiplicity lane show full repeat depth without enumerating it.',
     );

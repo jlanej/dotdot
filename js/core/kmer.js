@@ -75,6 +75,11 @@ export const KMER_DEFAULTS = Object.freeze({
 
 export const MAX_SEGMENTS = 16_000_000;
 
+/** Stable prefix of the segment-wall error. main.js's recovery card keys on
+ * it (and assemble.js re-throws with it) — reword the human text freely, but
+ * this prefix is a CONTRACT: changing it silently kills the recovery UI. */
+export const SEGMENT_WALL_ERROR = 'Too many match segments';
+
 /** Ceiling for user-raised segment walls: past this the GPU instance buffer
  * alone is ~2.6 GB — allocation refusal territory on most hardware. */
 export const MAX_SEGMENTS_HARD = 64_000_000;
@@ -266,6 +271,30 @@ export function buildIndex(codes, starts, k, stride, onProgress, tLo = 0, tHi = 
   // guessing (Alu-family k-mers otherwise flood genome-scale plots).
   const occSumSq = new Float64Array(1025);
   const occCount = new Float64Array(1025);
+  forEachGroup({ kmers, bucketStarts }, (g, e) => {
+    const occ = e - g;
+    const cls = occ < 1024 ? occ : 1024;
+    occSumSq[cls] += occ * occ;
+    occCount[cls] += 1;
+  });
+
+  return { kmers, pos, bucketStarts, k, wide, shift, mask, top, prefDiv, stride, occSumSq, occCount };
+}
+
+/**
+ * Walk every k-mer occurrence group of the index — contiguous equal-kmer
+ * runs within buckets, the exact layout buildIndex guarantees. This is THE
+ * group iterator: the occurrence histogram, saturation, and multiplicity
+ * passes all walk this one shape (a per-group callback keeps them
+ * monomorphic and costs per group, not per entry). containmentGrid keeps a
+ * manual copy of the walk on purpose: its inner loops live in the hottest
+ * path and close over a dozen arrays.
+ * @param {{kmers: Uint32Array | Float64Array, bucketStarts: Uint32Array}} index
+ * @param {(g: number, e: number) => void} fn each group's [g, e) entry range
+ */
+export function forEachGroup(index, fn) {
+  const { kmers, bucketStarts } = index;
+  const nBuckets = bucketStarts.length - 1;
   for (let b = 0; b < nBuckets; b++) {
     const hiB = bucketStarts[b + 1];
     let g = bucketStarts[b];
@@ -273,15 +302,23 @@ export function buildIndex(codes, starts, k, stride, onProgress, tLo = 0, tHi = 
       const kv = kmers[g];
       let e = g + 1;
       while (e < hiB && kmers[e] === kv) e++;
-      const occ = e - g;
-      const cls = occ < 1024 ? occ : 1024;
-      occSumSq[cls] += occ * occ;
-      occCount[cls] += 1;
+      fn(g, e);
       g = e;
     }
   }
+}
 
-  return { kmers, pos, bucketStarts, k, wide, shift, mask, top, prefDiv, stride, occSumSq, occCount };
+/**
+ * Anchor-volume scale factor shared by pickMaxOcc and the worker's
+ * pre-flight: expected anchors ≈ Σ occ² × this (see pickMaxOcc's estimate
+ * derivation) — one formula, two consumers.
+ * @param {KmerIndex} index
+ * @param {number} qLenEff query bases scanned per strand
+ * @param {number} tLenEff target bases the index represents (pre-stride)
+ * @param {number} qSample query sampling interval
+ */
+export function anchorScale(index, qLenEff, tLenEff, qSample) {
+  return (qLenEff * (index.stride || 1)) / Math.max(tLenEff, 1) / Math.max(qSample, 1);
 }
 
 /**
@@ -436,7 +473,7 @@ export function matchStrand(index, qCodes, qStarts, qTotal, tStarts, tTotal, opt
     if (len < minRunLen && !atEdge) return;
     if (out.x.n >= segCap) {
       throw new Error(
-        `Too many match segments (${Math.round(segCap / 1e6)}M wall) — raise min match ` +
+        `${SEGMENT_WALL_ERROR} (${Math.round(segCap / 1e6)}M wall) — raise min match ` +
           'length, restore an occurrence cap or sampling, or zoom in. The heatmap and ' +
           'multiplicity lane show full repeat depth without enumerating it.',
       );
@@ -670,24 +707,15 @@ export function saturatedIntervals(index, maxOccEntries, tLen, tileBp = 512) {
   const nTiles = Math.max(1, Math.ceil(tLen / tileBp));
   const over = new Uint32Array(nTiles);
   const total = new Uint32Array(nTiles);
-  const { kmers, pos, bucketStarts } = index;
-  const nBuckets = bucketStarts.length - 1;
-  for (let b = 0; b < nBuckets; b++) {
-    const hiB = bucketStarts[b + 1];
-    let g = bucketStarts[b];
-    while (g < hiB) {
-      const kv = kmers[g];
-      let e = g + 1;
-      while (e < hiB && kmers[e] === kv) e++;
-      const capped = e - g > maxOccEntries;
-      for (let j = g; j < e; j++) {
-        const t = (pos[j] / tileBp) | 0;
-        total[t]++;
-        if (capped) over[t]++;
-      }
-      g = e;
+  const { pos } = index;
+  forEachGroup(index, (g, e) => {
+    const capped = e - g > maxOccEntries;
+    for (let j = g; j < e; j++) {
+      const t = (pos[j] / tileBp) | 0;
+      total[t]++;
+      if (capped) over[t]++;
     }
-  }
+  });
   /** @type {number[]} */
   const out = [];
   let runStart = -1;
@@ -724,26 +752,17 @@ export function multiplicityProfile(index, tLen, tileBp = 512) {
   const cnt = new Uint32Array(nTiles);
   const uniq = new Uint32Array(nTiles);
   const stride = index.stride || 1;
-  const { kmers, pos, bucketStarts } = index;
-  const nBuckets = bucketStarts.length - 1;
-  for (let b = 0; b < nBuckets; b++) {
-    const hiB = bucketStarts[b + 1];
-    let g = bucketStarts[b];
-    while (g < hiB) {
-      const kv = kmers[g];
-      let e = g + 1;
-      while (e < hiB && kmers[e] === kv) e++;
-      const occ = e - g;
-      const lg = Math.log2((occ - 1) * stride + 1);
-      for (let j = g; j < e; j++) {
-        const t = (pos[j] / tileBp) | 0;
-        sumLog[t] += lg;
-        cnt[t]++;
-        if (occ === 1) uniq[t]++;
-      }
-      g = e;
+  const { pos } = index;
+  forEachGroup(index, (g, e) => {
+    const occ = e - g;
+    const lg = Math.log2((occ - 1) * stride + 1);
+    for (let j = g; j < e; j++) {
+      const t = (pos[j] / tileBp) | 0;
+      sumLog[t] += lg;
+      cnt[t]++;
+      if (occ === 1) uniq[t]++;
     }
-  }
+  });
   const mult = new Float32Array(nTiles);
   const uniqFrac = new Float32Array(nTiles);
   for (let t = 0; t < nTiles; t++) {
@@ -831,7 +850,7 @@ export function spliceIntervals(existing, lo, hi, replacement) {
  * @param {number} [budget] anchors per strand
  */
 export function pickMaxOcc(index, qLen, tLen, qSample, userCapEntries, budget = 60e6) {
-  const scale = (qLen * (index.stride || 1)) / Math.max(tLen, 1) / Math.max(qSample, 1);
+  const scale = anchorScale(index, qLen, tLen, qSample);
   const cap = userCapEntries === Infinity ? Infinity : Math.max(1, Math.floor(userCapEntries));
   let acc = 0;
   let chosen = 1;

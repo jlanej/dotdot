@@ -1,6 +1,6 @@
 // @ts-check
 import { test, assert, assertEq, assertClose, mulberry32 } from './harness.js';
-import { buildIndex, matchStrand, pickMaxOcc, pickDensity, estimateAnchors, saturatedIntervals, spliceIntervals, multiplicityProfile, containmentGrid, KMER_DEFAULTS } from '../js/core/kmer.js';
+import { buildIndex, matchStrand, pickMaxOcc, pickDensity, estimateAnchors, saturatedIntervals, spliceIntervals, multiplicityProfile, containmentGrid, KMER_DEFAULTS, SEGMENT_WALL_ERROR } from '../js/core/kmer.js';
 import { reverseComplement } from '../js/core/dna.js';
 import { F64Vec, F32Vec, U8Vec } from '../js/core/vec.js';
 
@@ -501,9 +501,11 @@ test('kmer: the segment wall is an option, clamped to the hard limit', () => {
   try {
     match(t, starts([1200]), unit.slice(), starts([20]), { maxOcc: 100, maxSegments: 10 });
   } catch (e) {
-    msg = String(e);
+    msg = e instanceof Error ? e.message : String(e);
   }
-  assert(msg.includes('Too many match segments'), `tiny wall should trip: ${msg}`);
+  // The prefix is a CONTRACT: main.js's wall-recovery card keys on it (the
+  // worker forwards err.message verbatim), so it must lead the message.
+  assert(msg.startsWith(SEGMENT_WALL_ERROR), `tiny wall should trip with the CONTRACT prefix: ${msg}`);
   // A wall above the emission count passes untouched.
   const ok = match(t, starts([1200]), unit.slice(), starts([20]), { maxOcc: 100, maxSegments: 1_000_000 });
   assert(ok.length > 50, `raised wall passes: ${ok.length}`);

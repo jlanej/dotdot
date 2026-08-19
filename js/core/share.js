@@ -36,6 +36,91 @@ export function buildViewHash(v) {
 }
 
 /**
+ * The compute options a link carries (the shapes matchOpts()/lastBaseKmer
+ * produce in main.js).
+ * @typedef {Object} MatchShareOpts
+ * @property {number} k
+ * @property {number} maxGap
+ * @property {number} maxOcc Infinity = occurrence masking off
+ * @property {number} minRunLen
+ * @property {'auto'|'off'|number} sample
+ * @property {number} [exactMaxBp] raised exact-mode ceiling ("off 512M")
+ * @property {number} budgetX Infinity = anchor budget off
+ * @property {number} [maxSegments] raised segment wall
+ */
+
+/**
+ * Serialize NON-DEFAULT compute options onto a link's query params — the
+ * write half of the matching-options grammar (initFromUrl's reads are the
+ * other half; readMatchParams below is their pure core). Only options that
+ * differ from the app defaults travel, so pristine links stay short.
+ * @param {URLSearchParams} q mutated in place
+ * @param {MatchShareOpts} mo
+ * @param {number} [aniTiles] explicit ANI tile count (0/undefined = auto)
+ */
+export function writeMatchParams(q, mo, aniTiles = 0) {
+  if (mo.k !== 15) q.set('k', String(mo.k));
+  if (mo.maxGap !== 64) q.set('gap', String(mo.maxGap));
+  if (mo.maxOcc !== 200) q.set('occ', mo.maxOcc === Infinity ? 'off' : String(mo.maxOcc));
+  if (mo.minRunLen !== 0) q.set('minrun', String(mo.minRunLen));
+  // Exact mode keeps its raised ceiling ("off 512M") so publication computes
+  // reproduce — reconstructed from the options, not any editable field.
+  if (mo.sample !== 'auto') {
+    q.set(
+      'sample',
+      mo.sample === 'off'
+        ? mo.exactMaxBp
+          ? `off ${Math.round(mo.exactMaxBp / 1e6)}M`
+          : 'off'
+        : String(mo.sample),
+    );
+  }
+  if (mo.budgetX !== 1) q.set('budget', mo.budgetX === Infinity ? 'off' : String(mo.budgetX));
+  if (aniTiles > 0) q.set('anitiles', String(aniTiles));
+  if (mo.maxSegments) q.set('wall', `${Math.round(mo.maxSegments / 1e6)}M`);
+}
+
+/**
+ * Parse a link's matching params into field-ready text (the free-text
+ * grammar each sidebar field speaks) plus the parsed wall override. Absent
+ * params come back undefined — the caller leaves those fields alone.
+ * @param {URLSearchParams} p
+ * @param {(text: string) => number} parseBp the app's length parser
+ * @returns {{k?: string, gap?: string, occ?: string, minrun?: string,
+ *   sample?: string, budget?: string, anitiles?: string, wall: number}}
+ */
+export function readMatchParams(p, parseBp) {
+  /** @param {string} name */
+  const get = (name) => {
+    const v = p.get(name);
+    return v === null ? undefined : v;
+  };
+  /** @type {string | undefined} */
+  let budget = get('budget');
+  // Bare numbers re-suffix as multipliers ("4" → "4×") so the field reads
+  // the way users type it; word values (off/auto) pass through.
+  if (budget !== undefined && /^\d/.test(budget)) budget = `${budget}×`;
+  let wall = 0;
+  const w = p.get('wall');
+  if (w !== null) {
+    const v = parseBp(w);
+    // The wall param only RAISES the 16M default (clamped to the 64M hard
+    // ceiling) — a lowering or garbage value is ignored, not honored.
+    if (Number.isFinite(v) && v > 16_000_000) wall = Math.min(64_000_000, Math.round(v));
+  }
+  return {
+    k: get('k'),
+    gap: get('gap'),
+    occ: get('occ'),
+    minrun: get('minrun'),
+    sample: get('sample'),
+    budget,
+    anitiles: get('anitiles'),
+    wall,
+  };
+}
+
+/**
  * Tolerant inverse of buildViewHash: unknown keys are ignored, a missing or
  * malformed viewport means no view state at all.
  * @param {string} hash location.hash (with or without the leading '#')
