@@ -22,6 +22,11 @@ const BASE_B = 46;
 /** Height of one annotation lane in the margins. */
 export const LANE_H = 16;
 
+/** Along-axis lane origins shared by the canvas chrome, the SVG export, and
+ * main's lane hit-testing — one geometry, three consumers. */
+export const LANE_X0 = 20; // px below the plot area to the first x lane
+export const LANE_Y0 = 28; // px from the window's left edge to the first y lane
+
 /**
  * Reserve margin space for annotation lanes (0 = none). The caller re-runs
  * its layout (resize) after a change.
@@ -265,7 +270,7 @@ export function drawOverlay(p) {
   // --- Annotation lanes (margins)
   if (p.annoX && p.annoX.length > 0) {
     for (let li = 0; li < p.annoX.length; li++) {
-      const yTop = LAYOUT.t + ph + 20 + li * LANE_H;
+      const yTop = LAYOUT.t + ph + LANE_X0 + li * LANE_H;
       const rects = laneRects(p.annoX[li], bx.x0, bx.x1, pw, theme.accent);
       for (const r of rects) {
         ctx.fillStyle = r.fill;
@@ -289,7 +294,7 @@ export function drawOverlay(p) {
   }
   if (p.annoY && p.annoY.length > 0) {
     for (let li = 0; li < p.annoY.length; li++) {
-      const xLeft = 28 + li * LANE_H;
+      const xLeft = LANE_Y0 + li * LANE_H;
       const rects = laneRects(p.annoY[li], bx.y0, bx.y1, ph, theme.accent);
       for (const r of rects) {
         ctx.fillStyle = r.fill;
@@ -365,7 +370,7 @@ export function drawOverlay(p) {
 /**
  * @param {number} lo @param {number} hi @param {number} px @param {number} targetSpacing
  */
-export function niceTicks(lo, hi, px, targetSpacing) {
+function niceTicks(lo, hi, px, targetSpacing) {
   const span = Math.max(hi - lo, 1e-9);
   const raw = (span * targetSpacing) / Math.max(px, 1);
   const pow = Math.pow(10, Math.floor(Math.log10(raw)));

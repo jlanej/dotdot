@@ -41,7 +41,6 @@ export class SegmentGrid {
         this.G = G;
         this.cw = cw;
         this.ch = ch;
-        this.entries = entries;
         break;
       }
       G >>= 1;

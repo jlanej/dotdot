@@ -134,6 +134,22 @@ kbd {
 
 #hints {
   color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Split screens and projectors: keep the plot usable on narrow windows —
+   the shortcut hints go first, then the sidebar slims. */
+@media (max-width: 900px) {
+  #hints {
+    display: none;
+  }
+}
+
+@media (max-width: 720px) {
+  #sidebar {
+    width: 232px;
+  }
 }
 
 /* ---- layout ----------------------------------------------------------- */
@@ -719,9 +735,12 @@ input.combo[aria-invalid='true'] {
 
 #toast {
   position: fixed;
-  right: 18px;
+  /* Clear of the on-plot zoom/refine cluster — toasts fire exactly when
+     users reach for those buttons. Click dismisses; hover pauses the timer. */
+  right: 64px;
   bottom: 44px;
   max-width: 420px;
+  cursor: pointer;
   background: var(--panel);
   color: var(--ink);
   border: 1px solid var(--border);

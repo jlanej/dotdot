@@ -4,7 +4,7 @@
  * capped at 60k visible segments — beyond that the file would be unusable
  * anyway and PNG is the right tool.
  */
-import { LAYOUT, LANE_H, computeTicks, boundaryLines, bandLabels, bandStripes, STRIPE_ALPHA, laneRects } from '../render/axes.js';
+import { LAYOUT, LANE_H, LANE_X0, LANE_Y0, computeTicks, boundaryLines, bandLabels, bandStripes, STRIPE_ALPHA, laneRects } from '../render/axes.js';
 import { buildColormap, multT } from '../render/colormap.js';
 import { segmentEndpoints, segmentVisible } from '../core/types.js';
 import { downloadBlob } from './download.js';
@@ -242,7 +242,7 @@ export function exportSvg(p) {
   const laneParts = [];
   const annoX = p.annoX ?? [];
   for (let li = 0; li < annoX.length; li++) {
-    const yTop = LAYOUT.t + ph + 20 + li * LANE_H;
+    const yTop = LAYOUT.t + ph + LANE_X0 + li * LANE_H;
     for (const r of laneRects(annoX[li], b.x0, b.x1, pw, theme.accent)) {
       laneParts.push(
         `<rect x="${r2(LAYOUT.l + r.a)}" y="${yTop}" width="${r2(Math.max(r.b - r.a, 1))}" height="11" fill="${r.fill}"/>`,
@@ -254,7 +254,7 @@ export function exportSvg(p) {
   }
   const annoY = p.annoY ?? [];
   for (let li = 0; li < annoY.length; li++) {
-    const xLeft = 28 + li * LANE_H;
+    const xLeft = LANE_Y0 + li * LANE_H;
     for (const r of laneRects(annoY[li], b.y0, b.y1, ph, theme.accent)) {
       laneParts.push(
         `<rect x="${xLeft}" y="${r2(LAYOUT.t + ph - r.b)}" width="11" height="${r2(Math.max(r.b - r.a, 1))}" fill="${r.fill}"/>`,

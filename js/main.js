@@ -14,7 +14,7 @@ import { spliceIntervals } from './core/kmer.js';
 import { resolveRegion, parseBp } from './core/region.js';
 import { buildViewHash, parseViewHash } from './core/share.js';
 import { GlRenderer } from './render/gl.js';
-import { drawUnderlay, drawOverlay, LAYOUT, setAnnotationLanes } from './render/axes.js';
+import { drawUnderlay, drawOverlay, LAYOUT, LANE_H, LANE_X0, LANE_Y0, setAnnotationLanes } from './render/axes.js';
 import { buildColormap, buildMultiplicityTex, multT, hexToRgb } from './render/colormap.js';
 import { segmentDistributions, occupancyBins, groupedBarsSVG, ladderLabels } from './render/charts.js';
 import { formatBp, formatInt, formatCount } from './render/format.js';
@@ -820,7 +820,10 @@ function onData(data, reqId = -1) {
     chkRev.checked = v.rev;
     chkAutoRefine.checked = v.auto;
     if (v.col === 1 || v.col === 2) selColorMode.value = String(v.col);
-    if (v.draw === 'heat' || v.draw === 'ani') selDrawMode.value = v.draw;
+    if (v.draw === 'heat' || v.draw === 'ani') {
+      selDrawMode.value = v.draw;
+      syncAniRow();
+    }
     const { pw, ph } = state.sizes;
     state.view.fitRect(v.x0, v.y0, v.x1, v.y1, pw, ph);
     if (v.draw === 'heat') rebuildHeatmap();
@@ -1282,10 +1285,24 @@ async function streamRefRegions(ref, regions, onProgress) {
   return out;
 }
 
-selRef.addEventListener('change', () => applyRefSelection(true));
+// Selection UI reflects immediately; the network side debounces — keyboard
+// browsing fires change per arrow step on some platforms, and each default
+// region is a real UCSC stream (generation guards make the spam harmless,
+// but not free).
+/** @type {ReturnType<typeof setTimeout> | undefined} */
+let refLoadTimer;
+selRef.addEventListener('change', () => {
+  applyRefSelection(false);
+  clearTimeout(refLoadTimer);
+  refLoadTimer = setTimeout(() => {
+    const ref = currentRef();
+    if (ref) void loadRefRegion(ref.defaultRegion);
+  }, 350);
+});
 selRefPreset.addEventListener('change', () => {
   inRefRegion.value = selRefPreset.value;
-  void loadRefRegion(selRefPreset.value);
+  clearTimeout(refLoadTimer);
+  refLoadTimer = setTimeout(() => void loadRefRegion(selRefPreset.value), 350);
 });
 $('btn-refload').addEventListener('click', () => void loadRefRegion(inRefRegion.value));
 inRefRegion.addEventListener('keydown', (e) => {
@@ -1646,7 +1663,13 @@ function heatmapTick(now) {
   rebuildHeatmap();
 }
 
+/** The ANI-tiles dial only applies to the ANI heatmap — hide it elsewhere. */
+function syncAniRow() {
+  $('row-anitiles').hidden = !aniMode();
+}
+
 selDrawMode.addEventListener('change', () => {
+  syncAniRow();
   if (heatMode()) {
     rebuildHeatmap();
   } else if (aniMode()) {
@@ -2382,6 +2405,9 @@ function plotXY(e) {
 
 overlay.addEventListener('pointerdown', (e) => {
   if (!state.view) return;
+  // Only the primary button pans — a right-click must not latch `panning`
+  // (its pointerup never arrives once the context menu opens).
+  if (e.button !== 0) return;
   // Claim the gesture before the browser starts a native selection drag.
   e.preventDefault();
   try {
@@ -2439,8 +2465,10 @@ function laneHover(p, e) {
   /** @type {import('./core/types.js').AxisCatalog | null} */
   let cat = null;
   if (state.view && state.data) {
+    // Hit-testing shares the axes module's lane geometry constants — the
+    // hardcoded copies here once drifted a tooltip away from its lane.
     if (p.y > ph + 6 && p.x >= 0 && p.x <= pw && annoLanes.x.length > 0) {
-      const li = Math.floor((p.y - ph - 20) / 16);
+      const li = Math.floor((p.y - ph - LANE_X0) / LANE_H);
       if (li >= 0 && li < annoLanes.x.length) {
         lane = annoLanes.x[li];
         world = state.view.pxToWorldX(p.x, pw);
@@ -2448,8 +2476,8 @@ function laneHover(p, e) {
       }
     } else if (p.x < 0 && p.y >= 0 && p.y <= ph && annoLanes.y.length > 0) {
       const cssX = p.x + LAYOUT.l;
-      const li = Math.floor((cssX - 28) / 16);
-      if (cssX >= 28 && li >= 0 && li < annoLanes.y.length) {
+      const li = Math.floor((cssX - LANE_Y0) / LANE_H);
+      if (cssX >= LANE_Y0 && li >= 0 && li < annoLanes.y.length) {
         lane = annoLanes.y[li];
         world = state.view.pxToWorldY(p.y, ph);
         cat = state.data.query;
@@ -2519,6 +2547,22 @@ overlay.addEventListener('pointerleave', () => {
   laneTipOn = false;
   setHover(null, null);
   readout.textContent = '—';
+  markDirty();
+});
+
+// A system gesture (touch scroll takeover, palm rejection) can cancel the
+// pointer mid-drag — without this, `panning` stays latched and the next
+// bare hover pans the view with no button held.
+overlay.addEventListener('pointercancel', (e) => {
+  selecting = false;
+  state.selection = null;
+  panning = false;
+  overlay.style.cursor = 'crosshair';
+  try {
+    overlay.releasePointerCapture(e.pointerId);
+  } catch {
+    // Already released.
+  }
   markDirty();
 });
 
@@ -2967,6 +3011,7 @@ function onRegionRefined(msg) {
   blitSegments(merged, keep.length, ns);
 
   d.segments = merged;
+  d.stats.merged = true; // segments/s from the base compute no longer applies
   try {
     renderer.setData(merged);
   } catch (err) {
@@ -3316,7 +3361,8 @@ function updateStats() {
   /** @param {string} c */
   const sw = (c) => `<span class="swatch" style="background:${c}"></span>`;
   const secs = s.elapsedMs / 1000;
-  const rate = secs > 0 ? `${formatCount(data.segments.count / secs)}/s` : '—';
+  // After a refine merge the count mixes passes — a rate would be fiction.
+  const rate = secs > 0 && !s.merged ? `${formatCount(data.segments.count / secs)}/s` : '—';
   const rows = [
     ['segments', `${formatCount(data.segments.count)} · ${rate}`],
     [`${sw(cm.fwdFlat)}forward`, `${formatCount(sc.fwd)} · ${formatBp(sc.bpFwd)}`],
@@ -3718,6 +3764,18 @@ function toast(msg, isError = false) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => (toastEl.hidden = true), isError ? 30000 : 6000);
 }
+// Reading or copying a toast shouldn't race its timer: hovering pauses it,
+// and a click dismisses (unless the click was selecting text to copy).
+toastEl.addEventListener('mouseenter', () => clearTimeout(toastTimer));
+toastEl.addEventListener('mouseleave', () => {
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (toastEl.hidden = true), 4000);
+});
+toastEl.addEventListener('click', () => {
+  if (getSelection()?.toString()) return;
+  clearTimeout(toastTimer);
+  toastEl.hidden = true;
+});
 
 /** @param {string} msg */
 function fatal(msg) {

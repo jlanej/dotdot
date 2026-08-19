@@ -8,7 +8,7 @@
 export class F64Vec {
   /** @param {number} [cap] */
   constructor(cap = 1024) {
-    this.a = new Float64Array(cap);
+    this.a = new Float64Array(Math.max(1, cap)); // 0 would double to 0 forever in push
     this.n = 0;
   }
   /** @param {number} v */
@@ -29,7 +29,7 @@ export class F64Vec {
 export class F32Vec {
   /** @param {number} [cap] */
   constructor(cap = 1024) {
-    this.a = new Float32Array(cap);
+    this.a = new Float32Array(Math.max(1, cap)); // 0 would double to 0 forever in push
     this.n = 0;
   }
   /** @param {number} v */
@@ -49,7 +49,7 @@ export class F32Vec {
 export class U32Vec {
   /** @param {number} [cap] */
   constructor(cap = 1024) {
-    this.a = new Uint32Array(cap);
+    this.a = new Uint32Array(Math.max(1, cap)); // 0 would double to 0 forever in push
     this.n = 0;
   }
   /** @param {number} v */
@@ -69,7 +69,7 @@ export class U32Vec {
 export class U8Vec {
   /** @param {number} [cap] */
   constructor(cap = 1024) {
-    this.a = new Uint8Array(cap);
+    this.a = new Uint8Array(Math.max(1, cap)); // 0 would double to 0 forever in push
     this.n = 0;
   }
   /** @param {number} v */

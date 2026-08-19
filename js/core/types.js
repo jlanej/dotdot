@@ -61,7 +61,7 @@ import { F64Vec, F32Vec, U8Vec } from './vec.js';
  * @property {AxisCatalog} query
  * @property {SegmentStore} segments
  * @property {'kmer'|'paf'} source
- * @property {{elapsedMs:number, note?:string, skippedLines?:number, identMin:number, kmer?:KmerStats}} stats
+ * @property {{elapsedMs:number, note?:string, skippedLines?:number, identMin:number, kmer?:KmerStats, merged?:boolean}} stats
  */
 
 /**

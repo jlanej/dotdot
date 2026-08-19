@@ -219,7 +219,21 @@ export function multT(mult) {
  * strand + mode*2 row arithmetic lands on it for either strand).
  * @param {'light'|'dark'} mode
  */
+/** @type {Partial<Record<'light'|'dark', ReturnType<typeof makeColormap>>>} */
+const colormapCache = {};
+
+/**
+ * Memoized per theme: the full OKLab resampling ran from scratch at seven
+ * call sites (theme swaps, legends, lanes, exports) — and a shared object
+ * makes it structurally impossible for consumers to hold divergent ramps.
+ * @param {'light'|'dark'} mode
+ */
 export function buildColormap(mode) {
+  return colormapCache[mode] ?? (colormapCache[mode] = makeColormap(mode));
+}
+
+/** @param {'light'|'dark'} mode */
+function makeColormap(mode) {
   const data = new Uint8Array(256 * 6 * 4);
   const fwdAnchors = rampAnchors(mode, 0);
   const revAnchors = rampAnchors(mode, 1);
@@ -310,7 +324,8 @@ export function buildMultiplicityTex(profile, width = 8192) {
       sum += Math.log10(profile.mult[t]);
       cnt++;
     }
-    out[x] = cnt === 0 ? 0 : Math.round(Math.min(1, sum / cnt / 2.5) * 255);
+    // One scale for texture, lane, and legend: multT owns the constant.
+    out[x] = cnt === 0 ? 0 : Math.round(multT(Math.pow(10, sum / cnt)) * 255);
   }
   return out;
 }

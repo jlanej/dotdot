@@ -32,8 +32,6 @@ export function locate(cat, g) {
  */
 export function bandsInRange(cat, w0, w1) {
   const m = cat.names.length;
-  let lo = 0;
-  let hi = m - 1;
   // first band with end > w0
   let first = m;
   let a = 0;
@@ -49,8 +47,8 @@ export function bandsInRange(cat, w0, w1) {
   }
   // last band with start < w1
   let last = -1;
-  a = lo;
-  b = hi;
+  a = 0;
+  b = m - 1;
   while (a <= b) {
     const mid = (a + b) >>> 1;
     if (cat.starts[mid] < w1) {
