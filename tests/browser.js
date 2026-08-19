@@ -1,5 +1,6 @@
 // @ts-check
 /** Browser test runner: imports every suite, executes the queue, reports. */
+import './annotations.test.js';
 import './assemble.test.js';
 import './bigbed.test.js';
 import './dna.test.js';

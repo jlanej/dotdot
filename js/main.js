@@ -15,7 +15,7 @@ import { resolveRegion, parseBp } from './core/region.js';
 import { buildViewHash, parseViewHash, writeMatchParams, readMatchParams } from './core/share.js';
 import { GlRenderer } from './render/gl.js';
 import { drawUnderlay, drawOverlay, LAYOUT, LANE_H, LANE_X0, LANE_Y0, setAnnotationLanes } from './render/axes.js';
-import { buildColormap, buildMultiplicityTex, multT, hexToRgb } from './render/colormap.js';
+import { buildColormap, buildMultiplicityTex, hexToRgb } from './render/colormap.js';
 import { segmentDistributions, occupancyBins, groupedBarsSVG, ladderLabels } from './render/charts.js';
 import { formatBp, formatInt, formatCount } from './render/format.js';
 import { looksLikePaf } from './io/paf.js';
@@ -27,6 +27,7 @@ import { exportSvg } from './export/svg.js';
 import { initHelp, closeHelp } from './app/help.js';
 import { statsPop, confirmPop, enterModal, closeConfirm, closeStatsPop, setConfirmDismiss, confirmCard } from './app/dialogs.js';
 import { ViewSettle } from './app/settle.js';
+import { LaneBuilder, multLane } from './app/annotations.js';
 
 /** @typedef {import('./core/types.js').PlotData} PlotData */
 
@@ -1342,9 +1343,9 @@ function annoGenome() {
 
 /** @type {Map<string, boolean>} trackId -> enabled */
 const annoEnabled = new Map();
-/** @type {Map<string, import('./io/bigbed.js').BedItem[]>} `${url}|${chrom}|${tile}` -> items */
-const annoTiles = new Map();
-const ANNO_TILE = 1_000_000;
+// Lane building (name resolution, tile cache, @offset math) lives in
+// app/annotations.js, unit-tested against a fake track source.
+const laneBuilder = new LaneBuilder((url) => getBigBed(url));
 /** @type {{x: import('./render/axes.js').AnnoLane[], y: import('./render/axes.js').AnnoLane[]}} */
 let annoLanes = { x: [], y: [] };
 let annoBusy = false;
@@ -1357,143 +1358,6 @@ function activeTracks() {
 /** The k-mer multiplicity lane: on, and this plot's index shipped a profile. */
 function activeMult() {
   return chkMult.checked && !!state.data?.stats.kmer?.profile;
-}
-
-/**
- * Synthesize the k-mer multiplicity lane for one axis from the compute's
- * index profile — repeat structure at every level, in every draw mode.
- * Ink darkens with log copy number; unique-anchor territory stays blank.
- * World coordinates: the profile is indexed by global target position, which
- * IS both axes' world space (the query lane is only offered on self-plots).
- * @param {number} w0 @param {number} w1 visible world range
- * @param {number} pxSpan axis pixels, for bucket coarsening
- * @returns {import('./render/axes.js').AnnoLane | null}
- */
-function multLane(w0, w1, pxSpan) {
-  const km = state.data?.stats.kmer;
-  const prof = km?.profile;
-  if (!prof || w1 <= w0) return null;
-  const cm = buildColormap(mode);
-  // ≥2px buckets: tiles merge as you zoom out, stay hoverable zoomed in.
-  const bucketBp = Math.max(prof.tileBp, ((w1 - w0) / Math.max(pxSpan, 1)) * 2);
-  const approx = (km?.stride ?? 1) > 1 ? '~' : '';
-  /** @type {import('./render/axes.js').AnnoItem[]} */
-  const items = [];
-  for (let s = Math.max(0, Math.floor(w0 / bucketBp) * bucketBp); s < w1; s += bucketBp) {
-    const e = Math.min(w1, s + bucketBp);
-    const t0 = Math.max(0, Math.floor(s / prof.tileBp));
-    const t1 = Math.min(prof.mult.length, Math.ceil(e / prof.tileBp));
-    let sumLog = 0;
-    let uniq = 0;
-    let n = 0;
-    for (let t = t0; t < t1; t++) {
-      if (prof.mult[t] <= 0) continue;
-      sumLog += Math.log2(prof.mult[t]);
-      uniq += prof.uniqFrac[t];
-      n++;
-    }
-    if (n === 0) continue;
-    const mult = Math.pow(2, sumLog / n);
-    // Shared log scale (multT): full ink at ~300× — satellite fabric reads
-    // solid, segdup territory mid-gray, unique sequence blank. The same ramp
-    // colors segments in color-by-multiplicity mode.
-    const tt = multT(mult);
-    if (tt < 0.03) continue;
-    items.push({
-      w0: s,
-      w1: e,
-      rgb: cm.multRgb(tt),
-      name: `k-mers ${approx}${mult < 10 ? mult.toFixed(1) : String(Math.round(mult))}× · ${Math.round((uniq / n) * 100)}% unique`,
-      strand: null,
-    });
-  }
-  return { label: 'k-mer multiplicity', colored: true, items };
-}
-
-/**
- * Resolve an axis record name to a chromosome of the annotation genome.
- * @param {string} name @param {Map<string, {id:number, size:number}>} chroms
- */
-function resolveChrom(name, chroms) {
-  if (chroms.has(name)) return name;
-  const arm = /^(.+)[pq]$/.exec(name);
-  if (arm && chroms.has(arm[1])) return arm[1];
-  const prefix = name.split('_', 1)[0];
-  return chroms.has(prefix) ? prefix : null;
-}
-
-/**
- * Query one track with 1 Mb tile caching (items spanning tiles dedupe).
- * @param {import('./refs.js').RefTrack} track
- * @param {string} chrom @param {number} s @param {number} e
- */
-async function tileQuery(track, chrom, s, e) {
-  const bb = getBigBed(track.url);
-  const t0 = Math.max(0, Math.floor(s / ANNO_TILE));
-  const t1 = Math.max(t0, Math.floor(Math.max(s, e - 1) / ANNO_TILE));
-  /** @type {import('./io/bigbed.js').BedItem[]} */
-  const out = [];
-  const seen = new Set();
-  for (let t = t0; t <= t1; t++) {
-    const key = `${track.url}|${chrom}|${t}`;
-    let arr = annoTiles.get(key);
-    if (!arr) {
-      arr = await bb.query(chrom, t * ANNO_TILE, (t + 1) * ANNO_TILE);
-      annoTiles.set(key, arr);
-      if (annoTiles.size > 400) {
-        const oldest = annoTiles.keys().next().value;
-        if (oldest !== undefined) annoTiles.delete(oldest);
-      }
-    }
-    for (const it of arr) {
-      if (it.end <= s || it.start >= e) continue;
-      const k = `${it.start}:${it.end}:${it.name}`;
-      if (seen.has(k)) continue;
-      seen.add(k);
-      out.push(it);
-    }
-  }
-  return out;
-}
-
-/**
- * Build world-coordinate lanes for one axis, or null when no visible record
- * resolves to a chromosome of the annotation genome.
- * @param {import('./core/types.js').AxisCatalog} cat
- * @param {number} w0 @param {number} w1
- * @param {import('./refs.js').RefTrack[]} tracks
- */
-async function buildAxisLanes(cat, w0, w1, tracks) {
-  /** @type {import('./render/axes.js').AnnoLane[]} */
-  const lanes = tracks.map((t) => ({ label: t.label, colored: !!t.colored, items: [] }));
-  const { first, last } = bandsInRange(cat, w0, w1);
-  if (last < first) return null;
-  let resolvedAny = false;
-  for (let i = first; i <= last; i++) {
-    for (let k = 0; k < tracks.length; k++) {
-      const chroms = await getBigBed(tracks[k].url).chroms();
-      const chrom = resolveChrom(cat.names[i], chroms);
-      if (!chrom) continue;
-      resolvedAny = true;
-      const off = cat.offsets ? cat.offsets[i] : 0;
-      const bandStart = cat.starts[i];
-      const bandEnd = cat.starts[i + 1];
-      const visS = Math.max(w0, bandStart) - bandStart + off;
-      const visE = Math.min(w1, bandEnd) - bandStart + off;
-      if (visE <= visS) continue;
-      const items = await tileQuery(tracks[k], chrom, Math.floor(visS), Math.ceil(visE));
-      for (const it of items) {
-        lanes[k].items.push({
-          w0: Math.max(bandStart, bandStart + (it.start - off)),
-          w1: Math.min(bandEnd, bandStart + (it.end - off)),
-          rgb: it.rgb,
-          name: it.name,
-          strand: it.strand,
-        });
-      }
-    }
-  }
-  return resolvedAny ? lanes : null;
 }
 
 /** Apply lane reservations to the margins; relayout when counts change. */
@@ -1525,20 +1389,23 @@ async function refreshAnnotations() {
     const [lx, ly] =
       tracks.length > 0
         ? await Promise.all([
-            buildAxisLanes(d.target, Math.max(0, b.x0), Math.min(d.target.total, b.x1), tracks),
-            buildAxisLanes(d.query, Math.max(0, b.y0), Math.min(d.query.total, b.y1), tracks),
+            laneBuilder.buildAxisLanes(d.target, Math.max(0, b.x0), Math.min(d.target.total, b.x1), tracks),
+            laneBuilder.buildAxisLanes(d.query, Math.max(0, b.y0), Math.min(d.query.total, b.y1), tracks),
           ])
         : [null, null];
     if (state.data === d) {
       const x = lx ?? [];
       const y = ly ?? [];
-      if (multOn) {
+      const km = d.stats.kmer;
+      if (multOn && km?.profile) {
         // The profile describes the target concatenation; on self-plots the
         // query axis is the same space, so it earns the mirror lane.
-        const mx = multLane(Math.max(0, b.x0), Math.min(d.target.total, b.x1), pw);
+        const cm = buildColormap(mode);
+        const stride = km.stride ?? 1;
+        const mx = multLane(km.profile, stride, Math.max(0, b.x0), Math.min(d.target.total, b.x1), pw, cm.multRgb);
         if (mx) x.push(mx);
         if (!state.fileQuery) {
-          const my = multLane(Math.max(0, b.y0), Math.min(d.query.total, b.y1), ph);
+          const my = multLane(km.profile, stride, Math.max(0, b.y0), Math.min(d.query.total, b.y1), ph, cm.multRgb);
           if (my) y.push(my);
         }
       }
