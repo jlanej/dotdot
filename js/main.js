@@ -300,6 +300,11 @@ function spawnWorker() {
   };
   worker.onerror = (e) => {
     setComputing(false);
+    // A dead worker silently swallows every later postMessage — the next
+    // submit would spin forever. Respawn now; workerGen resets so the next
+    // request resends its buffers.
+    worker.terminate();
+    spawnWorker();
     toast(`Worker failed: ${e.message ?? 'unknown error'}`, true);
   };
 }
@@ -314,6 +319,10 @@ let submitAt = 0;
  */
 function supersede() {
   if (!state.computing) return;
+  // A superseded containment request never delivers its grid — un-stamp the
+  // view signature so the settle watcher asks again instead of leaving ANI
+  // mode drawing segments.
+  if (lastSubmitKind === 'contain') lastContainSig = '';
   worker.terminate();
   spawnWorker();
   stopPool();
@@ -560,7 +569,9 @@ function currentBudget() {
  */
 function currentMaxOcc() {
   const t = inMaxOcc.value.trim().toLowerCase();
-  if (t === 'off' || t === 'none' || t === '∞') return Infinity;
+  // '0' means "off" in every other length-ish field — an occurrence cap of
+  // zero would skip everything, so it means "no masking" here too.
+  if (t === 'off' || t === 'none' || t === '∞' || t === '0') return Infinity;
   return Math.max(1, parseLenOff(t, 200) || 200);
 }
 
@@ -578,6 +589,92 @@ function matchOpts() {
     maxSegments: wallOverride || undefined,
   };
 }
+
+// ---- matching-field canonicalization ---------------------------------------
+// The dial readings must be what the next compute will actually use. On
+// change, each free-text matching field echoes back the parsed meaning; text
+// that would silently fall back to a default instead gets an invalid state
+// and one toast. (The region boxes already toast on parse failure — this
+// brings the matching fields up to the same standard.)
+
+/** @typedef {{ok: boolean, text?: string, msg?: string}} CanonResult */
+
+/**
+ * @param {HTMLInputElement} input
+ * @param {(text: string) => CanonResult} canon
+ */
+function wireCanonicalField(input, canon) {
+  input.addEventListener('change', () => {
+    const r = canon(input.value);
+    if (r.ok) {
+      if (r.text !== undefined) input.value = r.text;
+      input.removeAttribute('aria-invalid');
+    } else {
+      input.setAttribute('aria-invalid', 'true');
+      toast(r.msg ?? 'Could not parse this field.', true);
+    }
+  });
+  // Typing again withdraws the invalid flag until the next commit.
+  input.addEventListener('input', () => input.removeAttribute('aria-invalid'));
+}
+
+/**
+ * @param {string} v @param {{off?: boolean, def: string, what: string}} o
+ * @returns {CanonResult}
+ */
+function canonLen(v, o) {
+  const t = v.trim().toLowerCase();
+  if (t === '') return { ok: true, text: o.def };
+  if (t === 'off' || t === '0' || t === 'none') return { ok: true, text: o.off ? 'off' : '0' };
+  const n = parseBp(t);
+  if (Number.isFinite(n) && n >= 0) return { ok: true, text: String(Math.round(n)) };
+  return {
+    ok: false,
+    msg: `Could not parse ${o.what} “${v.trim()}” — use a length like 64, 1kb, or 2,500${o.off ? ', or off' : ''}.`,
+  };
+}
+
+wireCanonicalField(inGap, (v) => canonLen(v, { def: '64', what: 'bridge gaps' }));
+wireCanonicalField(inMinRun, (v) => canonLen(v, { off: true, def: 'off', what: 'min match length' }));
+wireCanonicalField(inMaxOcc, (v) => {
+  const t = v.trim().toLowerCase();
+  if (t === '') return { ok: true, text: '200' };
+  if (t === 'off' || t === 'none' || t === '∞' || t === '0') return { ok: true, text: 'off' };
+  const n = parseBp(t);
+  if (Number.isFinite(n) && n >= 1) return { ok: true, text: String(Math.round(n)) };
+  return { ok: false, msg: `Could not parse occurrence cap “${v.trim()}” — use a count like 200, or off.` };
+});
+wireCanonicalField(inSample, (v) => {
+  const t = v.trim().toLowerCase();
+  if (t === '' || t === 'auto') return { ok: true, text: 'auto' };
+  const m = /^(?:off|exact|full)(?:[:\s]+(.+))?$/.exec(t);
+  if (m) {
+    if (!m[1]) return { ok: true, text: 'off' };
+    const cap = parseBp(m[1]);
+    if (Number.isFinite(cap) && cap > 0) {
+      return { ok: true, text: `off ${Math.round(cap / 1e6)}M` };
+    }
+    return { ok: false, msg: `Could not parse the exact-mode ceiling in “${v.trim()}” — try off 512M.` };
+  }
+  const n = parseBp(t);
+  if (Number.isFinite(n) && n >= 1) return { ok: true, text: String(Math.round(n)) };
+  return { ok: false, msg: `Could not parse sampling “${v.trim()}” — use auto, off, off 512M, or an interval like 4.` };
+});
+wireCanonicalField(inBudget, (v) => {
+  const t = v.trim().toLowerCase().replace(/[x×]\s*$/, '');
+  if (t === '' || t === 'auto') return { ok: true, text: 'auto' };
+  if (t === 'off' || t === 'none' || t === '∞') return { ok: true, text: 'off' };
+  const n = Number(t);
+  if (Number.isFinite(n) && n >= 1) return { ok: true, text: `${Math.min(64, n)}×` };
+  return { ok: false, msg: `Could not parse repeat budget “${v.trim()}” — use auto, a multiplier like 4×, or off.` };
+});
+wireCanonicalField(inAniTiles, (v) => {
+  const t = v.trim().toLowerCase();
+  if (t === '' || t === 'auto') return { ok: true, text: 'auto' };
+  const n = Number(t);
+  if (Number.isFinite(n) && n >= 64) return { ok: true, text: String(Math.min(1024, Math.round(n))) };
+  return { ok: false, msg: `Could not parse ANI tiles “${v.trim()}” — use auto or a count from 64 to 1024.` };
+});
 
 function displayOpts() {
   return {
@@ -732,6 +829,7 @@ function submitKmer(opts, window = null) {
     return;
   }
   lastKmer = { opts, window };
+  if (!window) lastBaseKmer = opts;
   lastSubmitKind = 'kmer';
   const sendData = workerGen !== dataGen;
   submit({
@@ -764,6 +862,15 @@ function loadPafFile(f) {
   const buf = f.buf ?? f.bufs?.[0];
   if (!buf) return;
   setChip('chip-paf', f);
+  if (state.computing && lastSubmitKind === 'kmer' && lastKmer && !lastKmer.window) {
+    // A PAF dropped during the base compute attaches to that request's
+    // result instead of superseding minutes of matching with an overlay
+    // parse — same mechanism as a FASTA+PAF drop.
+    overlayName = f.name;
+    boundActions = { ...(boundActions ?? {}), req: activeReq, overlay: { name: f.name, buf } };
+    toast('Aligner overlay queued — it will attach when the compute finishes.');
+    return;
+  }
   if (state.data) {
     overlayName = f.name;
     submit({ type: 'pafOverlay', buf, target: state.data.target, query: state.data.query });
@@ -797,6 +904,18 @@ let refLoadGen = 0;
  * @type {string | null}
  */
 let shareBase = null;
+/** True when the query slot holds a local file a link cannot carry. */
+let queryLocal = false;
+/** URL the current query slot was fetched from (rides ref share links). */
+/** @type {string | null} */
+let queryShareUrl = null;
+/**
+ * The options that produced the current BASE plot (refines overwrite
+ * lastKmer with window options — share links must replay the base compute,
+ * not the last refine).
+ * @type {object | null}
+ */
+let lastBaseKmer = null;
 /** View state from the URL hash, applied to the first plot. */
 let pendingView = parseViewHash(location.hash);
 
@@ -1008,6 +1127,8 @@ async function loadRefRegion(text) {
         if (gen !== refLoadGen) return;
         // Query first, target second, same tick: the debounced autocompute
         // runs exactly once, on the pair (the demo loads the same way).
+        queryLocal = false; // the refregion text itself reproduces this query
+        queryShareUrl = null;
         setFasta('query', { name: `${regionsLabel(qRegions)} · ${ref.label}`, buf: qBuf.buffer });
         setFasta('target', { name: `${tLabel} · ${ref.label}`, buf: tBuf.buffer });
       } else {
@@ -1016,7 +1137,11 @@ async function loadRefRegion(text) {
     } finally {
       if (showProgress && !state.computing) progressEl.hidden = true;
     }
-    shareBase = new URLSearchParams({ ref: ref.id, refregion: text }).toString();
+    const sp = new URLSearchParams({ ref: ref.id, refregion: text });
+    // A URL-loaded query survives a reference (re)load — keep it in the link
+    // so the recipient gets the same query-vs-reference plot, not a self-plot.
+    if (!cross.query && state.fileQuery && queryShareUrl) sp.set('query', queryShareUrl);
+    shareBase = sp.toString();
   } catch (err) {
     toast(err instanceof Error ? err.message : String(err), true);
   }
@@ -1031,6 +1156,7 @@ async function loadRefRegion(text) {
  */
 function askStreamConfirm(totalBp) {
   return new Promise((resolve) => {
+    closeConfirm(); // settle any dialog this card replaces
     const mb = Math.round(totalBp / 4 / 1e6);
     const gb = ((totalBp * 3) / 1e9).toFixed(1);
     confirmPop.innerHTML =
@@ -1048,9 +1174,12 @@ function askStreamConfirm(totalBp) {
     confirmPop.hidden = false;
     /** @param {boolean} ok */
     const done = (ok) => {
+      confirmDismiss = null; // settled by a button, not a dismissal
       confirmPop.hidden = true;
       resolve(ok);
     };
+    // Escape, backdrop click, or a replacing dialog all read as "cancel".
+    confirmDismiss = () => resolve(false);
     confirmPop.querySelector('.stats-close')?.addEventListener('click', () => done(false));
     confirmPop.querySelector('#cs-no')?.addEventListener('click', () => done(false));
     confirmPop.querySelector('#cs-go')?.addEventListener('click', () => done(true));
@@ -1671,6 +1800,8 @@ async function loadDemo() {
     // Both slots land in the same tick so the debounced autocompute runs
     // exactly once, on the demo pair — and the overlay binds to that request.
     queuedActions = { overlay: o, region: carriedRegion };
+    queryLocal = false; // demo=1 reproduces both slots
+    queryShareUrl = null;
     setFasta('query', q);
     setFasta('target', t);
     shareBase = 'demo=1';
@@ -1714,6 +1845,8 @@ async function loadFullChr17() {
       const q = await fetchAsFile(Q);
       if (gen !== refLoadGen) return;
       queuedActions = { overlay: o, region: carriedRegion };
+      queryLocal = false; // no shareBase here — the honest toast still applies
+      queryShareUrl = null;
       setFasta('query', q);
       setFasta('target', t);
     } else {
@@ -1765,6 +1898,7 @@ function isPafFile(f) {
  */
 function setFasta(slot, f) {
   dataGen++; // the worker's parse cache is stale from here on
+  closeConfirm(); // an open consent card was asking about the OLD data
   const entry = { name: f.name, bufs: f.bufs ?? [/** @type {ArrayBuffer} */ (f.buf)] };
   if (slot === 'target') {
     state.fileTarget = entry;
@@ -1830,7 +1964,9 @@ async function handleFiles(files) {
   /** @type {{name: string, buf: ArrayBuffer}[]} */
   const fastas = [];
   for (const f of loaded) (isPafFile(f) ? pafs : fastas).push(f);
-  newLoadIntent();
+  // A PAF-only drop is an overlay (or standalone plot) — it must not wipe
+  // the share provenance and queued intents of the data it lands on.
+  if (fastas.length > 0) newLoadIntent();
   if (fastas.length > 0 && pafs.length > 0) {
     // FASTAs and a PAF in one drop: the PAF is the audit overlay for the
     // plot those FASTAs are about to produce, not a standalone plot.
@@ -1843,7 +1979,7 @@ async function handleFiles(files) {
     // Many FASTAs at once: the common gesture is one reference plus several
     // assemblies — first file rules the x axis, the rest stack on the y.
     setFasta('target', fastas[0]);
-    setFasta('query', {
+    setLocalQuery({
       name: `${fastas.length - 1} files`,
       bufs: fastas.slice(1).map((f) => /** @type {ArrayBuffer} */ (f.buf)),
     });
@@ -1854,7 +1990,7 @@ async function handleFiles(files) {
   } else {
     for (const f of fastas) {
       if (!state.fileTarget) setFasta('target', f);
-      else if (!state.fileQuery) setFasta('query', f);
+      else if (!state.fileQuery) setLocalQuery(f);
       else {
         setFasta('target', f);
         state.fileQuery = null;
@@ -1884,13 +2020,20 @@ function wireFileInput(id, fn) {
   });
 }
 
+/** Install a locally picked/dropped query file (links cannot carry it). */
+function setLocalQuery(/** @type {SlotFile} */ f) {
+  queryLocal = true;
+  queryShareUrl = null;
+  setFasta('query', f);
+}
+
 wireFileInput('file-target', (f) => {
   newLoadIntent();
   setFasta('target', f);
 });
 wireFileInput('file-query', (f) => {
   newLoadIntent();
-  setFasta('query', f);
+  setLocalQuery(f);
 });
 wireFileInput('file-paf', loadPafFile);
 
@@ -2745,6 +2888,9 @@ function autoRefineTick(now) {
     return;
   }
   if (!chkAutoRefine.checked || state.computing) return;
+  // Never kick off a compute under an open consent card — the user is being
+  // asked a question about the job that is already pending.
+  if (!confirmPop.hidden) return;
   if (now - viewSettledAt < 900 || sig === autoRefinedSig) return;
   if (state.data.source !== 'kmer' || !state.fileTarget) return;
   const txSpan = Math.min(state.data.target.total, b.x1) - Math.max(0, b.x0);
@@ -2845,7 +2991,7 @@ window.visualViewport?.addEventListener('resize', () => {
       'then zoom the plot with two-finger scroll, double-click, or the +/− buttons.',
   );
 });
-$('btn-clear').addEventListener('click', () => {
+function doClearAll() {
   // Kill in-flight work first: without this, a compute finishing later
   // passes the id gate and repopulates the app the UI says is empty (and
   // the worker keeps holding its parse cache).
@@ -2859,12 +3005,16 @@ $('btn-clear').addEventListener('click', () => {
   lastViewSig = ''; // restart the settle bus — the next data must not
   lastJump = { expr: '', idx: -1 }; // inherit this session's signatures
   clearTimeout(autoTimer);
+  closeConfirm();
   activeReq = -1;
   setComputing(false);
   newLoadIntent();
   boundActions = null;
   lastKmer = null;
+  lastBaseKmer = null;
   lastContain = null;
+  queryLocal = false;
+  queryShareUrl = null;
   state.data = null;
   state.grid = null;
   state.view = null;
@@ -2896,6 +3046,34 @@ $('btn-clear').addEventListener('click', () => {
   legendEl.textContent = 'no data';
   statsEl.innerHTML = '';
   markDirty();
+}
+
+$('btn-clear').addEventListener('click', () => {
+  // Destroying a loaded plot (and local file selections there is no way to
+  // re-load except re-picking) deserves the same consent treatment as every
+  // other irreversible spend in this app. An already-empty app just clears.
+  if (!state.data && !state.fileTarget && !state.overlay) {
+    doClearAll();
+    return;
+  }
+  closeConfirm();
+  confirmPop.innerHTML =
+    `<div class="stats-card">` +
+    `<div class="stats-head"><h3>Clear everything?</h3>` +
+    `<button class="stats-close" aria-label="close">×</button></div>` +
+    `<p class="stats-sum">Unloads the plot, both FASTA slots, and any aligner overlay. ` +
+    `Locally picked files must be picked again; computes re-run from scratch.</p>` +
+    `<div class="confirm-row">` +
+    `<button id="cc-go" class="btn primary">Clear the plot and unload files</button>` +
+    `<button id="cc-no" class="btn">Keep everything</button>` +
+    `</div></div>`;
+  confirmPop.hidden = false;
+  confirmPop.querySelector('.stats-close')?.addEventListener('click', closeConfirm);
+  confirmPop.querySelector('#cc-no')?.addEventListener('click', closeConfirm);
+  confirmPop.querySelector('#cc-go')?.addEventListener('click', () => {
+    closeConfirm();
+    doClearAll();
+  });
 });
 
 btnPng.addEventListener('click', () => {
@@ -2939,27 +3117,41 @@ btnShare.addEventListener('click', async () => {
     rev: chkRev.checked,
     auto: chkAutoRefine.checked,
   });
-  // Non-default compute options ride along so the recipient's plot matches.
+  // Non-default compute options ride along so the recipient's plot matches —
+  // taken from the options that actually PRODUCED this plot, not the current
+  // field values (editing a dial without Recompute must not change the link).
   const q = new URLSearchParams(shareBase ?? '');
-  const mo = /** @type {any} */ (matchOpts());
+  const mo = /** @type {any} */ (
+    state.data.source === 'kmer' && lastBaseKmer ? lastBaseKmer : matchOpts()
+  );
   if (mo.k !== 15) q.set('k', String(mo.k));
   if (mo.maxGap !== 64) q.set('gap', String(mo.maxGap));
   if (mo.maxOcc !== 200) q.set('occ', mo.maxOcc === Infinity ? 'off' : String(mo.maxOcc));
   if (mo.minRunLen !== 0) q.set('minrun', String(mo.minRunLen));
-  // The raw field text travels so exact mode keeps its raised ceiling
-  // ("off 512M") — the recipient's box gets the same words.
+  // Exact mode keeps its raised ceiling ("off 512M") so publication computes
+  // reproduce — reconstructed from the options, not the (editable) field.
   if (mo.sample !== 'auto') {
-    q.set('sample', mo.sample === 'off' ? inSample.value.trim().toLowerCase() : String(mo.sample));
+    q.set(
+      'sample',
+      mo.sample === 'off'
+        ? mo.exactMaxBp
+          ? `off ${Math.round(mo.exactMaxBp / 1e6)}M`
+          : 'off'
+        : String(mo.sample),
+    );
   }
   if (mo.budgetX !== 1) q.set('budget', mo.budgetX === Infinity ? 'off' : String(mo.budgetX));
   if (currentAniTiles() > 0) q.set('anitiles', String(currentAniTiles()));
-  if (wallOverride) q.set('wall', `${Math.round(wallOverride / 1e6)}M`);
+  if (mo.maxSegments) q.set('wall', `${Math.round(mo.maxSegments / 1e6)}M`);
   const qs = q.toString();
   const url = `${location.origin}${location.pathname}${qs ? '?' + qs : ''}${hash}`;
+  // A local query riding a linkable target (reference window vs local FASTA)
+  // makes the link a partial reproduction — say so instead of overclaiming.
+  const fullTrip = shareBase !== null && !(queryLocal && state.fileQuery);
   try {
     await navigator.clipboard.writeText(url);
     toast(
-      shareBase
+      fullTrip
         ? 'View link copied — it reproduces this exact data, viewport, and settings.'
         : 'Link copied — note: locally loaded files are not in it, only the viewport and settings.',
     );
@@ -3129,11 +3321,51 @@ confirmPop.id = 'confirm-pop';
 confirmPop.hidden = true;
 document.body.append(confirmPop);
 confirmPop.addEventListener('click', (e) => {
-  if (e.target === confirmPop) confirmPop.hidden = true;
+  if (e.target === confirmPop) closeConfirm();
 });
+
+/**
+ * Dismiss hook for the promise-based dialog (stream consent): every path
+ * that hides confirmPop must also settle that promise, or the load awaiting
+ * it leaks forever. ask* dialogs that replace the card go through
+ * closeConfirm() first for the same reason.
+ * @type {(() => void) | null}
+ */
+let confirmDismiss = null;
+
+/** Hide the consent card, settling any pending stream-consent promise. */
+function closeConfirm() {
+  confirmPop.hidden = true;
+  if (confirmDismiss) {
+    const d = confirmDismiss;
+    confirmDismiss = null;
+    d();
+  }
+}
+
+/**
+ * Guarded resubmit for consent-dialog buttons: the dialog snapshots the job
+ * and data generation it asked about, and a click after the data moved on
+ * (new files, Clear) must not replay stale options onto the new plot.
+ * @param {number} gen dataGen at ask time
+ * @param {{opts: object, window: {tx0:number,tx1:number,qy0:number,qy1:number} | null} | null} job
+ * @param {(job: NonNullable<typeof lastKmer>) => void} fn
+ */
+function consentResubmit(gen, job, fn) {
+  closeConfirm();
+  if (!job) return;
+  if (gen !== dataGen) {
+    toast('The data changed while this dialog was open — nothing was resubmitted.');
+    return;
+  }
+  fn(job);
+}
 
 /** @param {{tLenBp: number, gbLo: number, gbHi: number}} m */
 function askExactConfirm(m) {
+  closeConfirm(); // settle any dialog this card replaces
+  const gen = dataGen;
+  const job = lastKmer;
   const mb = Math.ceil(m.tLenBp / 1e6);
   const ram = (/** @type {number} */ gb) =>
     gb >= 1 ? `${gb.toFixed(1)} GB` : `${Math.max(1, Math.round(gb * 1000))} MB`;
@@ -3151,20 +3383,16 @@ function askExactConfirm(m) {
     `<p class="stats-sum">Pre-approve next time: type <b>off ${mb}M</b> in sampling — it rides ` +
     `share links, and this ask is skipped.</p></div>`;
   confirmPop.hidden = false;
-  confirmPop.querySelector('.stats-close')?.addEventListener('click', () => {
-    confirmPop.hidden = true;
-  });
-  confirmPop.querySelector('#cf-go')?.addEventListener('click', () => {
-    confirmPop.hidden = true;
-    if (lastKmer) submitKmer({ ...lastKmer.opts, exactConfirmed: true }, lastKmer.window);
-  });
-  confirmPop.querySelector('#cf-auto')?.addEventListener('click', () => {
-    confirmPop.hidden = true;
-    inSample.value = 'auto';
-    if (lastKmer) {
-      submitKmer({ ...lastKmer.opts, sample: 'auto', exactMaxBp: undefined }, lastKmer.window);
-    }
-  });
+  confirmPop.querySelector('.stats-close')?.addEventListener('click', closeConfirm);
+  confirmPop.querySelector('#cf-go')?.addEventListener('click', () =>
+    consentResubmit(gen, job, (j) => submitKmer({ ...j.opts, exactConfirmed: true }, j.window)),
+  );
+  confirmPop.querySelector('#cf-auto')?.addEventListener('click', () =>
+    consentResubmit(gen, job, (j) => {
+      inSample.value = 'auto';
+      submitKmer({ ...j.opts, sample: 'auto', exactMaxBp: undefined }, j.window);
+    }),
+  );
 }
 
 /**
@@ -3178,6 +3406,9 @@ function askExactConfirm(m) {
  */
 function wallRecovery(message) {
   if (!message.startsWith('Too many match segments') || !lastKmer) return false;
+  closeConfirm(); // settle any dialog this card replaces
+  const gen = dataGen;
+  const job = lastKmer;
   const minRunNow = parseLenOff(inMinRun.value, 0);
   const fixLen = Math.max(300, minRunNow * 2);
   const wallNow = wallOverride || 16_000_000;
@@ -3202,33 +3433,25 @@ function wallRecovery(message) {
     `frame rate roughly halves per doubling, and your GPU may refuse the buffer (64M is the ` +
     `engine's hard limit). The ANI heatmap shows full repeat depth without enumerating at all.</p></div>`;
   confirmPop.hidden = false;
-  confirmPop.querySelector('.stats-close')?.addEventListener('click', () => {
-    confirmPop.hidden = true;
-  });
-  confirmPop.querySelector('#cw-minlen')?.addEventListener('click', () => {
-    confirmPop.hidden = true;
-    inMinRun.value = String(fixLen);
-    if (lastKmer) {
-      submitKmer({ ...lastKmer.opts, minRunLen: fixLen, volumeConfirmed: true }, lastKmer.window);
-    }
-  });
-  confirmPop.querySelector('#cw-sample')?.addEventListener('click', () => {
-    confirmPop.hidden = true;
-    inSample.value = '4';
-    if (lastKmer) {
-      submitKmer({ ...lastKmer.opts, sample: 4, volumeConfirmed: true }, lastKmer.window);
-    }
-  });
-  confirmPop.querySelector('#cw-wall')?.addEventListener('click', () => {
-    confirmPop.hidden = true;
-    wallOverride = wallNext;
-    if (lastKmer) {
-      submitKmer(
-        { ...lastKmer.opts, maxSegments: wallNext, volumeConfirmed: true },
-        lastKmer.window,
-      );
-    }
-  });
+  confirmPop.querySelector('.stats-close')?.addEventListener('click', closeConfirm);
+  confirmPop.querySelector('#cw-minlen')?.addEventListener('click', () =>
+    consentResubmit(gen, job, (j) => {
+      inMinRun.value = String(fixLen);
+      submitKmer({ ...j.opts, minRunLen: fixLen, volumeConfirmed: true }, j.window);
+    }),
+  );
+  confirmPop.querySelector('#cw-sample')?.addEventListener('click', () =>
+    consentResubmit(gen, job, (j) => {
+      inSample.value = '4';
+      submitKmer({ ...j.opts, sample: 4, volumeConfirmed: true }, j.window);
+    }),
+  );
+  confirmPop.querySelector('#cw-wall')?.addEventListener('click', () =>
+    consentResubmit(gen, job, (j) => {
+      wallOverride = wallNext;
+      submitKmer({ ...j.opts, maxSegments: wallNext, volumeConfirmed: true }, j.window);
+    }),
+  );
   return true;
 }
 
@@ -3240,6 +3463,9 @@ function wallRecovery(message) {
  * @param {{estAnchors: number, tLenBp: number}} m
  */
 function askVolumeConfirm(m) {
+  closeConfirm(); // settle any dialog this card replaces
+  const gen = dataGen;
+  const job = lastKmer;
   const minRunNow = parseLenOff(inMinRun.value, 0);
   const fixLen = Math.max(300, minRunNow);
   confirmPop.innerHTML =
@@ -3257,20 +3483,16 @@ function askVolumeConfirm(m) {
     `<p class="stats-sum">The length filter drops monomer-scale confetti at emit time — ` +
     `HOR-scale structure stays, segment counts collapse; compute time is similar either way.</p></div>`;
   confirmPop.hidden = false;
-  confirmPop.querySelector('.stats-close')?.addEventListener('click', () => {
-    confirmPop.hidden = true;
-  });
-  confirmPop.querySelector('#cv-go')?.addEventListener('click', () => {
-    confirmPop.hidden = true;
-    if (lastKmer) submitKmer({ ...lastKmer.opts, volumeConfirmed: true }, lastKmer.window);
-  });
-  confirmPop.querySelector('#cv-minlen')?.addEventListener('click', () => {
-    confirmPop.hidden = true;
-    inMinRun.value = String(fixLen);
-    if (lastKmer) {
-      submitKmer({ ...lastKmer.opts, minRunLen: fixLen, volumeConfirmed: true }, lastKmer.window);
-    }
-  });
+  confirmPop.querySelector('.stats-close')?.addEventListener('click', closeConfirm);
+  confirmPop.querySelector('#cv-go')?.addEventListener('click', () =>
+    consentResubmit(gen, job, (j) => submitKmer({ ...j.opts, volumeConfirmed: true }, j.window)),
+  );
+  confirmPop.querySelector('#cv-minlen')?.addEventListener('click', () =>
+    consentResubmit(gen, job, (j) => {
+      inMinRun.value = String(fixLen);
+      submitKmer({ ...j.opts, minRunLen: fixLen, volumeConfirmed: true }, j.window);
+    }),
+  );
 }
 
 function closeStatsPop() {
@@ -3592,7 +3814,7 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     closeHelp();
     closeStatsPop();
-    confirmPop.hidden = true;
+    closeConfirm();
   }
 });
 
@@ -3620,10 +3842,17 @@ async function initFromUrl() {
   }
   const urlRegion = p.get('region');
   if (urlRegion) queuedActions = { ...(queuedActions ?? {}), region: urlRegion };
+  // URL fetches can be slow; anything the user loads meanwhile bumps the
+  // generation and this init must discard itself, like every other loader.
+  const gen = ++refLoadGen;
   try {
     if (p.has('ref')) {
       if (p.has('query')) {
-        const q = await fetchAsFile(/** @type {string} */ (p.get('query')));
+        const qUrl = /** @type {string} */ (p.get('query'));
+        const q = await fetchAsFile(qUrl);
+        if (gen !== refLoadGen) return;
+        queryLocal = false;
+        queryShareUrl = qUrl;
         setFasta('query', q);
       }
       selRef.value = p.get('ref') ?? '';
@@ -3640,17 +3869,24 @@ async function initFromUrl() {
       await loadDemo();
     } else if (p.has('paf')) {
       const f = await fetchAsFile(/** @type {string} */ (p.get('paf')));
+      if (gen !== refLoadGen) return;
       setChip('chip-paf', f);
       computePaf(f.buf);
       shareBase = new URLSearchParams({ paf: /** @type {string} */ (p.get('paf')) }).toString();
     } else if (p.has('target')) {
       if (p.has('overlay')) {
         const o = await fetchAsFile(/** @type {string} */ (p.get('overlay')));
+        if (gen !== refLoadGen) return;
         queuedActions = { ...(queuedActions ?? {}), overlay: o };
       }
       const t = await fetchAsFile(/** @type {string} */ (p.get('target')));
       const q = p.has('query') ? await fetchAsFile(/** @type {string} */ (p.get('query'))) : null;
-      if (q) setFasta('query', q);
+      if (gen !== refLoadGen) return;
+      if (q) {
+        queryLocal = false; // the target=/query= link itself carries it
+        queryShareUrl = null;
+        setFasta('query', q);
+      }
       setFasta('target', t);
       const sb = new URLSearchParams({ target: /** @type {string} */ (p.get('target')) });
       if (p.has('query')) sb.set('query', /** @type {string} */ (p.get('query')));
