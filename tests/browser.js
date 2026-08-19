@@ -3,6 +3,7 @@
 import './annotations.test.js';
 import './assemble.test.js';
 import './bigbed.test.js';
+import './belongs.test.js';
 import './dna.test.js';
 import './fasta.test.js';
 import './paf.test.js';

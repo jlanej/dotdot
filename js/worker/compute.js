@@ -10,6 +10,7 @@ import { parseFasta, mergeParsedFasta, looksLikeFasta } from '../io/fasta.js';
 import { maybeGunzip } from '../io/compress.js';
 import { parsePaf, parsePafOnto, looksLikePaf } from '../io/paf.js';
 import { buildIndex, matchStrand, pickMaxOcc, pickDensity, estimateAnchors, anchorScale, saturatedIntervals, multiplicityProfile, containmentGrid, KMER_DEFAULTS, EXACT_MAX_BP, EXACT_HARD_BP } from '../core/kmer.js';
+import { belongsMatrix, gatherDecompose, pickScaled } from '../core/belongs.js';
 import { reverseComplement } from '../core/dna.js';
 import { newSegmentVecs, vecsToSegments, segmentBuffers } from '../core/types.js';
 
@@ -39,6 +40,7 @@ export function setPostForTesting(/** @type {(msg: unknown, transfer?: Transfera
 /** Test hook: drop the parse cache so each test case starts cold. */
 export function resetParsedCacheForTesting() {
   parsedCache = null;
+  belongsConcat = null;
 }
 
 let lastProgressAt = 0;
@@ -63,6 +65,7 @@ export async function handleRequest(req) {
   try {
     if (req.type === 'kmer') await handleKmer(req);
     else if (req.type === 'containment') await handleContainment(req);
+    else if (req.type === 'belongs') await handleBelongs(req);
     else if (req.type === 'paf') await handlePaf(req);
     else if (req.type === 'pafOverlay') await handlePafOverlay(req);
     else throw new Error(`Unknown request type: ${req?.type}`);
@@ -582,6 +585,119 @@ async function handleContainment(req) {
       elapsedMs: performance.now() - t0,
     },
     [grid.buffer],
+  );
+}
+
+/**
+ * The concatenated record space belongs requests scan: target records then
+ * query records, one coordinate line, cached per data generation so the
+ * matrix and the per-record gather drills share one build. A self-plot
+ * aliases the target's codes outright — no copy.
+ * @type {{gen: number, codes: Uint8Array, bounds: Float64Array, nRecT: number} | null}
+ */
+let belongsConcat = null;
+
+/**
+ * @param {number | undefined} gen
+ * @param {ParsedSlot} tParsed
+ * @param {ParsedSlot | null} qBase
+ */
+function belongsSpace(gen, tParsed, qBase) {
+  if (belongsConcat && belongsConcat.gen === gen) return belongsConcat;
+  const tStarts = tParsed.catalog.starts;
+  const nRecT = tStarts.length - 1;
+  /** @type {Uint8Array} */
+  let codes;
+  /** @type {Float64Array} */
+  let bounds;
+  if (!qBase) {
+    codes = tParsed.codes;
+    bounds = Float64Array.from(tStarts);
+  } else {
+    const qStarts = qBase.catalog.starts;
+    const tTotal = tParsed.codes.length;
+    codes = new Uint8Array(tTotal + qBase.codes.length);
+    codes.set(tParsed.codes, 0);
+    codes.set(qBase.codes, tTotal);
+    bounds = new Float64Array(nRecT + qStarts.length);
+    for (let i = 0; i <= nRecT; i++) bounds[i] = tStarts[i];
+    for (let j = 1; j < qStarts.length; j++) bounds[nRecT + j] = tTotal + qStarts[j];
+  }
+  belongsConcat = { gen: gen ?? -1, codes, bounds, nRecT };
+  return belongsConcat;
+}
+
+/**
+ * Belongs request: record × record count-weighted canonical containment
+ * (no `rec`), or the greedy gather decomposition of one record over windows
+ * of the others (`rec` set). Value-sampled (FracMinHash) past the entry cap
+ * so cross-record ratios stay unbiased — position striding would not.
+ * @param {{id:number, gen?:number, target:ArrayBuffer[]|ArrayBuffer|null,
+ *          query:ArrayBuffer[]|ArrayBuffer|null, opts:{k:number, rec?:number}}} req
+ */
+async function handleBelongs(req) {
+  const t0 = performance.now();
+  const parsed = await resolveParsed(req);
+  if (!parsed) return;
+  const { tParsed, qBase } = parsed;
+  const k = Math.min(26, Math.max(4, Math.round(req.opts.k || 15)));
+  const space = belongsSpace(req.gen, tParsed, qBase);
+  const nR = space.bounds.length - 1;
+  if (nR < 2) {
+    throw new Error('Belongs compares records — load a multi-sequence FASTA or a query file first.');
+  }
+  if (nR > 64) {
+    throw new Error(
+      `Belongs is a pairwise record matrix — ${nR} records is past the 64-record ceiling. ` +
+        'Load fewer sequences, or plot a subset.',
+    );
+  }
+  const scaled = pickScaled(space.codes.length);
+  const rec = req.opts.rec;
+  if (rec != null && rec >= 0 && rec < nR) {
+    const r = gatherDecompose(
+      space.codes, space.bounds, rec, k, { scaled },
+      (d, t) => progress(req.id, 'Decomposing record', d / t),
+    );
+    post({
+      id: req.id,
+      type: 'belongsGather',
+      rec,
+      k,
+      scaled: r.scaled,
+      tileBp: r.tileBp,
+      totMass: r.totMass,
+      explained: r.explained,
+      truncated: r.truncated,
+      // Concatenation coords → record-local coords; main owns the catalogs
+      // and turns these into names and genomic positions.
+      components: r.components.map((c) => ({
+        rec: c.rec,
+        lo: c.lo - space.bounds[c.rec],
+        hi: c.hi - space.bounds[c.rec],
+        mass: c.mass,
+      })),
+      elapsedMs: performance.now() - t0,
+    });
+    return;
+  }
+  const m = belongsMatrix(
+    space.codes, space.bounds, k, { scaled },
+    (d, t) => progress(req.id, 'Scanning records', d / t),
+  );
+  post(
+    {
+      id: req.id,
+      type: 'belongsResult',
+      shared: m.shared,
+      tot: m.tot,
+      nR: m.nR,
+      nRecT: space.nRecT,
+      k,
+      scaled: m.scaled,
+      elapsedMs: performance.now() - t0,
+    },
+    [m.shared.buffer, m.tot.buffer],
   );
 }
 

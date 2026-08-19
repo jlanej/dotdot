@@ -162,6 +162,18 @@ const HELP = {
     'Drop an aligner’s PAF on an existing plot and its calls draw as ink lines with diamond ' +
     'breakpoint markers over the alignment-free layer — the aligner’s story against the raw ' +
     'sequence structure. Display filters never touch the overlay.',
+  belongs:
+    'Count-weighted <b>k-mer containment</b> between every pair of loaded sequences: each cell ' +
+    'is the share of the <i>row’s</i> k-mers — copy counts included, strands canonical, so a ' +
+    'reverse-complemented contig still belongs — found anywhere in the <i>column</i>. Rows ' +
+    'normalize by themselves, so a short fragment reads honestly against a whole chromosome. ' +
+    'Hover a cell for both directions and the k-mer ANI estimate (containment^(1/k), the ANI ' +
+    'heatmap’s statistic); click a plottable cell to zoom to that pair. <b>where?</b> ' +
+    'decomposes one record over windows of the others, greedily, each k-mer copy claimed once ' +
+    '(sourmash-gather style): “62% of this contig is explained by chr17:18.2–18.6M”. Large ' +
+    'inputs are sampled by k-mer <i>value</i> (FracMinHash, disclosed in the card) — never by ' +
+    'position, which would bias cross-record ratios. <b>Shared content is not locus ' +
+    'homology</b>: repeat families make unrelated loci “belong”.',
 };
 
 /** Accessible names for the "?" buttons — a rotor list of twenty identical
@@ -190,6 +202,7 @@ const HELP_LABEL = {
   aspect: 'the 1:1 aspect lock',
   region: 'region jump',
   overlay: 'the aligner overlay',
+  belongs: 'the belongs matrix',
 };
 
 const helpPop = document.createElement('div');

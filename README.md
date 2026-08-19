@@ -74,6 +74,16 @@ same view live:
   explicitly **hatched**); and the **ANI heatmap** — cap-free tile-pair
   identity by exact multiset containment, the satellite view that needs no
   enumeration at all (see below).
+- **Belongs: containment triage before any plot** — one scoreboard click
+  compares **every pair of loaded records** by exact count-weighted,
+  strand-canonical k-mer containment (the ANI heatmap's statistic, lifted to
+  whole sequences): which contigs belong to which chromosome, in either
+  direction, honestly normalized so fragments read fairly against whole
+  arms. **where?** then decomposes any record over windows of the others,
+  greedily, each k-mer copy claimed once — "62 % of this contig is explained
+  by chr17:18.2–18.6M". Large inputs sample k-mer *space* (FracMinHash),
+  never positions, so cross-record ratios stay unbiased — and the card
+  discloses when.
 - **Honest by construction** — every approximation is either visible or
   consented to: capped repeat regions count in the scoreboard (and hatch in
   the identity-heatmap view), the
@@ -229,6 +239,44 @@ CenSat names the blocks (`hsat3_22_17`, `mon_22_7`…) while the multiplicity
 lane traces the same topology from the index alone — no annotation needed,
 so it works on any FASTA. Live:
 [`?ref=t2t&refregion=chr22:10M-13M` + `len=100&col=2`](https://jlanej.github.io/dotdot/?ref=t2t&refregion=chr22%3A10%2C000%2C000-13%2C000%2C000#v=0-3000001:0-3000001&len=100&col=2).*
+
+## Belongs: which sequences share content, and where
+
+Before the first diagonal is drawn there is a more basic question: *do these
+sequences even come from the same material?* The **Belongs…** link on the
+plot scoreboard answers it with the statistic this app already trusts —
+exact, count-weighted k-mer containment — lifted from the ANI heatmap's tile
+pairs to **whole records**. Every loaded sequence is compared with every
+other, strand-canonically (a reverse-complemented contig still belongs; so
+does an inverted haplotype), and each cell reports the share of the *row's*
+k-mer mass found anywhere in the *column*. Rows normalize by themselves —
+the containment index, not Jaccard — so a 30 kb fragment reads honestly
+against a whole chromosome arm. Hover a cell for both directions plus the
+k-mer ANI estimate; click it and the plot zooms to that record pair.
+
+**where?** goes one level deeper: a greedy decomposition of one record's
+k-mer mass over windows of all the others, in the spirit of sourmash's
+`gather`, with each k-mer copy claimed exactly once against both the
+record's and the window's counts — so the shares are disjoint and sum to
+the explained total. On the bundled demo it reads: 97.5 % of NA19240's
+hap1 slice is explained by the CHM13 window and the sister haplotype, and
+the 2.5 % remainder is the haplotype's own private sequence — the 250 kb
+*inversion* costs nothing, because canonical containment doesn't care about
+orientation.
+
+![belongs matrix of the five acrocentric short arms](docs/belongs_acro.png)
+
+*The five **acrocentric p-arms** (70.5 Mb, streamed straight from
+T2T-CHM13) as a belongs matrix: every arm shares 30–50 % of its k-mer mass
+with every other — the famous satellite/rDNA commons that makes acrocentric
+short arms exchange material — while the ANI-tinted cells rank who shares
+most with whom. This is the second honesty rule printed on the card:
+**shared content is not locus homology** — repeat families carry "belongs"
+across unrelated loci, and that is precisely what it measures. At this size
+the card also discloses its sampling: 1/4 of 15-mer space by hash
+(FracMinHash), both sides sampled identically. Live:
+[`?ref=t2t&refregion=chr13p,chr14p,chr15p,chr21p,chr22p&minrun=300`](https://jlanej.github.io/dotdot/?ref=t2t&refregion=chr13p%2Cchr14p%2Cchr15p%2Cchr21p%2Cchr22p&minrun=300)
+→ Belongs….*
 
 ### Reference genomes, no downloads
 
@@ -436,13 +484,16 @@ open http://127.0.0.1:8420/tests/typecheck.html   # strict typecheck in the brow
 ```
 
 - Tests are dependency-free dual-runtime suites: the same files run in the
-  browser page and under `deno test tests/` in CI (177 tests: engine
+  browser page and under `deno test tests/` in CI (194 tests: engine
   coordinates on both strands and all k, reverse-complement mapping, gap
   bridging, boundary discipline, range-restricted indexing/matching,
   multicore chunk-stitch parity against single-core, sampling/density
   resolution and the exact-mode guards, occurrence-cap semantics including
   true off, saturation intervals and hatch painting, the multiplicity
-  profile and its ramps, multiset-containment ANI grids, share-hash and
+  profile and its ramps, multiset-containment ANI grids, canonical
+  containment/FracMinHash estimates and the gather decomposition
+  (packed-k-mer revcomp both widths, claim-once transportation semantics,
+  chimera splitting, novel-content residuals), share-hash and
   matching-params round-trips, the settle bus's gate semantics, the worker's
   consent gates (exact-mode ask, anchor-volume pre-flight, needData cache
   protocol) driven directly in Deno, stream cancellation, annotation

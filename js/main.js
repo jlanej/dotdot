@@ -147,6 +147,7 @@ function autoCollapseStats(pw, ph) {
 }
 const btnZoomRefine = /** @type {HTMLButtonElement} */ ($('btn-zoom-refine'));
 const btnStatsDetail = /** @type {HTMLButtonElement} */ ($('btn-stats-detail'));
+const btnBelongs = /** @type {HTMLButtonElement} */ ($('btn-belongs'));
 
 /** Refine has two homes (Detail panel + the on-plot zoom cluster). */
 function setRefineEnabled(/** @type {boolean} */ on) {
@@ -297,6 +298,8 @@ let workerGen = -1; // the generation the compute worker has parsed & cached
 let lastKmer = null;
 /** @type {{window: {tx0:number,tx1:number,qy0:number,qy1:number}} | null} */
 let lastContain = null;
+/** @type {{rec: number | null} | null} */
+let lastBelongs = null;
 /** Which request kind a worker needData reply should resubmit. */
 let lastSubmitKind = 'kmer';
 /** User-raised segment wall in segments (0 = the 16M default). ~70 B of
@@ -327,6 +330,12 @@ function spawnWorker() {
     } else if (msg.type === 'containResult') {
       setComputing(false);
       onContainResult(msg);
+    } else if (msg.type === 'belongsResult') {
+      setComputing(false);
+      onBelongsResult(msg);
+    } else if (msg.type === 'belongsGather') {
+      setComputing(false);
+      onBelongsGather(msg);
     } else if (msg.type === 'confirmExact') {
       // Exact mode over the consent threshold: ask with the real numbers
       // instead of refusing. The parse cache makes either answer cheap.
@@ -346,6 +355,7 @@ function spawnWorker() {
         boundActions = null;
       }
       if (lastSubmitKind === 'contain' && lastContain) submitContainment(lastContain.window);
+      else if (lastSubmitKind === 'belongs' && lastBelongs) submitBelongs(lastBelongs.rec);
       else if (lastKmer) submitKmer(lastKmer.opts, lastKmer.window);
       else setComputing(false);
     } else if (msg.type === 'error') {
@@ -3030,6 +3040,9 @@ function doClearAll() {
   lastKmer = null;
   lastBaseKmer = null;
   lastContain = null;
+  lastBelongs = null;
+  belongsUi = { gen: -1, k: 0, matrix: null, gathers: new Map(), sel: -1, pending: -1 };
+  btnBelongs.hidden = true;
   queryLocal = false;
   queryShareUrl = null;
   state.data = null;
@@ -3298,6 +3311,7 @@ function updateStats() {
   }
   statsEl.innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd title="${v}">${v}</dd>`).join('');
   plotStats.hidden = false;
+  btnBelongs.hidden = belongsRecordCount() < 2;
 }
 
 // ---- distributions popup + consent cards -----------------------------------
@@ -3569,6 +3583,269 @@ function buildStatsPopHtml(d) {
   return html;
 }
 btnStatsDetail.addEventListener('click', openStatsPop);
+
+// ---- Belongs: record × record containment + gather decomposition ----------
+// One scoreboard link; everything else lives in the on-demand card (it
+// shares the stats modal shell). The numbers are count-weighted CANONICAL
+// k-mer containment — the ANI heatmap's tile statistic lifted to whole
+// records — computed by the worker over a FracMinHash value-sample when the
+// input is large (value sampling keeps cross-record ratios unbiased where
+// position striding would not). Shared content ≠ locus homology; the card
+// and the help entry both say so.
+
+/** @type {{gen: number, k: number, matrix: any, gathers: Map<number, any>, sel: number, pending: number}} */
+let belongsUi = { gen: -1, k: 0, matrix: null, gathers: new Map(), sel: -1, pending: -1 };
+
+function belongsRecordCount() {
+  const d = state.data;
+  if (!d || d.source !== 'kmer' || !state.fileTarget) return 0;
+  return d.target.names.length + (state.fileQuery ? d.query.names.length : 0);
+}
+
+/** @param {number | null} [rec] null → the matrix; a record index → its gather */
+function submitBelongs(rec = null) {
+  if (!state.fileTarget) return;
+  lastBelongs = { rec };
+  lastSubmitKind = 'belongs';
+  const sendData = workerGen !== dataGen;
+  submit({
+    type: 'belongs',
+    gen: dataGen,
+    opts: { k: currentK(), rec: rec ?? undefined },
+    target: sendData ? state.fileTarget.bufs : null,
+    query: sendData ? (state.fileQuery ? state.fileQuery.bufs : null) : null,
+  });
+  workerGen = dataGen;
+}
+
+function openBelongsPop() {
+  if (!state.data) return;
+  if (state.computing) {
+    toast('Wait for the current compute to finish, then open Belongs.');
+    return;
+  }
+  if (belongsUi.gen !== dataGen || belongsUi.k !== currentK()) {
+    belongsUi = { gen: dataGen, k: currentK(), matrix: null, gathers: new Map(), sel: -1, pending: -1 };
+  }
+  renderBelongs();
+  statsPop.hidden = false;
+  enterModal(statsPop);
+  if (!belongsUi.matrix) submitBelongs();
+}
+btnBelongs.addEventListener('click', openBelongsPop);
+
+/** The modal is open and currently showing the belongs card. */
+function belongsCardOpen() {
+  return !statsPop.hidden && !!statsPop.querySelector('#belongs-card');
+}
+
+/** @param {any} msg */
+function onBelongsResult(msg) {
+  if (belongsUi.gen !== dataGen || belongsUi.k !== msg.k) return; // superseded ask
+  belongsUi.matrix = msg;
+  if (belongsCardOpen()) renderBelongs();
+}
+
+/** @param {any} msg */
+function onBelongsGather(msg) {
+  if (belongsUi.gen !== dataGen || belongsUi.k !== msg.k) return;
+  belongsUi.gathers.set(msg.rec, msg);
+  if (belongsUi.pending === msg.rec) belongsUi.pending = -1;
+  belongsUi.sel = msg.rec;
+  if (belongsCardOpen()) renderBelongs();
+}
+
+/** Record label: target names first, then query names; disambiguate collisions. @param {number} i @param {number} nRecT */
+function belongsLabel(i, nRecT) {
+  const d = /** @type {PlotData} */ (state.data);
+  const name = i < nRecT ? d.target.names[i] : d.query.names[i - nRecT];
+  const other = i < nRecT ? (state.fileQuery ? d.query.names : []) : d.target.names;
+  return other.includes(name) ? `${name} (${i < nRecT ? 'x' : 'y'})` : name;
+}
+
+/** Genomic-coordinate range of a record window (1-based, display offsets honored). @param {number} rec @param {number} lo @param {number} hi @param {number} nRecT */
+function belongsRegion(rec, lo, hi, nRecT) {
+  const d = /** @type {PlotData} */ (state.data);
+  const cat = rec < nRecT ? d.target : d.query;
+  const j = rec < nRecT ? rec : rec - nRecT;
+  const off = cat.offsets ? cat.offsets[j] : 0;
+  return `${cat.names[j]}:${formatInt(off + lo + 1)}-${formatInt(off + hi)}`;
+}
+
+/** Hex of the viridis ANI ramp at t ∈ [0,1]. @param {number} t */
+function aniHex(t) {
+  const a = buildColormap(mode).aniData;
+  const i = Math.max(0, Math.min(255, Math.round(t * 255))) * 4;
+  return `#${((1 << 24) | (a[i] << 16) | (a[i + 1] << 8) | a[i + 2]).toString(16).slice(1)}`;
+}
+
+/** @param {number} x fraction → percent label */
+function belongsPct(x) {
+  return x >= 0.095 ? `${Math.round(x * 100)}%` : `${(x * 100).toFixed(1)}%`;
+}
+
+/** @param {string} s */
+function belongsEsc(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+}
+
+/** @param {string} s */
+function belongsElide(s) {
+  return s.length > 14 ? `${s.slice(0, 13)}…` : s;
+}
+
+function renderBelongs() {
+  const d = state.data;
+  if (!d) return;
+  const m = belongsUi.matrix;
+  let html =
+    `<div class="stats-card" id="belongs-card">` +
+    `<div class="stats-head"><h3>Belongs — shared content by record ` +
+    `<button class="help" data-help="belongs" aria-label="about the belongs matrix" aria-expanded="false">?</button></h3>` +
+    `<button class="stats-close" aria-label="close">×</button></div>`;
+  if (!m) {
+    html += `<p class="stats-sum">Scanning records — count-weighted canonical ${currentK()}-mer containment…</p></div>`;
+    statsPop.innerHTML = html;
+    bindBelongs();
+    return;
+  }
+  const { nR, nRecT, k, scaled } = m;
+  const shared = /** @type {Float64Array} */ (m.shared);
+  const tot = /** @type {Float64Array} */ (m.tot);
+  const self = !state.fileQuery;
+  const lab = [];
+  for (let i = 0; i < nR; i++) lab.push(belongsLabel(i, nRecT));
+  /** @param {number} i @param {number} j */
+  const shr = (i, j) => (i < j ? shared[i * nR + j] : shared[j * nR + i]);
+
+  let tbl = `<div class="belongs-wrap"><table class="belongs-table"><thead><tr><th>row ⊂ col</th>`;
+  for (let c = 0; c < nR; c++) tbl += `<th title="${belongsEsc(lab[c])}">${belongsEsc(belongsElide(lab[c]))}</th>`;
+  tbl += `<th></th></tr></thead><tbody>`;
+  for (let r = 0; r < nR; r++) {
+    tbl += `<tr><th title="${belongsEsc(lab[r])}">${belongsEsc(belongsElide(lab[r]))}</th>`;
+    for (let c = 0; c < nR; c++) {
+      if (r === c) {
+        tbl += `<td class="dim">—</td>`;
+        continue;
+      }
+      const s = shr(r, c);
+      const cont = tot[r] > 0 ? s / tot[r] : 0;
+      const back = tot[c] > 0 ? s / tot[c] : 0;
+      const denom = Math.min(tot[r], tot[c]);
+      const ani = denom > 0 && s > 0 ? Math.pow(s / denom, 1 / k) : 0;
+      // Zoom lands on the plot's axes: columns must be target records; rows
+      // must live on the y axis (query records on cross plots, anything on
+      // self plots — the axes share one catalog there).
+      const zoomable = c < nRecT && (self || r >= nRecT) && cont > 0;
+      const title =
+        `${belongsPct(cont)} of ${lab[r]} occurs in ${lab[c]} · ${belongsPct(back)} the other way` +
+        (ani > 0 ? ` · k-mer ANI ≈ ${(ani * 100).toFixed(1)}%` : '') +
+        (zoomable ? ' · click to zoom the plot here' : '');
+      const tint =
+        cont > 0
+          ? ` style="background:color-mix(in srgb, ${aniHex(cont)} ${Math.round(12 + cont * 30)}%, transparent)"`
+          : '';
+      tbl +=
+        `<td${tint} title="${belongsEsc(title)}"` +
+        (zoomable ? ` class="zoom" data-r="${r}" data-c="${c}"` : '') +
+        `>${cont > 0 ? belongsPct(cont) : '<span class="dim">·</span>'}</td>`;
+    }
+    tbl += `<td><button class="linklike belongs-where" data-rec="${r}">where?</button></td></tr>`;
+  }
+  tbl += `</tbody></table></div>`;
+  html += tbl;
+  html +=
+    `<p class="stats-sum">` +
+    (scaled === 1
+      ? `Exact count-weighted containment — every canonical ${k}-mer counted, copy numbers included. `
+      : `FracMinHash estimate: 1/${scaled} of ${k}-mer space, value-sampled so every record sees the same sample. `) +
+    `Cell = share of the <i>row’s</i> k-mer mass found in the <i>column</i> — content sharing, not locus ` +
+    `homology (repeat families carry it across unrelated loci). Hover for both directions and k-mer ANI; ` +
+    `<i>where?</i> decomposes a record over windows of the others.</p>`;
+
+  // Gather panel for the selected record.
+  const sel = belongsUi.pending >= 0 ? belongsUi.pending : belongsUi.sel;
+  if (sel >= 0) {
+    const g = belongsUi.gathers.get(sel);
+    html += `<div class="stats-chart"><h4>where does ${belongsEsc(lab[sel])} belong?</h4>`;
+    if (!g) {
+      html += `<p class="stats-sum">Decomposing over windows of the other records…</p>`;
+    } else {
+      const shown = g.components.slice(0, 8);
+      let bar = `<div class="belongs-bar" role="img" aria-label="explained fraction bar">`;
+      let claimed = 0;
+      shown.forEach((/** @type {any} */ c, /** @type {number} */ i) => {
+        const w = (c.mass / g.totMass) * 100;
+        claimed += c.mass;
+        bar += `<span style="width:${w.toFixed(2)}%;background:${aniHex(i % 2 ? 0.55 : 0.75)}"></span>`;
+      });
+      const rest = g.explained - claimed;
+      if (rest > 0) bar += `<span style="width:${((rest / g.totMass) * 100).toFixed(2)}%;background:${aniHex(0.3)}"></span>`;
+      bar += `</div>`;
+      html += bar;
+      let list = `<ol class="belongs-list">`;
+      for (const c of shown) {
+        list +=
+          `<li><b>${belongsPct(c.mass / g.totMass)}</b> — ` +
+          `${belongsEsc(belongsRegion(c.rec, c.lo, c.hi, nRecT))}` +
+          `${!self && c.rec >= nRecT ? ' <span class="dim">(y axis)</span>' : ''}</li>`;
+      }
+      if (g.components.length > shown.length) {
+        list += `<li class="dim">+ ${g.components.length - shown.length} smaller windows (${belongsPct(rest / g.totMass)})</li>`;
+      }
+      const unex = 1 - g.explained / Math.max(1, g.totMass);
+      list += `<li class="dim">unexplained: ${belongsPct(unex)}${g.truncated ? ' (component cap reached — tail counts here)' : ''}</li>`;
+      list += `</ol>`;
+      html += list;
+      html +=
+        `<p class="stats-sum">Greedy decomposition over ${formatBp(g.tileBp)} windows — each k-mer copy ` +
+        `claimed once, so the shares are disjoint and sum to the explained total.</p>`;
+    }
+    html += `</div>`;
+  }
+  html += `</div>`;
+  statsPop.innerHTML = html;
+  bindBelongs();
+}
+
+/** Wire the freshly rendered belongs card (innerHTML swaps drop listeners). */
+function bindBelongs() {
+  const card = statsPop.querySelector('#belongs-card');
+  if (!card) return;
+  const x = card.querySelector('.stats-close');
+  if (x) x.addEventListener('click', closeStatsPop);
+  card.addEventListener('click', (e) => {
+    const t = /** @type {HTMLElement} */ (e.target);
+    const td = t.closest('td.zoom');
+    if (td instanceof HTMLElement && state.view && state.data) {
+      const m = belongsUi.matrix;
+      const r = Number(td.dataset.r);
+      const c = Number(td.dataset.c);
+      const d = state.data;
+      const yr = state.fileQuery ? r - m.nRecT : r;
+      const yCat = state.fileQuery ? d.query : d.target;
+      closeStatsPop();
+      const { pw, ph } = state.sizes;
+      state.view.fitRect(d.target.starts[c], yCat.starts[yr], d.target.starts[c + 1], yCat.starts[yr + 1], pw, ph);
+      markDirty();
+      return;
+    }
+    const wb = t.closest('.belongs-where');
+    if (wb instanceof HTMLElement) {
+      const rec = Number(wb.dataset.rec);
+      if (belongsUi.gathers.has(rec)) {
+        belongsUi.sel = rec;
+        renderBelongs();
+      } else if (state.computing) {
+        toast('Still computing — one belongs request at a time.');
+      } else {
+        belongsUi.pending = rec;
+        submitBelongs(rec);
+        renderBelongs();
+      }
+    }
+  });
+}
 
 /** @type {ReturnType<typeof setTimeout> | undefined} */
 let toastTimer;
