@@ -238,12 +238,30 @@ function computeKmer(id, tParsed, qParsed, optsIn, t0, window = null, parseNotes
   );
   // Anchor-volume pre-flight: with the caps loosened or off, satellite
   // windows go quadratic. The histogram predicts the grind — ask before
-  // matching starts, not after minutes at the segment wall.
+  // matching starts, not after minutes at the segment wall. Two triggers:
+  // anchor TIME (the quadratic grind) and run-table RAM (each distinct
+  // diagonal costs ~28 B live — background anchors at low k land on
+  // mostly-distinct diagonals, and nothing else bounds that table).
   {
     const scale = (qLenEff * stride) / Math.max(tLenEff, 1) / Math.max(qSample, 1);
     const estTotal = 2 * estimateAnchors(index, maxOccEff, scale); // both strands
-    if (estTotal > 2e9 && !(/** @type {any} */ (opts).volumeConfirmed)) {
-      post({ id, type: 'confirmVolume', estAnchors: estTotal, tLenBp: tLenEff });
+    // With a finite cap past the histogram's 1024-entry tail bin, the tail's
+    // full occ² mass is included even for groups the cap will trim — the
+    // estimate becomes an upper bound and the dialog must say so.
+    const estUpper = Number.isFinite(maxOccEff) && maxOccEff > 1023;
+    // Distinct diagonals ≤ min(anchors, window diagonal count); open
+    // addressing doubles at 3/4 load, so live bytes ≈ diagonals × 28 × 8/3.
+    const diagBound = Math.min(estTotal / 2, tLenEff + qLenEff);
+    const tableGb = (diagBound * 28 * (8 / 3)) / 1e9;
+    if ((estTotal > 2e9 || tableGb > 2) && !(/** @type {any} */ (opts).volumeConfirmed)) {
+      post({
+        id,
+        type: 'confirmVolume',
+        estAnchors: estTotal,
+        estUpper,
+        tableGb: tableGb > 1 ? Math.round(tableGb * 10) / 10 : 0,
+        tLenBp: tLenEff,
+      });
       return;
     }
   }
@@ -451,9 +469,14 @@ async function handleContainment(req) {
   let index;
   /** @type {{x0: number, x1: number, y0: number, y1: number}} */
   let tileRanges;
-  if (!qBase) {
-    // Self-plot: both tile ranges live in target coordinates — one windowed
-    // index over their union span covers everything.
+  // Overlapping self-plot windows share one coordinate space — one windowed
+  // index over their union span covers everything. DISJOINT self windows
+  // (an off-diagonal drill: 0–1 Mb vs 200–201 Mb) route through the
+  // concatenation path instead: indexing the whole gap between them cost up
+  // to ~100× the work and coarsened the stride exactly where the user had
+  // zoomed in for detail.
+  const selfOverlap = !qBase && Math.min(w.tx1, w.qy1) > Math.max(w.tx0, w.qy0);
+  if (selfOverlap) {
     const lo = Math.max(0, Math.floor(Math.min(w.tx0, w.qy0)));
     const hi = Math.min(tParsed.codes.length, Math.ceil(Math.max(w.tx1, w.qy1)));
     const span = Math.max(1, hi - lo);
@@ -466,27 +489,28 @@ async function handleContainment(req) {
     );
     tileRanges = { x0: w.tx0, x1: w.tx1, y0: w.qy0, y1: w.qy1 };
   } else {
-    // Cross-plot: the two axes are different sequences, so slice both
-    // visible windows, concatenate them into one local coordinate space
-    // (junction and record boundaries preserved so k-mers never roll
-    // across), and index that — containmentGrid then compares target tiles
-    // [0, txSpan) against query tiles [txSpan, txSpan + qySpan).
+    // Two different windows (cross-plot axes, or disjoint self windows):
+    // slice both, concatenate into one local coordinate space (junction and
+    // record boundaries preserved so k-mers never roll across), and index
+    // that — containmentGrid then compares target tiles [0, txSpan) against
+    // query tiles [txSpan, txSpan + qySpan).
+    const qSrc = qBase ?? tParsed;
     const txLo = Math.max(0, Math.floor(w.tx0));
     const txHi = Math.min(tParsed.codes.length, Math.ceil(w.tx1));
     const qyLo = Math.max(0, Math.floor(w.qy0));
-    const qyHi = Math.min(qBase.codes.length, Math.ceil(w.qy1));
+    const qyHi = Math.min(qSrc.codes.length, Math.ceil(w.qy1));
     const txSpan = Math.max(0, txHi - txLo);
     const qySpan = Math.max(0, qyHi - qyLo);
     const combined = new Uint8Array(txSpan + qySpan);
     combined.set(tParsed.codes.subarray(txLo, txHi), 0);
-    combined.set(qBase.codes.subarray(qyLo, qyHi), txSpan);
+    combined.set(qSrc.codes.subarray(qyLo, qyHi), txSpan);
     /** @type {number[]} */
     const bounds = [0];
     for (const b of tParsed.catalog.starts) {
       if (b > txLo && b < txHi) bounds.push(b - txLo);
     }
     bounds.push(txSpan);
-    for (const b of qBase.catalog.starts) {
+    for (const b of qSrc.catalog.starts) {
       if (b > qyLo && b < qyHi) bounds.push(b - qyLo + txSpan);
     }
     bounds.push(txSpan + qySpan);

@@ -452,15 +452,40 @@ export function matchStrand(index, qCodes, qStarts, qTotal, tStarts, tTotal, opt
 
   const grow = () => {
     const oldCap = cap;
-    cap <<= 1;
+    cap *= 2;
     capMask = cap - 1;
-    const nk = new Uint32Array(cap);
-    const nq0 = new Uint32Array(cap);
-    const nq1 = new Uint32Array(cap);
-    const nt0 = new Uint32Array(cap);
-    const ng = new Uint32Array(cap);
-    const nqe = new Uint32Array(cap);
-    const nte = new Uint32Array(cap);
+    /** @type {Uint32Array<ArrayBuffer>} */
+    let nk;
+    /** @type {Uint32Array<ArrayBuffer>} */
+    let nq0;
+    /** @type {Uint32Array<ArrayBuffer>} */
+    let nq1;
+    /** @type {Uint32Array<ArrayBuffer>} */
+    let nt0;
+    /** @type {Uint32Array<ArrayBuffer>} */
+    let ng;
+    /** @type {Uint32Array<ArrayBuffer>} */
+    let nqe;
+    /** @type {Uint32Array<ArrayBuffer>} */
+    let nte;
+    try {
+      nk = new Uint32Array(cap);
+      nq0 = new Uint32Array(cap);
+      nq1 = new Uint32Array(cap);
+      nt0 = new Uint32Array(cap);
+      ng = new Uint32Array(cap);
+      nqe = new Uint32Array(cap);
+      nte = new Uint32Array(cap);
+    } catch {
+      // Ungoverned RangeError mid-match helps nobody — name the cost and
+      // the levers. Background anchors at low k are the usual cause: they
+      // land on mostly-distinct diagonals, and the table tracks diagonals.
+      throw new Error(
+        `Out of memory growing the diagonal run-table (~${Math.ceil((cap * 28) / 1e9)} GB for ` +
+          `${Math.round(oldCap / 1e6)}M+ distinct diagonals). Sample the query (sampling: 4), ` +
+          'raise k, or tighten the occurrence cap — low-k cross-plots hit this via chance anchors.',
+      );
+    }
     for (let i = 0; i < oldCap; i++) {
       const key = keys[i];
       if (key === 0) continue;
