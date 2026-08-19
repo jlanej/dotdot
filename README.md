@@ -402,11 +402,12 @@ CPU core — treat them as generous upper bounds on what a foreground tab does.
 
 ```
 js/
-├── core/        dna packing · k-mer index+matcher · camera · picking grid · catalogs · regions
+├── core/        dna packing · k-mer index+matcher · camera · picking grid · catalogs · regions · share grammar
 ├── io/          FASTA and PAF parsers (byte-level) · remote 2bit + bigBed readers · gzip
 ├── worker/      compute coordinator (parse → index → match/plan) · pooled matcher
 ├── render/      WebGL2 instanced renderer · shaders · OKLab colormaps · 2D axes chrome
 ├── export/      PNG compositor · SVG builder
+├── app/         help system · modal shell · settle bus (view-rest gates) · annotation lane builder
 └── main.js      UI wiring, interactions, worker pool, render loop
 ```
 
@@ -435,14 +436,16 @@ open http://127.0.0.1:8420/tests/typecheck.html   # strict typecheck in the brow
 ```
 
 - Tests are dependency-free dual-runtime suites: the same files run in the
-  browser page and under `deno test tests/` in CI (154 tests: engine
+  browser page and under `deno test tests/` in CI (169 tests: engine
   coordinates on both strands and all k, reverse-complement mapping, gap
   bridging, boundary discipline, range-restricted indexing/matching,
   multicore chunk-stitch parity against single-core, sampling/density
   resolution and the exact-mode guards, occurrence-cap semantics including
   true off, saturation intervals and hatch painting, the multiplicity
-  profile and its ramps, multiset-containment ANI grids, share-hash
-  round-trips, parsers, BGZF/gzip fixtures, 2bit and bigBed decoding against
+  profile and its ramps, multiset-containment ANI grids, share-hash and
+  matching-params round-trips, the settle bus's gate semantics, annotation
+  lane building against a fake track source (@offset mapping, band
+  clipping, tile caching), parsers, BGZF/gzip fixtures, 2bit and bigBed decoding against
   in-memory fixtures, camera math, picking, region expressions with
   true-coordinate offsets, colormap monotonicity, formatting).
 - `tests/typecheck.html` runs the real TypeScript compiler (fetched from a
