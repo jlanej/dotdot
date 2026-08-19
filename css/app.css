@@ -63,15 +63,25 @@ body {
   user-select: none;
 }
 
-/* Typing fields and data readouts stay selectable/copyable. */
+/* Typing fields and data readouts stay selectable/copyable — researchers
+   paste these numbers into notebooks and bug reports. */
 input,
 textarea,
 #hover-card,
 .stats-grid,
 #readout,
-#help-pop {
+#help-pop,
+#toast,
+#stats-pop,
+#confirm-pop {
   -webkit-user-select: text;
   user-select: text;
+}
+
+/* The on-plot scoreboard is pointer-transparent so drags pass through to
+   the plot — except its numbers, which must stay selectable. */
+#plot-stats .stats-grid {
+  pointer-events: auto;
 }
 
 kbd {
@@ -94,6 +104,7 @@ kbd {
 }
 
 #wordmark {
+  margin: 0;
   font-size: 19px;
   font-weight: 700;
   letter-spacing: 0.02em;
@@ -167,6 +178,7 @@ kbd {
 
 .help {
   flex: none;
+  position: relative;
   width: 15px;
   height: 15px;
   padding: 0;
@@ -180,6 +192,13 @@ kbd {
   letter-spacing: 0;
   text-transform: none;
   cursor: pointer;
+}
+
+/* Invisible hit-area extension: 15px of visible circle, ≥27px of target. */
+.help::after {
+  content: '';
+  position: absolute;
+  inset: -6px;
 }
 
 .help:hover {
@@ -227,6 +246,33 @@ kbd {
   align-items: baseline;
   color: var(--ink-2);
   margin-bottom: 3px;
+}
+
+/* Label + help "?" (and sometimes an output/kbd) as siblings — valid HTML
+   (a label may not contain other labelable elements like buttons), same
+   layout as the old in-label arrangement. */
+.lblrow {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  color: var(--ink-2);
+  margin-bottom: 3px;
+}
+
+.lblrow output {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Checkbox label + help "?" as siblings on one row. */
+.checkrow {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.checkrow label {
+  flex: none;
 }
 
 .ctl output {
@@ -391,8 +437,27 @@ input.combo[aria-invalid='true'] {
   margin: 6px 0;
 }
 
+/* Visually hidden but focusable: the pickers stay in the tab order (and the
+   accessibility tree) — Enter/Space on a focused input opens the dialog,
+   with the styled label lighting up as its focus ring. */
 .file-row input[type='file'] {
-  display: none;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.file-row {
+  position: relative;
+}
+
+.file-row:has(input[type='file']:focus-visible) .file-btn {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .file-btn {

@@ -91,6 +91,8 @@ function setStatsMin(/** @type {boolean} */ min) {
   plotStats.classList.toggle('min', min);
   btnStatsMin.textContent = min ? '▤ stats' : '−';
   btnStatsMin.title = min ? 'Expand stats' : 'Collapse stats';
+  btnStatsMin.setAttribute('aria-label', btnStatsMin.title);
+  btnStatsMin.setAttribute('aria-expanded', String(!min));
   try {
     localStorage.setItem('dotdot.statsMin', min ? '1' : '');
   } catch {
@@ -138,6 +140,8 @@ function sliderFromMinLen(bp) {
 function setMinLen(bp, o = {}) {
   if (!o.skipText) inMinLen.value = bp > 0 ? String(Math.round(bp)) : 'off';
   inMinLenRange.value = String(sliderFromMinLen(bp));
+  // The slider position is a log-scale index — announce the meaning instead.
+  inMinLenRange.setAttribute('aria-valuetext', bp > 0 ? formatBp(bp) : 'off');
   outMinLen.textContent = bp > 0 ? formatBp(bp) : 'off';
   markDirty();
 }
@@ -257,7 +261,7 @@ function spawnWorker() {
     if (msg.id !== activeReq) return;
     if (msg.type === 'progress') {
       progressLabel.textContent = msg.phase;
-      progressBar.style.width = `${Math.round(msg.frac * 100)}%`;
+      setProgressPct(msg.frac * 100);
     } else if (msg.type === 'plan') {
       runPool(msg.plan);
     } else if (msg.type === 'result') {
@@ -345,6 +349,16 @@ function submit(payload) {
   worker.postMessage({ id: activeReq, ...payload });
 }
 
+/**
+ * The one writer of the progress bar: keeps the visual width and the
+ * progressbar's announced value in step.
+ * @param {number} pct 0..100
+ */
+function setProgressPct(pct) {
+  progressBar.style.width = `${Math.round(pct)}%`;
+  $('progress-track').setAttribute('aria-valuenow', String(Math.round(pct)));
+}
+
 function cancelCompute() {
   supersede();
   activeReq = -1;
@@ -384,7 +398,7 @@ function runPool(plan) {
   let completed = 0;
   const req = activeReq;
   progressLabel.textContent = `Matching on ${nWorkers} cores`;
-  progressBar.style.width = '0%';
+  setProgressPct(0);
 
   /** @param {Worker} w */
   const dispatch = (w) => {
@@ -398,7 +412,7 @@ function runPool(plan) {
   const updateBar = () => {
     let sum = completed;
     for (const a of active.values()) sum += a.frac;
-    progressBar.style.width = `${Math.round((sum / parts.length) * 100)}%`;
+    setProgressPct((sum / parts.length) * 100);
   };
 
   poolWorkers = Array.from({ length: nWorkers }, () => {
@@ -489,7 +503,7 @@ function setComputing(on) {
   state.computing = on;
   progressEl.hidden = !on;
   if (on) {
-    progressBar.style.width = '0%';
+    setProgressPct(0);
     emptyState.hidden = true;
   } else {
     emptyState.hidden = state.data !== null;
@@ -1110,7 +1124,7 @@ async function loadRefRegion(text) {
       if (gen !== refLoadGen) return;
       progressLabel.textContent =
         `Streaming ${label} — ${Math.round(done / 1e6)} / ${Math.round(grandBytes / 1e6)} MB`;
-      progressBar.style.width = `${Math.round((done / Math.max(1, grandBytes)) * 100)}%`;
+      setProgressPct((done / Math.max(1, grandBytes)) * 100);
     };
     if (showProgress) {
       progressEl.hidden = false;
@@ -1172,6 +1186,7 @@ function askStreamConfirm(totalBp) {
       `<button id="cs-no" class="btn">Cancel</button>` +
       `</div></div>`;
     confirmPop.hidden = false;
+  enterModal(confirmPop);
     /** @param {boolean} ok */
     const done = (ok) => {
       confirmDismiss = null; // settled by a button, not a dismissal
@@ -2689,9 +2704,20 @@ function updateReadout(p) {
 
 window.addEventListener('keydown', (e) => {
   const t = /** @type {HTMLElement | null} */ (e.target instanceof HTMLElement ? e.target : null);
-  // Only typing contexts swallow shortcuts — a residually-focused button
-  // (just clicked) must not eat R/G/arrow keys.
-  if (t && t.closest('input, select, textarea')) return;
+  // Only typing contexts swallow shortcuts — a residually-focused button or
+  // checkbox (just clicked) must not eat R/F/G/[/]. A focused slider keeps
+  // its own arrow/± keys; everything else passes through.
+  if (t && t.closest('select, textarea')) return;
+  if (t instanceof HTMLInputElement) {
+    const nonTyping = /^(?:checkbox|radio|range|button|file|submit|reset)$/.test(t.type);
+    if (!nonTyping) return;
+    if (
+      t.type === 'range' &&
+      (e.key.startsWith('Arrow') || e.key === '+' || e.key === '=' || e.key === '-' || e.key === '_')
+    ) {
+      return;
+    }
+  }
   if (!state.view) return;
   const { pw, ph } = state.sizes;
   const pan = 80;
@@ -2779,7 +2805,9 @@ inWidth.addEventListener('input', () => {
 });
 inMinIdent.addEventListener('input', () => {
   const v = Number(inMinIdent.value);
-  outMinIdent.textContent = v <= state.identLo ? 'off' : `${(v * 100).toFixed(1)}%`;
+  const label = v <= state.identLo ? 'off' : `${(v * 100).toFixed(1)}%`;
+  outMinIdent.textContent = label;
+  inMinIdent.setAttribute('aria-valuetext', label);
   markDirty();
 });
 for (const el of [inMinLen, selColorMode]) {
@@ -3068,6 +3096,7 @@ $('btn-clear').addEventListener('click', () => {
     `<button id="cc-no" class="btn">Keep everything</button>` +
     `</div></div>`;
   confirmPop.hidden = false;
+  enterModal(confirmPop);
   confirmPop.querySelector('.stats-close')?.addEventListener('click', closeConfirm);
   confirmPop.querySelector('#cc-no')?.addEventListener('click', closeConfirm);
   confirmPop.querySelector('#cc-go')?.addEventListener('click', () => {
@@ -3306,10 +3335,14 @@ function updateStats() {
 const statsPop = document.createElement('div');
 statsPop.id = 'stats-pop';
 statsPop.hidden = true;
+statsPop.setAttribute('role', 'dialog');
+statsPop.setAttribute('aria-modal', 'true');
+statsPop.tabIndex = -1;
 document.body.append(statsPop);
 statsPop.addEventListener('click', (e) => {
   if (e.target === statsPop) closeStatsPop();
 });
+trapTab(statsPop);
 
 // ---- exact-mode consent popup ---------------------------------------------
 // Sampling "off" is unbounded by policy; over the consent threshold (128 Mb
@@ -3319,10 +3352,60 @@ statsPop.addEventListener('click', (e) => {
 const confirmPop = document.createElement('div');
 confirmPop.id = 'confirm-pop';
 confirmPop.hidden = true;
+confirmPop.setAttribute('role', 'dialog');
+confirmPop.setAttribute('aria-modal', 'true');
+confirmPop.tabIndex = -1;
 document.body.append(confirmPop);
 confirmPop.addEventListener('click', (e) => {
   if (e.target === confirmPop) closeConfirm();
 });
+trapTab(confirmPop);
+
+// ---- shared dialog mechanics ------------------------------------------------
+// The cards are real dialogs to assistive tech: focus moves in on open,
+// cycles inside while open, and returns to the trigger on close.
+
+/** @type {HTMLElement | null} */
+let modalReturnFocus = null;
+
+/** Name the dialog from its heading and move focus in. @param {HTMLElement} pop */
+function enterModal(pop) {
+  const prev = document.activeElement;
+  modalReturnFocus = prev instanceof HTMLElement ? prev : null;
+  const h = pop.querySelector('h3');
+  if (h && h.textContent) pop.setAttribute('aria-label', h.textContent);
+  const primary = pop.querySelector('.btn.primary') ?? pop.querySelector('button');
+  (primary instanceof HTMLElement ? primary : pop).focus();
+}
+
+function restoreModalFocus() {
+  if (modalReturnFocus) {
+    modalReturnFocus.focus();
+    modalReturnFocus = null;
+  }
+}
+
+/** Keep Tab cycling inside an open dialog. @param {HTMLElement} pop */
+function trapTab(pop) {
+  pop.addEventListener('keydown', (e) => {
+    if (e.key !== 'Tab') return;
+    const els = /** @type {HTMLElement[]} */ (
+      [...pop.querySelectorAll('button, [href], input, select, textarea')].filter(
+        (el) => el instanceof HTMLElement && !el.hasAttribute('disabled'),
+      )
+    );
+    if (els.length === 0) return;
+    const first = els[0];
+    const last = els[els.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      last.focus();
+      e.preventDefault();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      first.focus();
+      e.preventDefault();
+    }
+  });
+}
 
 /**
  * Dismiss hook for the promise-based dialog (stream consent): every path
@@ -3335,7 +3418,9 @@ let confirmDismiss = null;
 
 /** Hide the consent card, settling any pending stream-consent promise. */
 function closeConfirm() {
+  const wasOpen = !confirmPop.hidden;
   confirmPop.hidden = true;
+  if (wasOpen) restoreModalFocus();
   if (confirmDismiss) {
     const d = confirmDismiss;
     confirmDismiss = null;
@@ -3383,6 +3468,7 @@ function askExactConfirm(m) {
     `<p class="stats-sum">Pre-approve next time: type <b>off ${mb}M</b> in sampling — it rides ` +
     `share links, and this ask is skipped.</p></div>`;
   confirmPop.hidden = false;
+  enterModal(confirmPop);
   confirmPop.querySelector('.stats-close')?.addEventListener('click', closeConfirm);
   confirmPop.querySelector('#cf-go')?.addEventListener('click', () =>
     consentResubmit(gen, job, (j) => submitKmer({ ...j.opts, exactConfirmed: true }, j.window)),
@@ -3433,6 +3519,7 @@ function wallRecovery(message) {
     `frame rate roughly halves per doubling, and your GPU may refuse the buffer (64M is the ` +
     `engine's hard limit). The ANI heatmap shows full repeat depth without enumerating at all.</p></div>`;
   confirmPop.hidden = false;
+  enterModal(confirmPop);
   confirmPop.querySelector('.stats-close')?.addEventListener('click', closeConfirm);
   confirmPop.querySelector('#cw-minlen')?.addEventListener('click', () =>
     consentResubmit(gen, job, (j) => {
@@ -3483,6 +3570,7 @@ function askVolumeConfirm(m) {
     `<p class="stats-sum">The length filter drops monomer-scale confetti at emit time — ` +
     `HOR-scale structure stays, segment counts collapse; compute time is similar either way.</p></div>`;
   confirmPop.hidden = false;
+  enterModal(confirmPop);
   confirmPop.querySelector('.stats-close')?.addEventListener('click', closeConfirm);
   confirmPop.querySelector('#cv-go')?.addEventListener('click', () =>
     consentResubmit(gen, job, (j) => submitKmer({ ...j.opts, volumeConfirmed: true }, j.window)),
@@ -3496,7 +3584,9 @@ function askVolumeConfirm(m) {
 }
 
 function closeStatsPop() {
+  const wasOpen = !statsPop.hidden;
   statsPop.hidden = true;
+  if (wasOpen) restoreModalFocus();
 }
 
 /** @type {{ref: unknown, mode: string, html: string}} */
@@ -3510,6 +3600,7 @@ function openStatsPop() {
   }
   statsPop.innerHTML = statsPopCache.html;
   statsPop.hidden = false;
+  enterModal(statsPop);
   const x = statsPop.querySelector('.stats-close');
   if (x) x.addEventListener('click', closeStatsPop);
 }
@@ -3592,6 +3683,9 @@ btnStatsDetail.addEventListener('click', openStatsPop);
 let toastTimer;
 /** @param {string} msg @param {boolean} [isError] */
 function toast(msg, isError = false) {
+  // Errors interrupt (alert); info waits its turn (status). Set the role
+  // before the text so the announcement carries the right urgency.
+  toastEl.setAttribute('role', isError ? 'alert' : 'status');
   toastEl.textContent = msg;
   toastEl.className = isError ? 'error' : '';
   toastEl.hidden = false;
@@ -3762,6 +3856,39 @@ const HELP = {
     'sequence structure. Display filters never touch the overlay.',
 };
 
+/** Accessible names for the "?" buttons — a rotor list of twenty identical
+ * "question mark" entries helps nobody. @type {Record<string, string>} */
+const HELP_LABEL = {
+  controls: 'mouse and keyboard controls',
+  data: 'inputs',
+  ref: 'reference regions',
+  matching: 'matching options',
+  k: 'k-mer size',
+  gap: 'gap bridging',
+  occ: 'the occurrence cap',
+  budget: 'the repeat budget',
+  minrun: 'min match length',
+  sample: 'sampling',
+  annotations: 'annotation tracks',
+  drawmode: 'draw modes',
+  anitiles: 'ANI tile resolution',
+  detail: 'the detail controls',
+  refine: 'refine view',
+  share: 'share links',
+  minident: 'the anchor-identity filter',
+  strands: 'strand colors',
+  colorby: 'color modes',
+  minpx: 'small-match emphasis',
+  aspect: 'the 1:1 aspect lock',
+  region: 'region jump',
+  overlay: 'the aligner overlay',
+};
+for (const b of document.querySelectorAll('.help')) {
+  const key = b instanceof HTMLElement ? b.dataset.help : undefined;
+  b.setAttribute('aria-label', `about ${(key && HELP_LABEL[key]) || key || 'this control'}`);
+  b.setAttribute('aria-expanded', 'false');
+}
+
 const helpPop = document.createElement('div');
 helpPop.id = 'help-pop';
 helpPop.hidden = true;
@@ -3772,8 +3899,18 @@ let helpAnchor = null;
 
 function closeHelp() {
   helpPop.hidden = true;
+  if (helpAnchor) helpAnchor.setAttribute('aria-expanded', 'false');
   helpAnchor = null;
 }
+
+// The popover is positioned once, from the button's rect — a sidebar scroll
+// or window resize would leave it floating over unrelated controls.
+window.addEventListener('scroll', () => {
+  if (helpAnchor) closeHelp();
+}, true);
+window.addEventListener('resize', () => {
+  if (helpAnchor) closeHelp();
+});
 
 document.addEventListener(
   'click',
@@ -3793,6 +3930,7 @@ document.addEventListener(
       helpPop.innerHTML = html;
       helpPop.hidden = false;
       helpAnchor = btn;
+      btn.setAttribute('aria-expanded', 'true');
       const r = btn.getBoundingClientRect();
       helpPop.style.left = '0px';
       helpPop.style.top = '0px';

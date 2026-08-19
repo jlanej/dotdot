@@ -11,13 +11,13 @@
 </head>
 <body>
   <header id="topbar">
-    <div id="wordmark" aria-label="dotdot">dot<span>dot</span></div>
+    <h1 id="wordmark">dot<span>dot</span></h1>
     <div id="tagline">alignment-free interactive genomic dot plots — raw k-mer structure straight from FASTA, entirely in your browser</div>
     <button class="help" data-help="controls" aria-label="mouse and keyboard controls">?</button>
   </header>
 
   <div id="layout">
-    <aside id="sidebar">
+    <aside id="sidebar" aria-label="controls">
       <section class="panel" id="panel-detail" hidden>
         <h2>Detail <button class="help" data-help="detail" aria-label="about the detail controls">?</button></h2>
         <div class="ctl">
@@ -48,7 +48,7 @@
       <section class="panel">
         <h2>Data <button class="help" data-help="data" aria-label="about inputs">?</button></h2>
         <div class="ctl">
-          <label for="sel-ref">reference <button class="help" data-help="ref">?</button></label>
+          <div class="lblrow"><label for="sel-ref">reference</label> <button class="help" data-help="ref">?</button></div>
           <select id="sel-ref">
             <option value="" selected>— none —</option>
           </select>
@@ -101,12 +101,12 @@
       <section class="panel">
         <h2>Matching <button class="help" data-help="matching" aria-label="about matching options">?</button></h2>
         <div class="ctl">
-          <label for="in-k">k-mer size <button class="help" data-help="k">?</button>
-            <input type="number" id="in-k-num" min="4" max="26" step="1" value="15" aria-label="k-mer size" /></label>
-          <input type="range" id="in-k" min="8" max="26" step="1" value="15" />
+          <div class="lblrow"><label for="in-k-num">k-mer size</label> <button class="help" data-help="k">?</button>
+            <input type="number" id="in-k-num" min="4" max="26" step="1" value="15" /></div>
+          <input type="range" id="in-k" min="8" max="26" step="1" value="15" aria-label="k-mer size (slider, 8 and up — type below 8 in the box)" />
         </div>
         <div class="ctl">
-          <label for="in-gap">bridge gaps ≤ <button class="help" data-help="gap">?</button></label>
+          <div class="lblrow"><label for="in-gap">bridge gaps ≤</label> <button class="help" data-help="gap">?</button></div>
           <input type="text" id="in-gap" class="combo" list="dl-gap" value="64" spellcheck="false" autocomplete="off" />
           <datalist id="dl-gap">
             <option value="0" label="exact runs"></option>
@@ -117,7 +117,7 @@
           </datalist>
         </div>
         <div class="ctl">
-          <label for="in-maxocc">skip k-mers with > <button class="help" data-help="occ">?</button></label>
+          <div class="lblrow"><label for="in-maxocc">skip k-mers with ></label> <button class="help" data-help="occ">?</button></div>
           <input type="text" id="in-maxocc" class="combo" list="dl-occ" value="200" spellcheck="false" autocomplete="off" />
           <datalist id="dl-occ">
             <option value="50"></option>
@@ -127,7 +127,7 @@
           </datalist>
         </div>
         <div class="ctl">
-          <label for="in-minrun">min match length <button class="help" data-help="minrun">?</button></label>
+          <div class="lblrow"><label for="in-minrun">min match length</label> <button class="help" data-help="minrun">?</button></div>
           <input type="text" id="in-minrun" class="combo" list="dl-minrun" value="off" spellcheck="false" autocomplete="off" />
           <datalist id="dl-minrun">
             <option value="off"></option>
@@ -138,7 +138,7 @@
           </datalist>
         </div>
         <div class="ctl">
-          <label for="in-sample">sampling <button class="help" data-help="sample">?</button></label>
+          <div class="lblrow"><label for="in-sample">sampling</label> <button class="help" data-help="sample">?</button></div>
           <input type="text" id="in-sample" class="combo" list="dl-sample" value="auto" spellcheck="false" autocomplete="off" />
           <datalist id="dl-sample">
             <option value="auto"></option>
@@ -151,7 +151,7 @@
           </datalist>
         </div>
         <div class="ctl">
-          <label for="in-budget">repeat budget <button class="help" data-help="budget">?</button></label>
+          <div class="lblrow"><label for="in-budget">repeat budget</label> <button class="help" data-help="budget">?</button></div>
           <input type="text" id="in-budget" class="combo" list="dl-budget" value="auto" spellcheck="false" autocomplete="off" />
           <datalist id="dl-budget">
             <option value="auto"></option>
@@ -167,20 +167,24 @@
       <section class="panel">
         <h2>Display</h2>
         <div class="ctl">
-          <label for="in-minident">min identity <button class="help" data-help="minident">?</button> <output id="out-minident">off</output></label>
+          <div class="lblrow"><label for="in-minident">min anchor identity</label> <button class="help" data-help="minident">?</button> <output id="out-minident">off</output></div>
           <input type="range" id="in-minident" min="0" max="1" step="0.005" value="0" />
         </div>
         <div class="ctl checks">
           <label><input type="checkbox" id="chk-fwd" checked /><span class="swatch" id="sw-fwd"></span>forward</label>
-          <label><input type="checkbox" id="chk-rev" checked /><span class="swatch" id="sw-rev"></span>reverse
-            <button class="help" data-help="strands">?</button></label>
+          <div class="checkrow">
+            <label><input type="checkbox" id="chk-rev" checked /><span class="swatch" id="sw-rev"></span>reverse</label>
+            <button class="help" data-help="strands">?</button>
+          </div>
         </div>
         <div class="ctl checks" id="row-overlay" hidden>
-          <label><input type="checkbox" id="chk-overlay" checked />show aligner overlay
-            <button class="help" data-help="overlay">?</button></label>
+          <div class="checkrow">
+            <label><input type="checkbox" id="chk-overlay" checked />show aligner overlay</label>
+            <button class="help" data-help="overlay">?</button>
+          </div>
         </div>
         <div class="ctl">
-          <label for="sel-drawmode">draw as <button class="help" data-help="drawmode">?</button></label>
+          <div class="lblrow"><label for="sel-drawmode">draw as</label> <button class="help" data-help="drawmode">?</button></div>
           <select id="sel-drawmode">
             <option value="seg" selected>segments</option>
             <option value="heat">identity heatmap</option>
@@ -188,7 +192,7 @@
           </select>
         </div>
         <div class="ctl">
-          <label for="in-anitiles">ANI tiles <button class="help" data-help="anitiles">?</button></label>
+          <div class="lblrow"><label for="in-anitiles">ANI tiles</label> <button class="help" data-help="anitiles">?</button></div>
           <input type="text" id="in-anitiles" class="combo" list="dl-anitiles" value="auto" spellcheck="false" autocomplete="off" />
           <datalist id="dl-anitiles">
             <option value="auto"></option>
@@ -198,7 +202,7 @@
           </datalist>
         </div>
         <div class="ctl">
-          <label for="sel-colormode">color by <button class="help" data-help="colorby">?</button></label>
+          <div class="lblrow"><label for="sel-colormode">color by</label> <button class="help" data-help="colorby">?</button></div>
           <select id="sel-colormode">
             <option value="0" selected>identity</option>
             <option value="1">strand only</option>
@@ -210,12 +214,16 @@
           <input type="range" id="in-width" min="1" max="4" step="0.5" value="2" />
         </div>
         <div class="ctl checks">
-          <label><input type="checkbox" id="chk-minpx" checked />emphasize small matches
-            <button class="help" data-help="minpx">?</button></label>
+          <div class="checkrow">
+            <label><input type="checkbox" id="chk-minpx" checked />emphasize small matches</label>
+            <button class="help" data-help="minpx">?</button>
+          </div>
         </div>
         <div class="ctl checks">
-          <label><input type="checkbox" id="chk-aspect" />lock 1:1 bp aspect
-            <button class="help" data-help="aspect">?</button></label>
+          <div class="checkrow">
+            <label><input type="checkbox" id="chk-aspect" />lock 1:1 bp aspect</label>
+            <button class="help" data-help="aspect">?</button>
+          </div>
         </div>
       </section>
 
@@ -227,7 +235,7 @@
       <section class="panel">
         <h2>View</h2>
         <div class="ctl">
-          <label for="in-region">go to target region <button class="help" data-help="region">?</button> <kbd>G</kbd></label>
+          <div class="lblrow"><label for="in-region">go to target region</label> <button class="help" data-help="region">?</button> <kbd>G</kbd></div>
           <div class="region-row">
             <input type="text" id="in-region" placeholder="chr17:45M-46.5M" spellcheck="false" autocomplete="off" />
             <button id="btn-region" class="btn">Go</button>
@@ -253,10 +261,10 @@
       <canvas id="glcanvas" hidden></canvas>
       <canvas id="overlay"></canvas>
       <div id="zoomctl">
-        <button id="btn-zoom-in" title="Zoom in (+)">+</button>
-        <button id="btn-zoom-out" title="Zoom out (−)">−</button>
-        <button id="btn-zoom-fit" title="Fit everything (R)">⤢</button>
-        <button id="btn-zoom-refine" title="Refine view — full detail in this window (F)" disabled>✦</button>
+        <button id="btn-zoom-in" title="Zoom in (+)" aria-label="Zoom in">+</button>
+        <button id="btn-zoom-out" title="Zoom out (−)" aria-label="Zoom out">−</button>
+        <button id="btn-zoom-fit" title="Fit everything (R)" aria-label="Fit everything">⤢</button>
+        <button id="btn-zoom-refine" title="Refine view — full detail in this window (F)" aria-label="Refine view — full detail in this window" disabled>✦</button>
       </div>
       <div id="plot-stats" hidden>
         <button id="btn-stats-min" title="Collapse stats">−</button>
@@ -275,8 +283,9 @@
       </div>
       <div id="progress" hidden>
         <div id="progress-panel">
-          <div id="progress-label">Working…</div>
-          <div id="progress-track"><div id="progress-bar"></div></div>
+          <div id="progress-label" aria-live="polite">Working…</div>
+          <div id="progress-track" role="progressbar" aria-label="compute progress"
+            aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="progress-bar"></div></div>
           <button id="btn-cancel" class="btn subtle">Cancel</button>
         </div>
       </div>
@@ -288,7 +297,7 @@
     <div id="hints">drag pan · pinch / wheel zoom · shift-drag box zoom · double-click zoom · <kbd>R</kbd> fit · <kbd>F</kbd> refine · <kbd>[</kbd><kbd>]</kbd> detail · <kbd>P</kbd> fps</div>
   </footer>
 
-  <div id="toast" hidden></div>
+  <div id="toast" role="status" hidden></div>
   <script type="module" src="./js/main.js"></script>
 </body>
 </html>
