@@ -9,7 +9,6 @@
 import { VERT, FRAG } from './shaders.js';
 import { segmentEndpoints } from '../core/types.js';
 import { buildColormap } from './colormap.js';
-import { MAX_SEGMENTS } from '../core/kmer.js';
 
 /** @typedef {import('../core/types.js').SegmentStore} SegmentStore */
 /** @typedef {import('../core/transform.js').View} View */
@@ -26,7 +25,10 @@ export class GlRenderer {
       // Transparent over the underlay: the 2D chrome (surface fill, region
       // stripes, the identity heatmap) is the background; GL draws only data.
       alpha: true,
-      premultipliedAlpha: false,
+      // Premultiplied end to end: the fragment shader emits rgb*a, blending
+      // is (ONE, ONE_MINUS_SRC_ALPHA), and the compositor reads the buffer
+      // as premultiplied — alpha is applied exactly once.
+      premultipliedAlpha: true,
       powerPreference: 'high-performance',
       // Keeps the frame readable for PNG export and screenshots at any time,
       // not just in the same task as the draw. The blit cost is negligible
@@ -167,7 +169,8 @@ export class GlRenderer {
 
     gl.disable(gl.DEPTH_TEST);
     gl.enable(gl.BLEND);
-    gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    // Premultiplied "over": source color already carries its alpha.
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
   }
 
   /**
@@ -212,7 +215,24 @@ export class GlRenderer {
     /** @type {Uint8Array | null} */
     this.multTexData = data;
     const gl = this.gl;
-    const tex = data ?? new Uint8Array([0]);
+    let tex = data ?? new Uint8Array([0]);
+    // WebGL2 only guarantees MAX_TEXTURE_SIZE ≥ 2048; the profile texture
+    // defaults to 8192 wide. A silent texImage2D failure would leave the
+    // zero placeholder while colorMode 2 paints every segment the lo color
+    // — downsample by averaging instead. (multTexData keeps the original,
+    // so a context restore on different hardware re-clamps correctly.)
+    const cap = /** @type {number} */ (gl.getParameter(gl.MAX_TEXTURE_SIZE));
+    if (tex.length > cap) {
+      const out = new Uint8Array(cap);
+      for (let i = 0; i < cap; i++) {
+        const a = Math.floor((i * tex.length) / cap);
+        const b = Math.max(a + 1, Math.floor(((i + 1) * tex.length) / cap));
+        let sum = 0;
+        for (let j = a; j < b; j++) sum += tex[j];
+        out[i] = Math.round(sum / (b - a));
+      }
+      tex = out;
+    }
     gl.bindTexture(gl.TEXTURE_2D, this.multTex);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, tex.length, 1, 0, gl.RED, gl.UNSIGNED_BYTE, tex);
@@ -221,22 +241,36 @@ export class GlRenderer {
 
   /** @param {SegmentStore} store */
   setData(store) {
-    this.store = store;
-    this.count = store.count;
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.instanceBuf);
     // Size the GPU store, then fill through a reused ~10 MB staging chunk:
     // interleaving 8M+ segments into one giant Float32Array spiked the JS
     // heap by hundreds of MB exactly when overall memory already peaks.
-    gl.bufferData(gl.ARRAY_BUFFER, store.count * BYTES_PER_INSTANCE, gl.STATIC_DRAW);
-    // User-raised segment walls can push this allocation past what the GPU
-    // accepts — say so instead of drawing nothing.
-    if (store.count > MAX_SEGMENTS && gl.getError() === gl.OUT_OF_MEMORY) {
-      throw new Error(
-        `The GPU refused a ${Math.round((store.count * BYTES_PER_INSTANCE) / 1e6)} MB segment ` +
-          'buffer — lower the segment wall (raise min match length or sampling instead).',
-      );
+    if (store.count > 2_000_000) {
+      // Drain stale error flags first: getError pops one flag at a time and
+      // an unrelated leftover could otherwise eat the OUT_OF_MEMORY signal.
+      while (gl.getError() !== gl.NO_ERROR) { /* drain */ }
     }
+    gl.bufferData(gl.ARRAY_BUFFER, store.count * BYTES_PER_INSTANCE, gl.STATIC_DRAW);
+    // Big allocations can exceed what the GPU accepts (user-raised walls,
+    // weak hardware) — say so instead of drawing nothing, and leave the
+    // renderer EMPTY rather than pointing at a buffer that never allocated.
+    if (store.count > 2_000_000) {
+      let oom = false;
+      for (let err = gl.getError(); err !== gl.NO_ERROR; err = gl.getError()) {
+        if (err === gl.OUT_OF_MEMORY) oom = true;
+      }
+      if (oom) {
+        this.store = null;
+        this.count = 0;
+        throw new Error(
+          `The GPU refused a ${Math.round((store.count * BYTES_PER_INSTANCE) / 1e6)} MB segment ` +
+            'buffer — lower the segment wall (raise min match length or sampling instead).',
+        );
+      }
+    }
+    this.store = store;
+    this.count = store.count;
     const CHUNK = 262_144; // instances per staging fill
     const scratchLen = Math.min(Math.max(store.count, 1), CHUNK) * FLOATS_PER_INSTANCE;
     if (!this.chunkScratch || this.chunkScratch.length < scratchLen) {
@@ -291,7 +325,6 @@ export class GlRenderer {
    * @param {number} opts.vpW plot area CSS px
    * @param {number} opts.vpH
    * @param {number} opts.dpr
-   * @param {[number, number, number]} opts.clear 0..1 rgb
    * @param {number} opts.widthPx CSS px line width
    * @param {number} opts.minLenPx CSS px minimum drawn segment length
    * @param {number} opts.alpha

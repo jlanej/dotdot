@@ -2281,7 +2281,6 @@ function draw(dpr) {
       vpW: pw,
       vpH: ph,
       dpr,
-      clear: hexToRgb(theme.surface),
       widthPx: d.widthPx,
       minLenPx: d.minLenPx,
       alpha: 0.85,
@@ -3225,6 +3224,7 @@ btnSvg.addEventListener('click', () => {
       annoX: annoLanes.x,
       annoY: annoLanes.y,
       profile: state.data.stats.kmer?.profile ?? null,
+      overlay: state.overlay && chkOverlay.checked ? state.overlay.segments : null,
       filename: 'dotdot.svg',
     });
   } catch (err) {

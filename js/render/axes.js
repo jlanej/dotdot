@@ -48,6 +48,19 @@ export function setAnnotationLanes(nx, ny) {
  */
 
 /**
+ * Readable ink for text painted ON a lane rect: itemRgb tracks carry
+ * arbitrary fills (RepeatMasker's are near-black), so pick by luminance
+ * instead of assuming light.
+ * @param {string} fill "rgb(r,g,b)" or any other CSS color
+ */
+export function laneInk(fill) {
+  const m = /^rgb\((\d+),\s*(\d+),\s*(\d+)\)/.exec(fill);
+  if (!m) return '#111';
+  const lum = 0.299 * Number(m[1]) + 0.587 * Number(m[2]) + 0.114 * Number(m[3]);
+  return lum > 140 ? '#111' : '#fff';
+}
+
+/**
  * Shared lane geometry for the canvas chrome and the SVG export: visible
  * items clipped to [w0,w1], mapped to px along the axis, sub-pixel items
  * dropped, adjacent same-fill slivers NOT merged (they are real records).
@@ -264,7 +277,7 @@ export function drawOverlay(p) {
       for (const r of rects) {
         const w = r.b - r.a;
         if (w < 44 || !r.name) continue;
-        ctx.fillStyle = p.annoX[li].colored ? '#111' : '#fff';
+        ctx.fillStyle = p.annoX[li].colored ? laneInk(r.fill) : '#fff';
         const label = r.strand === '-' ? `< ${r.name}` : r.strand === '+' ? `${r.name} >` : r.name;
         ctx.fillText(label.length > w / 5.4 ? label.slice(0, Math.floor(w / 5.4)) : label, LAYOUT.l + r.a + 3, yTop + 6);
       }
@@ -394,13 +407,16 @@ export function computeTicks(cat, w0, w1, px, targetSpacing, measure, gapPx = 6)
     const lo = Math.max(w0, b0);
     const hi = Math.min(w1, cat.starts[i + 1]);
     if ((hi - lo) * pxPerBp < 24) continue; // sliver bands keep names only
-    // The tick grid lives in display space so labels land on round values.
-    const d0 = lo - b0 + off;
-    const d1 = hi - b0 + off;
+    // The tick grid lives in 1-BASED display space — the same convention as
+    // the hover readout and genome browsers — so labels land on round values
+    // AND a tick reading 45 Mb sits on the exact base the readout calls
+    // 45,000,000 (0-based labeling put it one base off at deep zoom).
+    const d0 = lo - b0 + off + 1;
+    const d1 = hi - b0 + off + 1;
     const t = niceTicks(d0, d1, (hi - lo) * pxPerBp, targetSpacing);
     const step = Math.max(1, t.step);
     for (let dv = Math.ceil(d0 / step) * step; dv <= d1 + 1e-9; dv += step) {
-      const v = b0 + (dv - off);
+      const v = b0 + (dv - 1 - off);
       if (v < lo - 1e-9 || v > hi + 1e-9) continue;
       const label = formatTick(dv, step);
       const along = (v - w0) * pxPerBp;

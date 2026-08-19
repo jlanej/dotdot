@@ -185,9 +185,13 @@ export function segmentBuffers(s) {
  * @param {{showFwd:boolean, showRev:boolean, minIdentity:number, minLenBp:number}} opts
  */
 export function segmentVisible(s, i, opts) {
+  // The shader is epsilon-permissive at both thresholds (float32 identities
+  // land just under round slider values; length compares carry +0.5 bp) —
+  // mirror it exactly, or a segment can be drawn on screen yet excluded
+  // from hover picking and SVG export.
   return (
     (s.strand[i] === 0 ? opts.showFwd : opts.showRev) &&
-    s.identity[i] >= opts.minIdentity &&
-    s.dx[i] >= opts.minLenBp
+    s.identity[i] + 1e-6 >= opts.minIdentity &&
+    s.dx[i] + 0.5 >= opts.minLenBp
   );
 }

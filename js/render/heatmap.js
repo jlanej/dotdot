@@ -52,11 +52,43 @@ export function binIdentity(s, b, nx, ny, opts) {
     const cay = (ay - b.y0) * fy;
     const cbx = (bx - b.x0) * fx;
     const cby = (by - b.y0) * fy;
-    const steps = Math.min(4096, Math.max(Math.abs(cbx - cax), Math.abs(cby - cay), 1) | 0) + 1;
+    // Clip the diagonal to the grid (Liang–Barsky) BEFORE choosing the walk
+    // density: a 100 Mb alignment crossing a 10 kb window spans millions of
+    // cells, and sampling the unclipped span put at most one sample inside
+    // the window (and past 2^31 cells the |0 wrapped negative and skipped
+    // the segment outright). The visible crossing is ≤ nx + ny cells, so
+    // full coverage is always cheap.
+    const dxc = cbx - cax;
+    const dyc = cby - cay;
+    let t0 = 0;
+    let t1 = 1;
+    let live = true;
+    for (let edge = 0; edge < 4 && live; edge++) {
+      const p = edge === 0 ? -dxc : edge === 1 ? dxc : edge === 2 ? -dyc : dyc;
+      const q = edge === 0 ? cax : edge === 1 ? nx - cax : edge === 2 ? cay : ny - cay;
+      if (p === 0) {
+        if (q < 0) live = false;
+      } else {
+        const r = q / p;
+        if (p < 0) {
+          if (r > t1) live = false;
+          else if (r > t0) t0 = r;
+        } else {
+          if (r < t0) live = false;
+          else if (r < t1) t1 = r;
+        }
+      }
+    }
+    if (!live) continue;
+    const sx = cax + dxc * t0;
+    const sy = cay + dyc * t0;
+    const ex = cax + dxc * t1;
+    const ey = cay + dyc * t1;
+    const steps = Math.min(4096, Math.max(Math.abs(ex - sx), Math.abs(ey - sy), 1) | 0) + 1;
     for (let t = 0; t < steps; t++) {
       const f = t / (steps - 1 || 1);
-      const cx = Math.floor(cax + (cbx - cax) * f);
-      const cy = Math.floor(cay + (cby - cay) * f);
+      const cx = Math.floor(sx + (ex - sx) * f);
+      const cy = Math.floor(sy + (ey - sy) * f);
       if (cx < 0 || cx >= nx || cy < 0 || cy >= ny) continue;
       const at = cy * nx + cx;
       if (ident > grid[at]) grid[at] = ident;

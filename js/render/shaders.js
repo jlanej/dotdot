@@ -110,6 +110,11 @@ void main() {
 
   float edge = max(1.0 - 1.6 / max(uWidthPx, 1.6), 0.0);
   float aa = 1.0 - smoothstep(edge, 1.0, abs(vAcross));
-  outColor = vec4(rgb, uAlpha * aa);
+  // Premultiplied output (paired with ONE, ONE_MINUS_SRC_ALPHA blending and
+  // premultipliedAlpha:true): the compositor multiplies the framebuffer by
+  // alpha once — emitting straight color here squared it, rendering every
+  // isolated segment at alpha² and dimming AA fringes quadratically.
+  float a = uAlpha * aa;
+  outColor = vec4(rgb * a, a);
 }
 `;
