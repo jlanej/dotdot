@@ -296,8 +296,17 @@ export class GlRenderer {
   setOverlay(store) {
     this.overlayStore = store;
     this.overlayCount = store ? store.count : 0;
-    if (!store) return;
     const gl = this.gl;
+    if (!store) {
+      // Clearing the overlay releases its GPU buffers as well.
+      if (!this.lost) {
+        for (const buf of [this.overlayBuf, this.overlayEndBuf]) {
+          gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+          gl.bufferData(gl.ARRAY_BUFFER, 4, gl.STATIC_DRAW);
+        }
+      }
+      return;
+    }
     gl.bindBuffer(gl.ARRAY_BUFFER, this.overlayBuf);
     gl.bufferData(gl.ARRAY_BUFFER, buildInstanceData(store), gl.STATIC_DRAW);
 
@@ -317,6 +326,18 @@ export class GlRenderer {
     this.count = 0;
     this.overlayStore = null;
     this.overlayCount = 0;
+    this.chunkScratch = null;
+    // Release the GPU-side stores too: the last dataset's instance buffer
+    // (up to ~GB at a raised wall) otherwise stays resident until the next
+    // load, and Clear promised to clear.
+    if (!this.lost) {
+      const gl = this.gl;
+      for (const buf of [this.instanceBuf, this.overlayBuf, this.overlayEndBuf]) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+        gl.bufferData(gl.ARRAY_BUFFER, 4, gl.STATIC_DRAW);
+      }
+      this.setMultTex(null);
+    }
   }
 
   /**

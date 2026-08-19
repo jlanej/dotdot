@@ -90,24 +90,60 @@ const btnRefine = /** @type {HTMLButtonElement} */ ($('btn-refine'));
 const btnShare = /** @type {HTMLButtonElement} */ ($('btn-share'));
 const btnStatsMin = /** @type {HTMLButtonElement} */ ($('btn-stats-min'));
 
-/** Collapse/expand the on-plot scoreboard; the choice is remembered. */
-function setStatsMin(/** @type {boolean} */ min) {
+/** The remembered scoreboard preference (private mode → default expanded). */
+function readStatsPref() {
+  try {
+    return localStorage.getItem('dotdot.statsMin') === '1';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Collapse/expand the on-plot scoreboard. Explicit clicks persist; the
+ * small-viewport auto-collapse below applies without touching the stored
+ * preference.
+ * @param {boolean} min @param {boolean} [persist]
+ */
+function setStatsMin(min, persist = true) {
   plotStats.classList.toggle('min', min);
   btnStatsMin.textContent = min ? '▤ stats' : '−';
   btnStatsMin.title = min ? 'Expand stats' : 'Collapse stats';
   btnStatsMin.setAttribute('aria-label', btnStatsMin.title);
   btnStatsMin.setAttribute('aria-expanded', String(!min));
+  if (!persist) return;
   try {
     localStorage.setItem('dotdot.statsMin', min ? '1' : '');
   } catch {
     // Private mode etc. — the toggle still works for the session.
   }
 }
-btnStatsMin.addEventListener('click', () => setStatsMin(!plotStats.classList.contains('min')));
-try {
-  if (localStorage.getItem('dotdot.statsMin') === '1') setStatsMin(true);
-} catch {
-  // ignore
+btnStatsMin.addEventListener('click', () => {
+  statsAutoCollapsed = false; // an explicit click takes over from auto
+  setStatsMin(!plotStats.classList.contains('min'));
+});
+if (readStatsPref()) setStatsMin(true, false);
+
+// Small plot areas (split screens, projected demos): the expanded scoreboard
+// can cover most of the data, so entering a tight viewport auto-collapses it
+// — edge-triggered, preference untouched, restored when space returns.
+let statsAutoCollapsed = false;
+let statsWasTight = false;
+
+/** @param {number} pw @param {number} ph plot area CSS px */
+function autoCollapseStats(pw, ph) {
+  const tight = pw < 480 || ph < 340;
+  if (tight === statsWasTight) return;
+  statsWasTight = tight;
+  if (tight) {
+    if (!plotStats.classList.contains('min')) {
+      statsAutoCollapsed = true;
+      setStatsMin(true, false);
+    }
+  } else if (statsAutoCollapsed) {
+    statsAutoCollapsed = false;
+    setStatsMin(readStatsPref(), false);
+  }
 }
 const btnZoomRefine = /** @type {HTMLButtonElement} */ ($('btn-zoom-refine'));
 const btnStatsDetail = /** @type {HTMLButtonElement} */ ($('btn-stats-detail'));
@@ -377,9 +413,11 @@ function setProgressPct(pct) {
 function cancelCompute() {
   supersede();
   activeReq = -1;
-  // Also invalidates any in-flight reference stream: its generation checks
-  // stop it applying (remaining chunk downloads wind down harmlessly).
+  // Also kills any in-flight reference stream: the generation bump stops
+  // stale results applying, and the abort stops the download itself.
   refLoadGen++;
+  refAborter?.abort();
+  refAborter = null;
   progressEl.hidden = true;
   toast('Canceled.');
 }
@@ -928,6 +966,20 @@ let boundActions = null;
 
 /** Reference/demo fetch generation: bumping it invalidates pending installs. */
 let refLoadGen = 0;
+/** @type {AbortController | null} the in-flight reference stream's plug */
+let refAborter = null;
+
+/**
+ * Abort any in-flight reference stream and hand out a fresh signal for the
+ * next one. Generation checks already stop stale results from APPLYING;
+ * this stops the multi-minute download itself — Cancel means cancel, not
+ * "keep spending bandwidth on a result nothing will use".
+ */
+function newRefStreamSignal() {
+  refAborter?.abort();
+  refAborter = new AbortController();
+  return refAborter.signal;
+}
 
 /**
  * Provenance for shareable links: the query string that reproduces the
@@ -954,6 +1006,8 @@ let pendingView = parseViewHash(location.hash);
 /** The user pivoted to new data — stale intents must not fire. */
 function newLoadIntent() {
   refLoadGen++;
+  refAborter?.abort();
+  refAborter = null;
   queuedActions = null;
   shareBase = null;
 }
@@ -1123,6 +1177,7 @@ async function loadRefRegion(text) {
   // bumps the generation; a slow fetch must then discard itself instead of
   // clobbering the newer data.
   const gen = ++refLoadGen;
+  const signal = newRefStreamSignal();
   try {
     const tRegions = await resolveRegions(ref, cross.target, gen);
     if (!tRegions || gen !== refLoadGen) return;
@@ -1161,12 +1216,13 @@ async function loadRefRegion(text) {
       streamTick(0);
     }
     try {
-      const tBuf = await streamRefRegions(ref, tRegions, showProgress ? streamTick : undefined);
+      const tBuf = await streamRefRegions(ref, tRegions, showProgress ? streamTick : undefined, signal);
       if (gen !== refLoadGen) return;
       if (qRegions) {
         const qBuf = await streamRefRegions(
           ref, qRegions,
           showProgress ? (d) => streamTick(tBytes + d) : undefined,
+          signal,
         );
         if (gen !== refLoadGen) return;
         // Query first, target second, same tick: the debounced autocompute
@@ -1187,6 +1243,9 @@ async function loadRefRegion(text) {
     if (!cross.query && state.fileQuery && queryShareUrl) sp.set('query', queryShareUrl);
     shareBase = sp.toString();
   } catch (err) {
+    // A cancelled/superseded load bumped the generation — its abort error
+    // is the intended outcome, not news for a toast.
+    if (gen !== refLoadGen) return;
     toast(err instanceof Error ? err.message : String(err), true);
   }
 }
@@ -1261,8 +1320,9 @@ async function armRange(ref, chrom, arm, dnaSize) {
  * @param {import('./refs.js').ReferenceGenome} ref
  * @param {{chrom: string, start0: number, end0: number, name?: string}[]} regions
  * @param {(doneBytes: number, totalBytes: number) => void} [onProgress]
+ * @param {AbortSignal} [signal] cancels the packed-DNA downloads mid-flight
  */
-async function streamRefRegions(ref, regions, onProgress) {
+async function streamRefRegions(ref, regions, onProgress, signal) {
   const tb = getTwoBit(ref);
   // 2bit is 2 bits/base: transfer ≈ span/4 per region; aggregate progress
   // across the parallel fetches so whole-chromosome streams stay visibly
@@ -1271,10 +1331,16 @@ async function streamRefRegions(ref, regions, onProgress) {
   const totalEst = regions.reduce((a, r) => a + Math.ceil((r.end0 - r.start0) / 4), 0);
   const parts = await Promise.all(
     regions.map((r, i) =>
-      tb.fetchRegion(r.chrom, r.start0, r.end0, (d) => {
-        doneBy[i] = d;
-        if (onProgress) onProgress(doneBy.reduce((a, b) => a + b, 0), totalEst);
-      }),
+      tb.fetchRegion(
+        r.chrom,
+        r.start0,
+        r.end0,
+        (d) => {
+          doneBy[i] = d;
+          if (onProgress) onProgress(doneBy.reduce((a, b) => a + b, 0), totalEst);
+        },
+        signal,
+      ),
     ),
   );
   const fastas = regions.map((r, i) => {
@@ -1703,10 +1769,15 @@ async function loadDemo() {
       // Must match scripts/make_demo.sh LOCI so the streamed target stays
       // interchangeable with the committed fallback (same records, names,
       // and @offset coordinates; only line wrapping differs).
-      const buf = await streamRefRegions(REFERENCES[0], [
-        { chrom: 'chr17', start0: 18_000_000, end0: 19_600_000, name: 'chr17_17p11.2' },
-        { chrom: 'chr17', start0: 10_600_000, end0: 11_200_000, name: 'chr17_ROI10.9' },
-      ]);
+      const buf = await streamRefRegions(
+        REFERENCES[0],
+        [
+          { chrom: 'chr17', start0: 18_000_000, end0: 19_600_000, name: 'chr17_17p11.2' },
+          { chrom: 'chr17', start0: 10_600_000, end0: 11_200_000, name: 'chr17_ROI10.9' },
+        ],
+        undefined,
+        newRefStreamSignal(),
+      );
       t = { name: 'chr17 slices · T2T (streamed)', buf: buf.buffer };
       source = 'streamed live from the T2T reference';
     } catch {
@@ -2105,6 +2176,7 @@ function resize() {
   underlay.style.width = overlay.style.width = `${cssW}px`;
   underlay.style.height = overlay.style.height = `${cssH}px`;
   plotStats.style.left = `${LAYOUT.l + 10}px`;
+  autoCollapseStats(pw, ph);
   glcanvas.style.left = `${LAYOUT.l}px`;
   glcanvas.style.top = `${LAYOUT.t}px`;
   glcanvas.style.width = `${pw}px`;

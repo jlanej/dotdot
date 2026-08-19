@@ -14,6 +14,7 @@ import './catalog.test.js';
 import './charts.test.js';
 import './colormap.test.js';
 import './compress.test.js';
+import './compute.test.js';
 import './format.test.js';
 import './refs.test.js';
 import './region.test.js';

@@ -42,7 +42,7 @@ const BYTE_BASES = (() => {
 export class RemoteTwoBit {
   /**
    * @param {string} url
-   * @param {{fetchRange?: (start: number, endEx: number, onProgress?: (done: number, total: number) => void) => Promise<Uint8Array>}} [io]
+   * @param {{fetchRange?: (start: number, endEx: number, onProgress?: (done: number, total: number) => void, signal?: AbortSignal) => Promise<Uint8Array>}} [io]
    *   injectable transport (tests provide an in-memory fixture)
    */
   constructor(url, io = {}) {
@@ -167,9 +167,10 @@ export class RemoteTwoBit {
    * @param {string} name @param {number} start @param {number} end 0-based half-open
    * @param {(doneBytes: number, totalBytes: number) => void} [onProgress]
    *   chunk progress for whole-chromosome streams (tens of MB)
+   * @param {AbortSignal} [signal] cancels the packed-DNA stream mid-flight
    * @returns {Promise<Uint8Array>}
    */
-  async fetchRegion(name, start, end, onProgress) {
+  async fetchRegion(name, start, end, onProgress, signal) {
     if (!Number.isFinite(start) || !Number.isFinite(end)) {
       throw new Error(`Non-numeric region bounds for ${name}: ${start}-${end}.`);
     }
@@ -184,7 +185,7 @@ export class RemoteTwoBit {
     const b0 = Math.floor(s / 4);
     const byteA = meta.dnaOffset + b0;
     const byteB = meta.dnaOffset + Math.floor((e - 1) / 4) + 1;
-    const packed = await this.fetchRange(byteA, byteB, onProgress);
+    const packed = await this.fetchRange(byteA, byteB, onProgress, signal);
 
     const out = new Uint8Array(e - s);
     let i = s;

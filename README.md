@@ -436,14 +436,16 @@ open http://127.0.0.1:8420/tests/typecheck.html   # strict typecheck in the brow
 ```
 
 - Tests are dependency-free dual-runtime suites: the same files run in the
-  browser page and under `deno test tests/` in CI (169 tests: engine
+  browser page and under `deno test tests/` in CI (177 tests: engine
   coordinates on both strands and all k, reverse-complement mapping, gap
   bridging, boundary discipline, range-restricted indexing/matching,
   multicore chunk-stitch parity against single-core, sampling/density
   resolution and the exact-mode guards, occurrence-cap semantics including
   true off, saturation intervals and hatch painting, the multiplicity
   profile and its ramps, multiset-containment ANI grids, share-hash and
-  matching-params round-trips, the settle bus's gate semantics, annotation
+  matching-params round-trips, the settle bus's gate semantics, the worker's
+  consent gates (exact-mode ask, anchor-volume pre-flight, needData cache
+  protocol) driven directly in Deno, stream cancellation, annotation
   lane building against a fake track source (@offset mapping, band
   clipping, tile caching), parsers, BGZF/gzip fixtures, 2bit and bigBed decoding against
   in-memory fixtures, camera math, picking, region expressions with

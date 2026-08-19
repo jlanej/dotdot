@@ -32,19 +32,23 @@ function isPermanent(err) {
 /**
  * @param {string} url
  * @param {number} [chunkBytes] range-request size for large spans
- * @returns {(start: number, endEx: number, onProgress?: (doneBytes: number, totalBytes: number) => void) => Promise<Uint8Array>}
+ * @returns {(start: number, endEx: number, onProgress?: (doneBytes: number, totalBytes: number) => void, signal?: AbortSignal) => Promise<Uint8Array>}
+ *   the optional signal makes Cancel REAL: aborting stops the chunk stream
+ *   (no retry, no further requests) instead of letting a multi-minute
+ *   download run to completion for a result nothing will apply
  */
 export function makeRangeFetcher(url, chunkBytes = 8 * 1024 * 1024) {
   /**
    * One bounded range request.
-   * @param {number} start @param {number} endEx
+   * @param {number} start @param {number} endEx @param {AbortSignal} [signal]
    * @returns {Promise<Uint8Array>}
    */
-  const one = async (start, endEx) => {
+  const one = async (start, endEx, signal) => {
+    const timeout = AbortSignal.timeout(25_000);
     const res = await fetch(url, {
       headers: { Range: `bytes=${start}-${endEx - 1}` },
       mode: 'cors',
-      signal: AbortSignal.timeout(25_000),
+      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
     });
     if (res.status === 200) {
       // The server ignored Range and is sending the WHOLE file. Refuse
@@ -76,27 +80,30 @@ export function makeRangeFetcher(url, chunkBytes = 8 * 1024 * 1024) {
 
   /**
    * One retry across transient hiccups (network, timeout, 5xx, truncation);
-   * permanent failures (4xx, no Range support) surface immediately.
-   * @param {() => Promise<Uint8Array>} fn
+   * permanent failures (4xx, no Range support) and caller aborts surface
+   * immediately — retrying a cancelled request would be theft of bandwidth
+   * the user just declined to spend.
+   * @param {() => Promise<Uint8Array>} fn @param {AbortSignal} [signal]
    */
-  const withRetry = async (fn) => {
+  const withRetry = async (fn, signal) => {
     try {
       return await fn();
     } catch (err) {
-      if (isPermanent(err)) throw err;
+      if (isPermanent(err) || signal?.aborted) throw err;
       await new Promise((r) => setTimeout(r, 1000));
       return fn();
     }
   };
 
-  return async (start, endEx, onProgress) => {
+  return async (start, endEx, onProgress, signal) => {
     const total = endEx - start;
     // Small spans go out as one request. A short 206 body is legitimate
     // here: header probes deliberately over-read past EOF and clamp.
-    if (total <= chunkBytes) return withRetry(() => one(start, endEx));
+    if (total <= chunkBytes) return withRetry(() => one(start, endEx, signal), signal);
     const out = new Uint8Array(total);
     let w = 0;
     for (let s = start; s < endEx; s += chunkBytes) {
+      if (signal?.aborted) throw permanentError('Stream cancelled.');
       const e = Math.min(endEx, s + chunkBytes);
       // Chunk spans are always fully inside the caller's request, so a short
       // body is never a legitimate EOF clamp — it is a truncated transfer.
@@ -104,14 +111,14 @@ export function makeRangeFetcher(url, chunkBytes = 8 * 1024 * 1024) {
       // (0x00 = poly-T in 2bit); fail the chunk instead so the retry (and
       // then the caller) sees a loud, actionable error.
       const part = await withRetry(async () => {
-        const p = await one(s, e);
+        const p = await one(s, e, signal);
         if (p.length !== e - s) {
           throw new Error(
             `Range request returned ${p.length} of ${e - s} bytes — truncated response from the server`,
           );
         }
         return p;
-      });
+      }, signal);
       out.set(part, w);
       w += part.length;
       if (onProgress) onProgress(w, total);

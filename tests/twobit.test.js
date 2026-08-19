@@ -280,3 +280,62 @@ test('ranged: a Range-ignoring server on a big file is refused up front', async 
     globalThis.fetch = origFetch;
   }
 });
+
+test('ranged: an abort stops the chunk stream — no retry, no further requests', async () => {
+  const FILE = new Uint8Array(3000);
+  const origFetch = globalThis.fetch;
+  let calls = 0;
+  const ctl = new AbortController();
+  globalThis.fetch = /** @type {any} */ (
+    async (/** @type {any} */ _url, /** @type {any} */ init) => {
+      const m = /bytes=(\d+)-(\d+)/.exec(init.headers.Range);
+      if (!m) throw new Error('no Range header');
+      const sNum = Number(m[1]);
+      const e = Number(m[2]) + 1;
+      calls++;
+      if (calls === 1) return new Response(FILE.slice(sNum, e), { status: 206 });
+      // The user cancels while chunk 2 is in flight — fetch rejects the way
+      // an aborted request does. A retry here would be theft of bandwidth
+      // the user just declined to spend.
+      ctl.abort();
+      throw new DOMException('The user aborted a request.', 'AbortError');
+    }
+  );
+  try {
+    const fetchRange = makeRangeFetcher('http://example.test/x.2bit', 1000);
+    let msg = '';
+    try {
+      await fetchRange(0, 3000, undefined, ctl.signal);
+    } catch (err) {
+      msg = String(err);
+    }
+    assert(msg.length > 0, 'the aborted stream must reject');
+    assertEq(calls, 2); // chunk 1 ok; chunk 2 aborted; NO retry, NO chunk 3
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test('ranged: an already-aborted signal never fetches at all', async () => {
+  const origFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = /** @type {any} */ (async () => {
+    calls++;
+    return new Response(new Uint8Array(1000), { status: 206 });
+  });
+  try {
+    const ctl = new AbortController();
+    ctl.abort();
+    const fetchRange = makeRangeFetcher('http://example.test/x.2bit', 1000);
+    let threw = false;
+    try {
+      await fetchRange(0, 3000, undefined, ctl.signal);
+    } catch {
+      threw = true;
+    }
+    assert(threw, 'cancelled before the first chunk');
+    assertEq(calls, 0);
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});

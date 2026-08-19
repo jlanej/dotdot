@@ -15,9 +15,31 @@ import { newSegmentVecs, vecsToSegments, segmentBuffers } from '../core/types.js
 
 /** @typedef {import('../core/types.js').PlotData} PlotData */
 
-const post = /** @type {(msg: unknown, transfer?: Transferable[]) => void} */ (
-  /** @type {any} */ (self).postMessage.bind(self)
-);
+/**
+ * Message sink: the worker's postMessage, bound LAZILY so this module can
+ * be imported outside a worker — the consent gates and cache protocol are
+ * unit-tested in Deno, where self.postMessage does not exist. Tests swap
+ * it with setPostForTesting().
+ * @type {(msg: unknown, transfer?: Transferable[]) => void}
+ */
+let post = (msg, transfer) => {
+  const pm = /** @type {any} */ (self).postMessage;
+  if (typeof pm !== 'function') {
+    throw new Error('No postMessage in this context — tests must call setPostForTesting().');
+  }
+  post = pm.bind(self);
+  post(msg, transfer);
+};
+
+/** Test hook: capture outbound messages instead of posting to a port. */
+export function setPostForTesting(/** @type {(msg: unknown, transfer?: Transferable[]) => void} */ fn) {
+  post = fn;
+}
+
+/** Test hook: drop the parse cache so each test case starts cold. */
+export function resetParsedCacheForTesting() {
+  parsedCache = null;
+}
 
 let lastProgressAt = 0;
 
@@ -31,8 +53,13 @@ function progress(id, phase, frac) {
   post({ id, type: 'progress', phase, frac });
 }
 
-self.onmessage = async (ev) => {
-  const req = /** @type {any} */ (ev).data;
+/**
+ * Handle one request message. Exported so tests can drive the worker's
+ * gates (consent thresholds, needData protocol, parse-warning notes)
+ * directly, without a Worker.
+ * @param {any} req
+ */
+export async function handleRequest(req) {
   try {
     if (req.type === 'kmer') await handleKmer(req);
     else if (req.type === 'containment') await handleContainment(req);
@@ -46,7 +73,8 @@ self.onmessage = async (ev) => {
       message: err instanceof Error ? err.message : String(err),
     });
   }
-};
+}
+self.onmessage = (ev) => void handleRequest(/** @type {any} */ (ev).data);
 
 /**
  * @typedef {{tx0:number, tx1:number, qy0:number, qy1:number}} RefineWindow
