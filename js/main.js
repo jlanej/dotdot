@@ -26,6 +26,7 @@ import { exportPng, compositeCanvases } from './export/png.js';
 import { exportSvg } from './export/svg.js';
 import { initHelp, closeHelp } from './app/help.js';
 import { statsPop, confirmPop, enterModal, closeConfirm, closeStatsPop, setConfirmDismiss, confirmCard } from './app/dialogs.js';
+import { ViewSettle } from './app/settle.js';
 
 /** @typedef {import('./core/types.js').PlotData} PlotData */
 
@@ -181,6 +182,17 @@ const state = {
 // Debug/automation handle (read-only usage; also used by the smoke drive).
 Object.defineProperty(globalThis, '__dotdot', { value: state });
 
+// ---- the settle bus ---------------------------------------------------------
+// One view signature, four consumers. autoRefineTick feeds it each frame;
+// annotations/heatmap/containment/auto-refine each hold a gate and ask
+// "settled on something I haven't handled?" (js/app/settle.js — the reset
+// sites are named invalidate() calls instead of scattered sig strings).
+const settle = new ViewSettle();
+const annoGate = settle.gate();
+const heatGate = settle.gate();
+const containGate = settle.gate();
+const refineGate = settle.gate();
+
 // --------------------------------------------------------------------------
 // Theme
 
@@ -228,7 +240,7 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
   renderer.setTheme(mode);
   updateLegend();
   if (state.data) updateStats(); // scoreboard swatches are theme-derived
-  lastAnnoSig = ''; // multiplicity-lane ink is theme-mixed; rebuild
+  annoGate.invalidate(); // multiplicity-lane ink is theme-mixed; rebuild
   repaintHeatCanvas(); // heat/ANI pixels were painted in the old palette
   markDirty();
 });
@@ -328,7 +340,7 @@ function supersede() {
   // A superseded containment request never delivers its grid — un-stamp the
   // view signature so the settle watcher asks again instead of leaving ANI
   // mode drawing segments.
-  if (lastSubmitKind === 'contain') lastContainSig = '';
+  if (lastSubmitKind === 'contain') containGate.invalidate();
   worker.terminate();
   spawnWorker();
   stopPool();
@@ -755,17 +767,17 @@ function onData(data, reqId = -1) {
   setRefineEnabled(data.source === 'kmer' && !!state.fileTarget);
   panelDetail.hidden = false;
   setMinLen(parseLenOff(inMinLen.value, 0), { skipText: true });
-  autoRefinedSig = '';
+  refineGate.invalidate();
   annoLanes = { x: [], y: [] };
   syncAnnoLayout();
-  lastAnnoSig = '';
+  annoGate.invalidate();
   heatBin = null;
   heatSat = null;
-  lastHeatSig = '';
+  heatGate.invalidate();
   // Recompute on same-sized data refits to identical bounds — the same view
   // signature. Without this reset the ANI settle watcher would consider the
   // stale grid current and never rebuild (mode says ANI, segments draw).
-  lastContainSig = '';
+  containGate.invalidate();
   btnCompute.textContent = data.source === 'kmer' ? 'Recompute' : 'Compute dot plot';
 
   // Build the picking grid after the first frame so the plot appears
@@ -829,7 +841,7 @@ function onData(data, reqId = -1) {
     const { pw, ph } = state.sizes;
     state.view.fitRect(v.x0, v.y0, v.x1, v.y1, pw, ph);
     if (v.draw === 'heat') rebuildHeatmap();
-    if (v.draw === 'ani') lastContainSig = ''; // containTick requests on settle
+    if (v.draw === 'ani') containGate.invalidate(); // containTick requests on settle
     updateLegend();
   }
   markDirty();
@@ -968,7 +980,7 @@ function onOverlay(msg) {
   markDirty();
   // An ANI grid may have been superseded by this overlay parse — let the
   // settle watcher re-request it.
-  if (aniMode()) lastContainSig = '';
+  if (aniMode()) containGate.invalidate();
 }
 
 function clearOverlay() {
@@ -1014,7 +1026,7 @@ function applyRefSelection(autoload) {
   const ref = currentRef();
   refBox.hidden = !ref;
   renderAnnoTracks();
-  lastAnnoSig = '';
+  annoGate.invalidate();
   if (!ref) return;
   inRefRegion.value = ref.defaultRegion;
   selRefPreset.innerHTML = '';
@@ -1335,7 +1347,6 @@ const annoTiles = new Map();
 const ANNO_TILE = 1_000_000;
 /** @type {{x: import('./render/axes.js').AnnoLane[], y: import('./render/axes.js').AnnoLane[]}} */
 let annoLanes = { x: [], y: [] };
-let lastAnnoSig = '';
 let annoBusy = false;
 let annoLaneCounts = { x: 0, y: 0 };
 
@@ -1551,7 +1562,6 @@ async function refreshAnnotations() {
 let heatBin = null;
 /** @type {HTMLCanvasElement | null} */
 let heatCanvas = null;
-let lastHeatSig = '';
 /** @type {{lo: number, hi: number}} the ramp's stretched identity range */
 let heatRange = { lo: 0, hi: 1 };
 let heatKickPending = false;
@@ -1623,7 +1633,7 @@ function rebuildHeatmap() {
   // Direct calls (mode change, strand toggle, pending view) count as the
   // settle rebin for the current view — without the stamp the next tick
   // would rebin the same millions of segments a second time.
-  lastHeatSig = lastViewSig;
+  heatGate.stamp();
   updateLegend();
   markDirty();
 }
@@ -1652,8 +1662,8 @@ function heatmapTick(now) {
   if (!heatMode() || !state.data) return;
   // Small plots rebin almost immediately; big ones wait for a firmer rest.
   const settleMs = state.data.segments.count < 1_500_000 ? 120 : 250;
-  if (now - viewSettledAt < settleMs || lastViewSig === lastHeatSig || lastViewSig === '') return;
-  lastHeatSig = lastViewSig;
+  if (!heatGate.due(now, settleMs)) return;
+  heatGate.stamp();
   rebuildHeatmap();
 }
 
@@ -1673,7 +1683,7 @@ selDrawMode.addEventListener('change', () => {
     } else {
       heatBin = null;
       heatSat = null;
-      lastContainSig = ''; // request on next settle tick
+      containGate.invalidate(); // request on next settle tick
     }
   } else {
     heatBin = null;
@@ -1685,14 +1695,13 @@ selDrawMode.addEventListener('change', () => {
 });
 
 // ---- ANI (containment) heatmap: settle watcher + request lifecycle --------
-let lastContainSig = '';
 
 /** @param {number} now */
 function containTick(now) {
   if (!aniMode() || !state.data || !state.view || state.computing) return;
   if (state.data.source !== 'kmer' || !state.fileTarget) return;
-  if (now - viewSettledAt < 500 || lastViewSig === lastContainSig || lastViewSig === '') return;
-  lastContainSig = lastViewSig;
+  if (!containGate.due(now, 500)) return;
+  containGate.stamp();
   const { pw, ph } = state.sizes;
   const b = state.view.bounds(pw, ph);
   const w = {
@@ -1769,16 +1778,16 @@ function annotationTick(now) {
     }
     return;
   }
-  if (now - viewSettledAt < 400 || lastViewSig === lastAnnoSig || lastViewSig === '') return;
-  lastAnnoSig = lastViewSig;
+  if (!annoGate.due(now, 400)) return;
+  annoGate.stamp();
   void refreshAnnotations();
 }
 
 chkMult.addEventListener('change', () => {
-  lastAnnoSig = '';
+  annoGate.invalidate();
 });
 inAniTiles.addEventListener('change', () => {
-  lastContainSig = ''; // recompute on next settle when in ANI mode
+  containGate.invalidate(); // recompute on next settle when in ANI mode
 });
 
 /** Populate the sidebar track checkboxes for the current annotation genome. */
@@ -1797,7 +1806,7 @@ function renderAnnoTracks() {
     cb.checked = annoEnabled.get(t.id) ?? t.on;
     cb.addEventListener('change', () => {
       annoEnabled.set(t.id, cb.checked);
-      lastAnnoSig = '';
+      annoGate.invalidate();
     });
     label.append(cb, document.createTextNode(t.label));
     box.append(label);
@@ -2281,7 +2290,7 @@ function draw(dpr) {
       heatKickPending = true;
       setTimeout(() => {
         heatKickPending = false;
-        if (aniMode()) lastContainSig = ''; // fresh containment on next settle
+        if (aniMode()) containGate.invalidate(); // fresh containment on next settle
         else rebuildHeatmap();
       }, 0);
     }
@@ -2931,7 +2940,7 @@ function refineView(auto = false) {
     return;
   }
   refineQuiet = auto;
-  autoRefinedSig = lastViewSig; // a window refined by hand needn't auto-refine again
+  refineGate.stamp(); // a window refined by hand needn't auto-refine again
   // Debug/automation stamp (globalThis.__dotdot.lastRefine).
   /** @type {any} */ (state).lastRefine = { auto, window: { tx0, tx1, qy0, qy1 } };
   // Full density plus a raised repeat budget: an explicit refine means
@@ -2948,9 +2957,6 @@ function refineView(auto = false) {
 // window by itself — the zoom → refine loop with the second step removed.
 // supersede() keeps rapid navigation cheap; the signature guard keeps any
 // window from refining twice.
-let lastViewSig = '';
-let viewSettledAt = 0;
-let autoRefinedSig = '';
 let refineQuiet = false;
 
 /** @param {number} now */
@@ -2959,16 +2965,12 @@ function autoRefineTick(now) {
   const { pw, ph } = state.sizes;
   const b = state.view.bounds(pw, ph);
   const sig = `${Math.round(b.x0)},${Math.round(b.x1)},${Math.round(b.y0)},${Math.round(b.y1)}`;
-  if (sig !== lastViewSig) {
-    lastViewSig = sig;
-    viewSettledAt = now;
-    return;
-  }
+  if (settle.update(sig, now)) return;
   if (!chkAutoRefine.checked || state.computing) return;
   // Never kick off a compute under an open consent card — the user is being
   // asked a question about the job that is already pending.
   if (!confirmPop.hidden) return;
-  if (now - viewSettledAt < 900 || sig === autoRefinedSig) return;
+  if (!refineGate.due(now, 900)) return;
   if (state.data.source !== 'kmer' || !state.fileTarget) return;
   const txSpan = Math.min(state.data.target.total, b.x1) - Math.max(0, b.x0);
   const qySpan = Math.min(state.data.query.total, b.y1) - Math.max(0, b.y0);
@@ -3013,7 +3015,7 @@ function onRegionRefined(msg) {
   }
   state.grid = null;
   state.hoverIndex = null;
-  lastHeatSig = ''; // refined data: rebin on next settle
+  heatGate.invalidate(); // refined data: rebin on next settle
   // The refine's looser repeat cutoff may have de-saturated (or re-drawn)
   // parts of the window — splice its saturation picture into the whole-plot
   // one so the hatch stays truthful.
@@ -3078,10 +3080,8 @@ function doClearAll() {
   stopPool();
   heatBin = null;
   heatSat = null;
-  lastHeatSig = '';
-  lastContainSig = '';
-  lastViewSig = ''; // restart the settle bus — the next data must not
-  lastJump = { expr: '', idx: -1 }; // inherit this session's signatures
+  settle.reset(); // restarts the settle bus AND invalidates every gate —
+  lastJump = { expr: '', idx: -1 }; // the next data inherits no signatures
   clearTimeout(autoTimer);
   closeConfirm();
   activeReq = -1;
@@ -3115,7 +3115,6 @@ function doClearAll() {
   closeStatsPop();
   annoLanes = { x: [], y: [] };
   syncAnnoLayout();
-  lastAnnoSig = '';
   segScan = { ref: null, fwd: 0, rev: 0, bpFwd: 0, bpRev: 0 };
   statsPopCache = { ref: null, mode: '', html: '' };
   btnCompute.disabled = true;
