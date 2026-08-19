@@ -24,6 +24,8 @@ import { RemoteBigBed } from './io/bigbed.js';
 import { REFERENCES, parseBrowserRegion, splitRegionList, splitCrossSpec } from './refs.js';
 import { exportPng, compositeCanvases } from './export/png.js';
 import { exportSvg } from './export/svg.js';
+import { initHelp, closeHelp } from './app/help.js';
+import { statsPop, confirmPop, enterModal, closeConfirm, closeStatsPop, setConfirmDismiss, confirmCard } from './app/dialogs.js';
 
 /** @typedef {import('./core/types.js').PlotData} PlotData */
 
@@ -1185,34 +1187,26 @@ async function loadRefRegion(text) {
  */
 function askStreamConfirm(totalBp) {
   return new Promise((resolve) => {
-    closeConfirm(); // settle any dialog this card replaces
     const mb = Math.round(totalBp / 4 / 1e6);
     const gb = ((totalBp * 3) / 1e9).toFixed(1);
-    confirmPop.innerHTML =
-      `<div class="stats-card">` +
-      `<div class="stats-head"><h3>Large reference stream</h3>` +
-      `<button class="stats-close" aria-label="close">×</button></div>` +
-      `<p class="stats-sum">${formatBp(totalBp)} of sequence ≈ a <b>${mb} MB</b> download from ` +
-      `UCSC and roughly <b>${gb} GB</b> of RAM once parsed and matched (the compute itself ` +
-      `auto-samples at this scale). Chromosome-vs-chromosome comparisons are minutes, not ` +
-      `seconds.</p>` +
-      `<div class="confirm-row">` +
-      `<button id="cs-go" class="btn primary">Stream it</button>` +
-      `<button id="cs-no" class="btn">Cancel</button>` +
-      `</div></div>`;
-    confirmPop.hidden = false;
-  enterModal(confirmPop);
     /** @param {boolean} ok */
     const done = (ok) => {
-      confirmDismiss = null; // settled by a button, not a dismissal
-      confirmPop.hidden = true;
+      setConfirmDismiss(null); // settled by a button, not a dismissal
+      closeConfirm();
       resolve(ok);
     };
+    confirmCard(
+      'Large reference stream',
+      `${formatBp(totalBp)} of sequence ≈ a <b>${mb} MB</b> download from UCSC and roughly ` +
+        `<b>${gb} GB</b> of RAM once parsed and matched (the compute itself auto-samples at ` +
+        `this scale). Chromosome-vs-chromosome comparisons are minutes, not seconds.`,
+      [
+        { id: 'cs-go', label: 'Stream it', primary: true, onClick: () => done(true) },
+        { id: 'cs-no', label: 'Cancel', onClick: () => done(false) },
+      ],
+    );
     // Escape, backdrop click, or a replacing dialog all read as "cancel".
-    confirmDismiss = () => resolve(false);
-    confirmPop.querySelector('.stats-close')?.addEventListener('click', () => done(false));
-    confirmPop.querySelector('#cs-no')?.addEventListener('click', () => done(false));
-    confirmPop.querySelector('#cs-go')?.addEventListener('click', () => done(true));
+    setConfirmDismiss(() => resolve(false));
   });
 }
 
@@ -3140,25 +3134,23 @@ $('btn-clear').addEventListener('click', () => {
     doClearAll();
     return;
   }
-  closeConfirm();
-  confirmPop.innerHTML =
-    `<div class="stats-card">` +
-    `<div class="stats-head"><h3>Clear everything?</h3>` +
-    `<button class="stats-close" aria-label="close">×</button></div>` +
-    `<p class="stats-sum">Unloads the plot, both FASTA slots, and any aligner overlay. ` +
-    `Locally picked files must be picked again; computes re-run from scratch.</p>` +
-    `<div class="confirm-row">` +
-    `<button id="cc-go" class="btn primary">Clear the plot and unload files</button>` +
-    `<button id="cc-no" class="btn">Keep everything</button>` +
-    `</div></div>`;
-  confirmPop.hidden = false;
-  enterModal(confirmPop);
-  confirmPop.querySelector('.stats-close')?.addEventListener('click', closeConfirm);
-  confirmPop.querySelector('#cc-no')?.addEventListener('click', closeConfirm);
-  confirmPop.querySelector('#cc-go')?.addEventListener('click', () => {
-    closeConfirm();
-    doClearAll();
-  });
+  confirmCard(
+    'Clear everything?',
+    `Unloads the plot, both FASTA slots, and any aligner overlay. Locally picked files must ` +
+      `be picked again; computes re-run from scratch.`,
+    [
+      {
+        id: 'cc-go',
+        label: 'Clear the plot and unload files',
+        primary: true,
+        onClick: () => {
+          closeConfirm();
+          doClearAll();
+        },
+      },
+      { id: 'cc-no', label: 'Keep everything', onClick: closeConfirm },
+    ],
+  );
 });
 
 btnPng.addEventListener('click', () => {
@@ -3370,105 +3362,11 @@ function updateStats() {
   plotStats.hidden = false;
 }
 
-// ---- distributions popup ---------------------------------------------------
-// The compute-priced tier: whole-store histograms + the index's occurrence
-// spectrum, built on demand and cached per segments object and theme.
+// ---- distributions popup + consent cards -----------------------------------
+// The modal shell (elements, focus management, the shared card builder)
+// lives in app/dialogs.js; the card CONTENTS below stay here with the
+// compute state their buttons act on.
 
-const statsPop = document.createElement('div');
-statsPop.id = 'stats-pop';
-statsPop.hidden = true;
-statsPop.setAttribute('role', 'dialog');
-statsPop.setAttribute('aria-modal', 'true');
-statsPop.tabIndex = -1;
-document.body.append(statsPop);
-statsPop.addEventListener('click', (e) => {
-  if (e.target === statsPop) closeStatsPop();
-});
-trapTab(statsPop);
-
-// ---- exact-mode consent popup ---------------------------------------------
-// Sampling "off" is unbounded by policy; over the consent threshold (128 Mb
-// default, or a typed "off 512M") the worker asks here with the real RAM
-// estimate. Proceeding resubmits options-only — the parse cache is warm.
-
-const confirmPop = document.createElement('div');
-confirmPop.id = 'confirm-pop';
-confirmPop.hidden = true;
-confirmPop.setAttribute('role', 'dialog');
-confirmPop.setAttribute('aria-modal', 'true');
-confirmPop.tabIndex = -1;
-document.body.append(confirmPop);
-confirmPop.addEventListener('click', (e) => {
-  if (e.target === confirmPop) closeConfirm();
-});
-trapTab(confirmPop);
-
-// ---- shared dialog mechanics ------------------------------------------------
-// The cards are real dialogs to assistive tech: focus moves in on open,
-// cycles inside while open, and returns to the trigger on close.
-
-/** @type {HTMLElement | null} */
-let modalReturnFocus = null;
-
-/** Name the dialog from its heading and move focus in. @param {HTMLElement} pop */
-function enterModal(pop) {
-  const prev = document.activeElement;
-  modalReturnFocus = prev instanceof HTMLElement ? prev : null;
-  const h = pop.querySelector('h3');
-  if (h && h.textContent) pop.setAttribute('aria-label', h.textContent);
-  const primary = pop.querySelector('.btn.primary') ?? pop.querySelector('button');
-  (primary instanceof HTMLElement ? primary : pop).focus();
-}
-
-function restoreModalFocus() {
-  if (modalReturnFocus) {
-    modalReturnFocus.focus();
-    modalReturnFocus = null;
-  }
-}
-
-/** Keep Tab cycling inside an open dialog. @param {HTMLElement} pop */
-function trapTab(pop) {
-  pop.addEventListener('keydown', (e) => {
-    if (e.key !== 'Tab') return;
-    const els = /** @type {HTMLElement[]} */ (
-      [...pop.querySelectorAll('button, [href], input, select, textarea')].filter(
-        (el) => el instanceof HTMLElement && !el.hasAttribute('disabled'),
-      )
-    );
-    if (els.length === 0) return;
-    const first = els[0];
-    const last = els[els.length - 1];
-    if (e.shiftKey && document.activeElement === first) {
-      last.focus();
-      e.preventDefault();
-    } else if (!e.shiftKey && document.activeElement === last) {
-      first.focus();
-      e.preventDefault();
-    }
-  });
-}
-
-/**
- * Dismiss hook for the promise-based dialog (stream consent): every path
- * that hides confirmPop must also settle that promise, or the load awaiting
- * it leaks forever. ask* dialogs that replace the card go through
- * closeConfirm() first for the same reason.
- * @type {(() => void) | null}
- */
-let confirmDismiss = null;
-
-/** Hide the consent card, settling any pending stream-consent promise. */
-function closeConfirm() {
-  const wasOpen = !confirmPop.hidden;
-  confirmPop.hidden = true;
-  if (wasOpen) restoreModalFocus();
-  if (confirmDismiss) {
-    const d = confirmDismiss;
-    confirmDismiss = null;
-    d();
-  }
-}
 
 /**
  * Guarded resubmit for consent-dialog buttons: the dialog snapshots the job
@@ -3490,36 +3388,36 @@ function consentResubmit(gen, job, fn) {
 
 /** @param {{tLenBp: number, gbLo: number, gbHi: number}} m */
 function askExactConfirm(m) {
-  closeConfirm(); // settle any dialog this card replaces
   const gen = dataGen;
   const job = lastKmer;
   const mb = Math.ceil(m.tLenBp / 1e6);
   const ram = (/** @type {number} */ gb) =>
     gb >= 1 ? `${gb.toFixed(1)} GB` : `${Math.max(1, Math.round(gb * 1000))} MB`;
-  confirmPop.innerHTML =
-    `<div class="stats-card">` +
-    `<div class="stats-head"><h3>Exact mode wants real memory</h3>` +
-    `<button class="stats-close" aria-label="close">×</button></div>` +
-    `<p class="stats-sum">True full density on <b>${formatBp(m.tLenBp)}</b> of target indexes ` +
-    `every k-mer: roughly <b>${ram(m.gbLo)}–${ram(m.gbHi)}</b> of index RAM and a ` +
-    `long compute. Nothing sampled, nothing skipped.</p>` +
-    `<div class="confirm-row">` +
-    `<button id="cf-go" class="btn primary">Compute exact — spend the RAM</button>` +
-    `<button id="cf-auto" class="btn">Use auto sampling</button>` +
-    `</div>` +
-    `<p class="stats-sum">Pre-approve next time: type <b>off ${mb}M</b> in sampling — it rides ` +
-    `share links, and this ask is skipped.</p></div>`;
-  confirmPop.hidden = false;
-  enterModal(confirmPop);
-  confirmPop.querySelector('.stats-close')?.addEventListener('click', closeConfirm);
-  confirmPop.querySelector('#cf-go')?.addEventListener('click', () =>
-    consentResubmit(gen, job, (j) => submitKmer({ ...j.opts, exactConfirmed: true }, j.window)),
-  );
-  confirmPop.querySelector('#cf-auto')?.addEventListener('click', () =>
-    consentResubmit(gen, job, (j) => {
-      inSample.value = 'auto';
-      submitKmer({ ...j.opts, sample: 'auto', exactMaxBp: undefined }, j.window);
-    }),
+  confirmCard(
+    'Exact mode wants real memory',
+    `True full density on <b>${formatBp(m.tLenBp)}</b> of target indexes every k-mer: roughly ` +
+      `<b>${ram(m.gbLo)}–${ram(m.gbHi)}</b> of index RAM and a long compute. Nothing sampled, ` +
+      `nothing skipped.`,
+    [
+      {
+        id: 'cf-go',
+        label: 'Compute exact — spend the RAM',
+        primary: true,
+        onClick: () =>
+          consentResubmit(gen, job, (j) => submitKmer({ ...j.opts, exactConfirmed: true }, j.window)),
+      },
+      {
+        id: 'cf-auto',
+        label: 'Use auto sampling',
+        onClick: () =>
+          consentResubmit(gen, job, (j) => {
+            inSample.value = 'auto';
+            submitKmer({ ...j.opts, sample: 'auto', exactMaxBp: undefined }, j.window);
+          }),
+      },
+    ],
+    `Pre-approve next time: type <b>off ${mb}M</b> in sampling — it rides share links, and this ` +
+      `ask is skipped.`,
   );
 }
 
@@ -3534,52 +3432,55 @@ function askExactConfirm(m) {
  */
 function wallRecovery(message) {
   if (!message.startsWith(SEGMENT_WALL_ERROR) || !lastKmer) return false;
-  closeConfirm(); // settle any dialog this card replaces
   const gen = dataGen;
   const job = lastKmer;
   const minRunNow = parseLenOff(inMinRun.value, 0);
   const fixLen = Math.max(300, minRunNow * 2);
   const wallNow = wallOverride || 16_000_000;
   const wallNext = Math.min(64_000_000, wallNow * 2);
-  const canRaise = wallNext > wallNow;
-  confirmPop.innerHTML =
-    `<div class="stats-card">` +
-    `<div class="stats-head"><h3>Hit the ${Math.round(wallNow / 1e6)}M-segment wall</h3>` +
-    `<button class="stats-close" aria-label="close">×</button></div>` +
-    `<p class="stats-sum">This window's repeat structure produces more than ` +
-    `${Math.round(wallNow / 1e6)}M match segments at these settings. Ways through:</p>` +
-    `<div class="confirm-row">` +
-    `<button id="cw-minlen" class="btn primary">Keep matches ≥ ${formatBp(fixLen)}</button>` +
-    `<button id="cw-sample" class="btn">Sample every 4th position</button>` +
-    (canRaise
-      ? `<button id="cw-wall" class="btn">Raise the wall to ${Math.round(wallNext / 1e6)}M</button>`
-      : '') +
-    `</div>` +
-    `<p class="stats-sum">The length filter keeps long-range structure and drops repeat ` +
-    `confetti; sampling thins everything evenly. Raising the wall recomputes and keeps ` +
-    `everything — ~${Math.round(wallNext * 70 / 1e9)} GB of RAM+GPU at ${Math.round(wallNext / 1e6)}M, ` +
-    `frame rate roughly halves per doubling, and your GPU may refuse the buffer (64M is the ` +
-    `engine's hard limit). The ANI heatmap shows full repeat depth without enumerating at all.</p></div>`;
-  confirmPop.hidden = false;
-  enterModal(confirmPop);
-  confirmPop.querySelector('.stats-close')?.addEventListener('click', closeConfirm);
-  confirmPop.querySelector('#cw-minlen')?.addEventListener('click', () =>
-    consentResubmit(gen, job, (j) => {
-      inMinRun.value = String(fixLen);
-      submitKmer({ ...j.opts, minRunLen: fixLen, volumeConfirmed: true }, j.window);
-    }),
-  );
-  confirmPop.querySelector('#cw-sample')?.addEventListener('click', () =>
-    consentResubmit(gen, job, (j) => {
-      inSample.value = '4';
-      submitKmer({ ...j.opts, sample: 4, volumeConfirmed: true }, j.window);
-    }),
-  );
-  confirmPop.querySelector('#cw-wall')?.addEventListener('click', () =>
-    consentResubmit(gen, job, (j) => {
-      wallOverride = wallNext;
-      submitKmer({ ...j.opts, maxSegments: wallNext, volumeConfirmed: true }, j.window);
-    }),
+  /** @type {import('./app/dialogs.js').CardButton[]} */
+  const buttons = [
+    {
+      id: 'cw-minlen',
+      label: `Keep matches ≥ ${formatBp(fixLen)}`,
+      primary: true,
+      onClick: () =>
+        consentResubmit(gen, job, (j) => {
+          inMinRun.value = String(fixLen);
+          submitKmer({ ...j.opts, minRunLen: fixLen, volumeConfirmed: true }, j.window);
+        }),
+    },
+    {
+      id: 'cw-sample',
+      label: 'Sample every 4th position',
+      onClick: () =>
+        consentResubmit(gen, job, (j) => {
+          inSample.value = '4';
+          submitKmer({ ...j.opts, sample: 4, volumeConfirmed: true }, j.window);
+        }),
+    },
+  ];
+  if (wallNext > wallNow) {
+    buttons.push({
+      id: 'cw-wall',
+      label: `Raise the wall to ${Math.round(wallNext / 1e6)}M`,
+      onClick: () =>
+        consentResubmit(gen, job, (j) => {
+          wallOverride = wallNext;
+          submitKmer({ ...j.opts, maxSegments: wallNext, volumeConfirmed: true }, j.window);
+        }),
+    });
+  }
+  confirmCard(
+    `Hit the ${Math.round(wallNow / 1e6)}M-segment wall`,
+    `This window's repeat structure produces more than ${Math.round(wallNow / 1e6)}M match ` +
+      `segments at these settings. Ways through:`,
+    buttons,
+    `The length filter keeps long-range structure and drops repeat confetti; sampling thins ` +
+      `everything evenly. Raising the wall recomputes and keeps everything — ` +
+      `~${Math.round((wallNext * 70) / 1e9)} GB of RAM+GPU at ${Math.round(wallNext / 1e6)}M, ` +
+      `frame rate roughly halves per doubling, and your GPU may refuse the buffer (64M is the ` +
+      `engine's hard limit). The ANI heatmap shows full repeat depth without enumerating at all.`,
   );
   return true;
 }
@@ -3592,7 +3493,6 @@ function wallRecovery(message) {
  * @param {{estAnchors: number, estUpper?: boolean, tableGb?: number, tLenBp: number}} m
  */
 function askVolumeConfirm(m) {
-  closeConfirm(); // settle any dialog this card replaces
   const gen = dataGen;
   const job = lastKmer;
   const minRunNow = parseLenOff(inMinRun.value, 0);
@@ -3601,48 +3501,45 @@ function askVolumeConfirm(m) {
     ? ` The diagonal run-table alone may need <b>~${m.tableGb} GB of RAM</b> — chance anchors ` +
       'at low k land on mostly-distinct diagonals.'
     : '';
-  confirmPop.innerHTML =
-    `<div class="stats-card">` +
-    `<div class="stats-head"><h3>Deep repeat enumeration ahead</h3>` +
-    `<button class="stats-close" aria-label="close">×</button></div>` +
-    `<p class="stats-sum">At these settings this ${formatBp(m.tLenBp)} window enumerates ` +
-    `${m.estUpper ? 'up to' : 'roughly'} <b>${formatCount(m.estAnchors)} anchor pairs</b>` +
-    `${m.estUpper ? ' (an upper bound — the deepest repeat bin may cap below its full depth)' : ''} ` +
-    `— satellite arrays are quadratic. Expect a long grind, and likely the segment wall.` +
-    ramLine +
-    ` The heatmap and k-mer multiplicity lane already show this structure without enumerating it.</p>` +
-    `<div class="confirm-row">` +
-    `<button id="cv-minlen" class="btn primary">Keep matches ≥ ${formatBp(fixLen)}</button>` +
-    `<button id="cv-sample" class="btn">Sample every 4th position</button>` +
-    `<button id="cv-go" class="btn">Enumerate everything anyway</button>` +
-    `</div>` +
-    `<p class="stats-sum">The length filter drops monomer-scale confetti at emit time — ` +
-    `HOR-scale structure stays, segment counts collapse; anchor time is similar. Sampling ` +
-    `thins the anchors themselves — the lever that also shrinks the run-table's RAM.</p></div>`;
-  confirmPop.hidden = false;
-  enterModal(confirmPop);
-  confirmPop.querySelector('.stats-close')?.addEventListener('click', closeConfirm);
-  confirmPop.querySelector('#cv-go')?.addEventListener('click', () =>
-    consentResubmit(gen, job, (j) => submitKmer({ ...j.opts, volumeConfirmed: true }, j.window)),
+  confirmCard(
+    'Deep repeat enumeration ahead',
+    `At these settings this ${formatBp(m.tLenBp)} window enumerates ` +
+      `${m.estUpper ? 'up to' : 'roughly'} <b>${formatCount(m.estAnchors)} anchor pairs</b>` +
+      `${m.estUpper ? ' (an upper bound — the deepest repeat bin may cap below its full depth)' : ''} ` +
+      `— satellite arrays are quadratic. Expect a long grind, and likely the segment wall.` +
+      ramLine +
+      ` The heatmap and k-mer multiplicity lane already show this structure without enumerating it.`,
+    [
+      {
+        id: 'cv-minlen',
+        label: `Keep matches ≥ ${formatBp(fixLen)}`,
+        primary: true,
+        onClick: () =>
+          consentResubmit(gen, job, (j) => {
+            inMinRun.value = String(fixLen);
+            submitKmer({ ...j.opts, minRunLen: fixLen, volumeConfirmed: true }, j.window);
+          }),
+      },
+      {
+        id: 'cv-sample',
+        label: 'Sample every 4th position',
+        onClick: () =>
+          consentResubmit(gen, job, (j) => {
+            inSample.value = '4';
+            submitKmer({ ...j.opts, sample: 4, volumeConfirmed: true }, j.window);
+          }),
+      },
+      {
+        id: 'cv-go',
+        label: 'Enumerate everything anyway',
+        onClick: () =>
+          consentResubmit(gen, job, (j) => submitKmer({ ...j.opts, volumeConfirmed: true }, j.window)),
+      },
+    ],
+    `The length filter drops monomer-scale confetti at emit time — HOR-scale structure stays, ` +
+      `segment counts collapse; anchor time is similar. Sampling thins the anchors themselves — ` +
+      `the lever that also shrinks the run-table's RAM.`,
   );
-  confirmPop.querySelector('#cv-sample')?.addEventListener('click', () =>
-    consentResubmit(gen, job, (j) => {
-      inSample.value = '4';
-      submitKmer({ ...j.opts, sample: 4, volumeConfirmed: true }, j.window);
-    }),
-  );
-  confirmPop.querySelector('#cv-minlen')?.addEventListener('click', () =>
-    consentResubmit(gen, job, (j) => {
-      inMinRun.value = String(fixLen);
-      submitKmer({ ...j.opts, minRunLen: fixLen, volumeConfirmed: true }, j.window);
-    }),
-  );
-}
-
-function closeStatsPop() {
-  const wasOpen = !statsPop.hidden;
-  statsPop.hidden = true;
-  if (wasOpen) restoreModalFocus();
 }
 
 /** @type {{ref: unknown, mode: string, html: string}} */
@@ -3766,256 +3663,6 @@ function fatal(msg) {
   emptyState.innerHTML = `<p style="max-width:420px"><strong>dotdot can’t start:</strong> ${msg}</p>`;
 }
 
-// --------------------------------------------------------------------------
-// Help popovers: little "?" buttons across the UI, one shared popover.
-
-const HELP = {
-  controls:
-    '<b>Mouse / trackpad</b><br>drag — pan · two-finger scroll or wheel — zoom (Alt = x-only) · ' +
-    'pinch — zoom (Safari/Chrome; some browsers reserve pinch for page magnification — use the ' +
-    'on-plot +/− buttons there) · shift-drag — box zoom · double-click — zoom in (shift = out) · ' +
-    'hover — inspect a match<br><b>Keys</b><br>' +
-    '<kbd>R</kbd>/<kbd>0</kbd> fit · <kbd>F</kbd> refine view · <kbd>[</kbd>/<kbd>]</kbd> min ' +
-    'segment length down/up · <kbd>G</kbd> region box · <kbd>+</kbd>/<kbd>−</kbd> zoom · ' +
-    'arrows pan · <kbd>1</kbd>/<kbd>2</kbd> strand toggles · <kbd>P</kbd> fps meter',
-  data:
-    'Target FASTA = x axis, query FASTA = y axis (one file → self-plot). Each button ' +
-    '<b>multi-selects</b>: several files stack onto that axis as one plot, every sequence keeping ' +
-    'its own ruler, with alternating shading separating regions. Drop 3+ FASTAs at once and the ' +
-    'first becomes the target, the rest the query. dotdot computes matches itself, ' +
-    'alignment-free; gzipped (and bgzip) files are fine.',
-  ref:
-    'Built-in reference genomes, fetched on demand as <b>byte ranges</b> from UCSC’s 2bit files — ' +
-    'the genome itself never downloads. Type any region in genome-browser coordinates ' +
-    '(<b>chrX:57.8M-60.7M</b>, 1-based), a cytogenetic <b>arm</b> (<b>chr13p</b>, resolved from ' +
-    'the streamed cytoband track), or a <b>list</b> — comma or ; separated, e.g. ' +
-    '<b>chr13p,chr14p,chr15p,chr21p,chr22p</b> lays all five acrocentric short arms on one ' +
-    'axis (commas inside numbers are safe). <b>vs</b> splits the axes: ' +
-    '<b>chr21p vs chr22p</b> streams the left side as the target (x) and the right side as ' +
-    'the query (y) — the direct cross-comparison, no self quadrants; each side may be a full ' +
-    'list. Without vs: no query FASTA → the regions plot against themselves; query loaded → ' +
-    'it dots against them. All coordinates shown are true genomic positions. Shareable: ' +
-    '?ref=t2t&refregion=chr21p+vs+chr22p.',
-  matching:
-    'These change what is <i>computed</i> — press Recompute after editing. The Display section ' +
-    'below applies instantly, without recomputing.',
-  k:
-    'Exact-match word size — type any value from <b>4 to 26</b> (the slider covers 8+). Longer k ' +
-    '→ fewer chance matches and faster, but blinder to diverged sequence; 15 suits most ' +
-    'comparisons, 16–21 helps at chromosome scale. k above 16 costs ~1.5× index memory.',
-  gap:
-    'Merge co-linear matches on one diagonal across up to this many mismatched bases. Type any ' +
-    'value ("64", "1kb", …) — presets are suggestions. Larger values give longer, cleaner ' +
-    'segments; the bridged mismatch shows up as reduced identity.',
-  occ:
-    'Skip k-mers occurring more often than this in the target — repeat masking. Any number ' +
-    'works; presets are suggestions; <b>off</b> disables occurrence masking entirely (the ' +
-    'anchor budget then becomes the only limiter — raise the <b>repeat budget</b> to push it, ' +
-    'and expect long computes on satellite-heavy inputs). At genome scale the cutoff also ' +
-    'auto-tightens using the index’s own occurrence histogram, so Alu-scale repeat families ' +
-    'can’t flood the plot. Where the cutoff bites hardest, the plot says so: regions whose ' +
-    'k-mers were mostly over-cap are <b>hatched in the heatmap view</b> and counted in the ' +
-    'scoreboard — an empty square there means “not searched”, not “not similar”. Two fine ' +
-    'points: the count is <b>forward-strand</b> (reverse matches look up the ' +
-    'reverse-complemented query in the same index, so on a self-plot at cap 1 a unique ' +
-    'inverted pair still draws — each direction is unique); and on strided indexes the cap is ' +
-    'enforced in sampled units, so tiny caps round (a note says when; Refine view is exact).',
-  budget:
-    'How many match anchors a compute may spend (~60M per strand at <b>auto</b>). The budget is ' +
-    'what auto-tightens the repeat cutoff on repeat-rich inputs; <b>2×/4×/8×</b> multiply it, ' +
-    'loosening that cutoff — deeper repeat structure for more time and RAM. <b>off</b> removes ' +
-    'it entirely: no anchor-volume tightening at all, leaving the segment wall and your ' +
-    'patience as the only limits — combine with “skip k-mers: off” for a fully unbounded ' +
-    'compute. The <b>segment wall</b> itself defaults to 16M (~1 GB of RAM+GPU, redrawn every ' +
-    'frame — a sizing default, not physics) and is raisable to <b>64M</b> from its recovery ' +
-    'card or a <b>?wall=32M</b> link: frame rate roughly halves per doubling, and past 64M ' +
-    'the GPU buffer outgrows most hardware. <b>Refine view</b> always runs at ≥4×. ' +
-    'One caution stands at any budget: satellite families with repeat period &lt; k (HSat2/3) ' +
-    'are unenumerable in principle — expect the segment wall there, and trust the hatch.',
-  minrun:
-    'Drop merged runs shorter than this at compute time ("off", "30", "1kb", any value). At ' +
-    'genome scale a small evidence filter applies automatically.',
-  sample:
-    '<b>auto</b> thins matching on big inputs (every Nth query position, and past 48 Mb the ' +
-    'target index strides too) so chromosomes compute in minutes. A <b>number</b> pins the ' +
-    'query-side interval only — the target may still stride, and the result note says when. ' +
-    '<b>off</b> is <b>true full density</b>, unbounded: every target k-mer indexed, every ' +
-    'query position tested, occurrence caps in exact counts. Because the index lives in RAM ' +
-    '(~0.5 GB per 50 Mb, ~1.5× that for k &gt; 16), going past 128 Mb of target first ' +
-    '<b>asks</b> with the real estimate — one click to proceed or fall back. Pre-approve with ' +
-    '<b>off 512M</b> (skips the ask up to 512 Mb; travels in share links). The only hard wall ' +
-    'is ~1 Gb, where the browser cannot allocate the index at all. Tip: keep auto for the ' +
-    'overview, zoom in, then <b>Refine view</b> for exact windows.',
-  annotations:
-    'Axis-margin lanes. <b>k-mer multiplicity</b> comes from this plot’s own index — no ' +
-    'download, works for any FASTA: ink darkens with log copy number (full ink ≈ 300×+), and ' +
-    '<b>blank stretches are unique-k-mer territory</b> — the reliable anchors. Hover reads ' +
-    '~N× and the unique fraction; on self-plots the query axis mirrors it. The other tracks ' +
-    'stream on demand from UCSC bigBeds as <b>byte ranges</b> for any sequence named like a ' +
-    'chromosome of the annotation genome (the selected reference, else T2T) — including ' +
-    'reference slices like <b>chr17_ROI10.9</b>, placed by their true coordinates. Fetches ' +
-    'follow the view; hover a lane item for its name, span, and strand. CenSat colors are the ' +
-    'satellite-family colors from the track itself.',
-  drawmode:
-    '<b>segments</b> draws every match as a line — the exact view. <b>identity heatmap</b> bins ' +
-    'the visible matches into tiles colored by the best anchor identity seen in each (the ' +
-    'StainedGlass-style satellite figure): dense repeat fabric becomes a readable identity ' +
-    'landscape. Regions above the repeat cutoff wear a <b>diagonal hatch</b> — matches there ' +
-    'were never enumerated, so blank ≠ dissimilar. <b>ANI heatmap</b> escapes the cap ' +
-    'entirely: every tile pair is compared by the <b>multiset containment</b> of its exact ' +
-    'k-mer counts, mapped to ANI = c^(1/k) (the Mash/ModDotPlot estimator, made ' +
-    'count-weighted) — no matches enumerated, no occurrence cap, no hatch, satellite cores ' +
-    'included; it recomputes for the visible window when you rest, on self-plots and ' +
-    'cross-plots alike (alignment-free inputs). Hover reads a tile; the aligner overlay ' +
-    'still draws on top. PNG captures the heatmaps (SVG stays segment-only).',
-  anitiles:
-    'Grid resolution of the ANI heatmap. <b>auto</b> sizes to your display and a work budget ' +
-    '(satellite-dense windows may coarsen — the legend reports the tiles and their bp size). ' +
-    'An explicit count (to <b>1024</b>) is honored outright: finer than the screen for ' +
-    'publication export, at whatever compute time it takes. Each tile spans window÷N bases, ' +
-    'so <b>zooming in refines resolution for free</b> — the grid recomputes per view. Rides ' +
-    'share links (?anitiles=1024).',
-  detail:
-    'The exploration dial, always at hand. <b>Min segment length</b> filters what is <i>drawn</i> ' +
-    '(never what was computed): low reveals the repeat fabric, high shows clean structure — drag ' +
-    'the slider, type an exact value, or press <kbd>[</kbd>/<kbd>]</kbd> from the plot. Dense ' +
-    'results pick a sane starting value automatically. <b>Refine view</b> lives below, with ' +
-    '<b>auto</b> to refine as you go.',
-  refine:
-    'Recomputes the <i>visible window</i> at full density with a raised repeat budget, merging ' +
-    'it into the plot in place — axes, zoom, and the aligner overlay stay put. Press <kbd>F</kbd> ' +
-    'or the ✦ button by the zoom controls; it works at <b>any</b> zoom, including full fit — ' +
-    'refining a whole centromere window digs deeper into its repeat families. With <b>auto</b> ' +
-    'checked, resting a moment at a zoomed view refines it by itself. Needs the FASTA inputs ' +
-    'still loaded.',
-  share:
-    'Copies a link that reproduces this exact view: the data (when it came from a reference, ' +
-    'the demo, or URLs), the viewport, display settings, and any non-default matching options. ' +
-    'Locally loaded files cannot travel in a link — everything else can. Paste it anywhere; ' +
-    'opening it replays the compute and lands on the same pixels.',
-  minident:
-    'Hide segments below this <b>anchor identity</b> — dotdot’s metric: the fraction of a ' +
-    'merged run covered by exact k-mer anchors, after crediting sampling holes (bridged ' +
-    'mismatch/indel bases count against it). It is deliberately not alignment identity ' +
-    '(StainedGlass’s 100·M/(M+X+I+D)) nor k-mer ANI (ModDotPlot’s c^(1/k)) — it comes from ' +
-    'exact occurrence counts, no aligner. For PAF overlays the value is the aligner’s own ' +
-    'nmatch/alnlen. Instant — nothing recomputes.',
-  strands:
-    'Forward matches are blue; reverse-complement matches are orange — inversions appear as ' +
-    'orange anti-diagonals. Toggle with keys <kbd>1</kbd> and <kbd>2</kbd>.',
-  colorby:
-    '“identity” shades each segment by anchor identity (legend ramps); “strand only” uses flat ' +
-    'blue/orange. “<b>k-mer multiplicity</b>” recolors every segment by the copy number of the ' +
-    'target sequence it sits on — the same neutral→ink scale as the axis lane (1× unique pale, ' +
-    '≥300× full ink), from this plot’s own index. Repeat families light up as families; unique ' +
-    'anchors recede. Long segments shade along their length as they cross repeat boundaries. ' +
-    'Alignment-free plots only; strand toggles and filters still apply.',
-  minpx:
-    'Stretch tiny matches to a minimum on-screen size so small features remain visible when ' +
-    'zoomed way out.',
-  aspect: 'Lock both axes to the same bp-per-pixel scale, so perfect matches run at exactly 45°.',
-  region:
-    'Jump to a target region: <b>chr17:18.3M-19.4M</b>, a bare sequence name, or ' +
-    '<b>100,000-250,000</b>. The query axis frames whatever maps there; when a region maps to ' +
-    'several places (other haplotype, duplications), pressing Go again cycles through them.',
-  overlay:
-    'Drop an aligner’s PAF on an existing plot and its calls draw as ink lines with diamond ' +
-    'breakpoint markers over the alignment-free layer — the aligner’s story against the raw ' +
-    'sequence structure. Display filters never touch the overlay.',
-};
-
-/** Accessible names for the "?" buttons — a rotor list of twenty identical
- * "question mark" entries helps nobody. @type {Record<string, string>} */
-const HELP_LABEL = {
-  controls: 'mouse and keyboard controls',
-  data: 'inputs',
-  ref: 'reference regions',
-  matching: 'matching options',
-  k: 'k-mer size',
-  gap: 'gap bridging',
-  occ: 'the occurrence cap',
-  budget: 'the repeat budget',
-  minrun: 'min match length',
-  sample: 'sampling',
-  annotations: 'annotation tracks',
-  drawmode: 'draw modes',
-  anitiles: 'ANI tile resolution',
-  detail: 'the detail controls',
-  refine: 'refine view',
-  share: 'share links',
-  minident: 'the anchor-identity filter',
-  strands: 'strand colors',
-  colorby: 'color modes',
-  minpx: 'small-match emphasis',
-  aspect: 'the 1:1 aspect lock',
-  region: 'region jump',
-  overlay: 'the aligner overlay',
-};
-for (const b of document.querySelectorAll('.help')) {
-  const key = b instanceof HTMLElement ? b.dataset.help : undefined;
-  b.setAttribute('aria-label', `about ${(key && HELP_LABEL[key]) || key || 'this control'}`);
-  b.setAttribute('aria-expanded', 'false');
-}
-
-const helpPop = document.createElement('div');
-helpPop.id = 'help-pop';
-helpPop.hidden = true;
-document.body.append(helpPop);
-
-/** @type {HTMLElement | null} */
-let helpAnchor = null;
-
-function closeHelp() {
-  helpPop.hidden = true;
-  if (helpAnchor) helpAnchor.setAttribute('aria-expanded', 'false');
-  helpAnchor = null;
-}
-
-// The popover is positioned once, from the button's rect — a sidebar scroll
-// or window resize would leave it floating over unrelated controls.
-window.addEventListener('scroll', () => {
-  if (helpAnchor) closeHelp();
-}, true);
-window.addEventListener('resize', () => {
-  if (helpAnchor) closeHelp();
-});
-
-document.addEventListener(
-  'click',
-  (e) => {
-    const t = /** @type {HTMLElement} */ (e.target);
-    const btn = t.closest('.help');
-    if (btn instanceof HTMLElement) {
-      // Keep the click from reaching the label/control underneath.
-      e.preventDefault();
-      e.stopPropagation();
-      if (helpAnchor === btn) {
-        closeHelp();
-        return;
-      }
-      const html = HELP[/** @type {keyof typeof HELP} */ (btn.dataset.help ?? '')];
-      if (!html) return;
-      helpPop.innerHTML = html;
-      helpPop.hidden = false;
-      helpAnchor = btn;
-      btn.setAttribute('aria-expanded', 'true');
-      const r = btn.getBoundingClientRect();
-      helpPop.style.left = '0px';
-      helpPop.style.top = '0px';
-      const pw = helpPop.offsetWidth;
-      const ph = helpPop.offsetHeight;
-      let x = r.left;
-      let y = r.bottom + 6;
-      if (x + pw > innerWidth - 8) x = innerWidth - pw - 8;
-      if (y + ph > innerHeight - 8) y = r.top - ph - 6;
-      helpPop.style.left = `${Math.max(4, x)}px`;
-      helpPop.style.top = `${Math.max(4, y)}px`;
-    } else if (!helpPop.hidden && !t.closest('#help-pop')) {
-      closeHelp();
-    }
-  },
-  true,
-);
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     closeHelp();
@@ -4110,5 +3757,6 @@ async function fetchAsFile(url) {
   return { name, buf };
 }
 
+initHelp();
 renderAnnoTracks();
 void initFromUrl();
