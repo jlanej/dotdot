@@ -6,9 +6,9 @@
  * stays valid across requests. Cancellation is handled by the main thread
  * terminating and respawning the worker — no cooperative flags needed.
  */
-import { parseFasta, mergeParsedFasta } from '../io/fasta.js';
+import { parseFasta, mergeParsedFasta, looksLikeFasta } from '../io/fasta.js';
 import { maybeGunzip } from '../io/compress.js';
-import { parsePaf, parsePafOnto } from '../io/paf.js';
+import { parsePaf, parsePafOnto, looksLikePaf } from '../io/paf.js';
 import { buildIndex, matchStrand, pickMaxOcc, pickDensity, estimateAnchors, saturatedIntervals, multiplicityProfile, containmentGrid, KMER_DEFAULTS, EXACT_MAX_BP, EXACT_HARD_BP } from '../core/kmer.js';
 import { reverseComplement } from '../core/dna.js';
 import { newSegmentVecs, vecsToSegments, segmentBuffers } from '../core/types.js';
@@ -87,7 +87,13 @@ async function handleKmer(req) {
     parsedCache = { gen: req.gen ?? -1, tParsed, qParsed: qBase };
   }
   const qParsed = qBase ?? selfPlotView(tParsed);
-  computeKmer(req.id, tParsed, qParsed, req.opts, t0, req.window ?? null);
+  // Parser warnings (duplicate names, swallowed headers, empty records)
+  // ride the result note — suspicious inputs are disclosed, never silent.
+  const parseNotes = [
+    .../** @type {{warnings?: string[]}} */ (tParsed).warnings ?? [],
+    ...(qBase ? (/** @type {{warnings?: string[]}} */ (qBase).warnings ?? []) : []),
+  ];
+  computeKmer(req.id, tParsed, qParsed, req.opts, t0, req.window ?? null, parseNotes);
 }
 
 /**
@@ -100,6 +106,16 @@ async function parseSlot(bufs, slot) {
   const parts = [];
   for (let i = 0; i < list.length; i++) {
     const bytes = await maybeGunzip(new Uint8Array(list[i]));
+    const label = list.length > 1 ? `${slot} file ${i + 1}` : slot;
+    // A gzipped PAF whose name lacks ".paf" sails past the extension check
+    // and would parse as an all-N "FASTA" — an empty plot with no error.
+    // Sniff the DECOMPRESSED bytes and say what actually happened.
+    if (!looksLikeFasta(bytes) && looksLikePaf(bytes)) {
+      throw new Error(
+        `The ${label} looks like a PAF alignment file — load it with the Aligner PAF button, ` +
+          'or drop it onto an existing plot as the audit overlay.',
+      );
+    }
     parts.push(parseFasta(bytes, list.length > 1 ? `${slot}${i + 1}` : slot));
   }
   return mergeParsedFasta(parts);
@@ -128,8 +144,9 @@ function selfPlotView(tParsed) {
  * @param {object & {sample?: 'auto'|'off'|number}} optsIn
  * @param {number} t0
  * @param {RefineWindow | null} [window]
+ * @param {string[]} [parseNotes] parser warnings to surface in the note
  */
-function computeKmer(id, tParsed, qParsed, optsIn, t0, window = null) {
+function computeKmer(id, tParsed, qParsed, optsIn, t0, window = null, parseNotes = []) {
   const opts = { ...KMER_DEFAULTS, ...optsIn };
   // Keep the index within ~48M entries on big targets by striding, and cap
   // query-side lookups the same way — random-access lookups are the wall at
@@ -291,7 +308,7 @@ function computeKmer(id, tParsed, qParsed, optsIn, t0, window = null) {
       ? `occurrence cap ${opts.maxOcc}× rounds to ~${maxOccEff * stride}× ` +
         `(index samples 1/${stride} target k-mers; zoom under 48 Mb and Refine for exact)`
       : '';
-  const note = [samplingNote, capNote, satNote].filter(Boolean).join(' · ');
+  const note = [...parseNotes, samplingNote, capNote, satNote].filter(Boolean).join(' · ');
 
   if (pooled) {
     progress(id, 'Preparing shared memory', 0.5);
@@ -535,7 +552,15 @@ async function handlePafOverlay(req) {
   progress(req.id, 'Mapping onto loaded axes', 0.4);
   const r = parsePafOnto(bytes, req.target, req.query);
   post(
-    { id: req.id, type: 'overlayResult', segments: r.segments, skipped: r.skipped, unknown: r.unknown },
+    {
+      id: req.id,
+      type: 'overlayResult',
+      segments: r.segments,
+      skipped: r.skipped,
+      unknown: r.unknown,
+      mismatch: r.mismatch,
+      remapped: r.remapped,
+    },
     segmentBuffers(r.segments),
   );
 }

@@ -190,22 +190,61 @@ export function parsePaf(bytes) {
 }
 
 /**
+ * @typedef {{start: number, width: number, offset: number}} AxisBand
+ */
+
+/**
+ * Resolve one PAF side's coordinates into band-local space, or null when
+ * the record's claimed extent is incompatible with the loaded band. Three
+ * honest outcomes instead of one silent guess:
+ *  - claimed length == band width → slice-local coordinates, used directly
+ *    (bounds-checked: corrupt out-of-range records don't draw into the
+ *    neighboring band);
+ *  - band carries an `@offset` and the coordinates fall inside its genomic
+ *    window → a full-chromosome PAF lands on a reference slice, remapped;
+ *  - anything else → incompatible (wrong assembly, wrong extent), dropped
+ *    and counted rather than plotted at wrong positions.
+ * @param {AxisBand} band @param {number} len @param {number} s @param {number} e
+ * @returns {number | null} band-local start
+ */
+function localizePafSide(band, len, s, e) {
+  if (len === band.width) return e <= band.width ? s : null;
+  if (band.offset > 0 && s >= band.offset && e <= band.offset + band.width) {
+    return s - band.offset;
+  }
+  return null;
+}
+
+/**
  * Overlay: map alignments onto existing axes by sequence name. Alignments
- * naming sequences absent from the axes are counted in `unknown` and
- * dropped; nothing else about the base plot changes.
+ * naming sequences absent from the axes count in `unknown`; alignments
+ * whose claimed sequence length doesn't fit the loaded band (and can't be
+ * remapped via the band's `@offset` genomic window) count in `mismatch` —
+ * both dropped loudly, never plotted at wrong positions. `remapped` counts
+ * full-chromosome records placed onto reference slices by their true
+ * coordinates. Nothing else about the base plot changes.
  *
  * @param {Uint8Array} bytes
  * @param {AxisCatalog} target
  * @param {AxisCatalog} query
- * @returns {{segments: SegmentStore, skipped: number, unknown: number, identMin: number}}
+ * @returns {{segments: SegmentStore, skipped: number, unknown: number, mismatch: number, remapped: number, identMin: number}}
  */
 export function parsePafOnto(bytes, target, query) {
-  /** @type {Map<string, number>} */
-  const tOff = new Map();
-  for (let i = 0; i < target.names.length; i++) tOff.set(target.names[i], target.starts[i]);
-  /** @type {Map<string, number>} */
-  const qOff = new Map();
-  for (let i = 0; i < query.names.length; i++) qOff.set(query.names[i], query.starts[i]);
+  /** @param {AxisCatalog} cat @returns {Map<string, AxisBand>} */
+  const bands = (cat) => {
+    /** @type {Map<string, AxisBand>} */
+    const m = new Map();
+    for (let i = 0; i < cat.names.length; i++) {
+      m.set(cat.names[i], {
+        start: cat.starts[i],
+        width: cat.starts[i + 1] - cat.starts[i],
+        offset: cat.offsets ? cat.offsets[i] : 0,
+      });
+    }
+    return m;
+  };
+  const tBands = bands(target);
+  const qBands = bands(query);
 
   const x = new F64Vec(4096);
   const y = new F64Vec(4096);
@@ -214,18 +253,27 @@ export function parsePafOnto(bytes, target, query) {
   const strand = new U8Vec(4096);
   const identity = new F32Vec(4096);
   let unknown = 0;
+  let mismatch = 0;
+  let remapped = 0;
   let identMin = 1;
 
-  const skipped = scanRecords(bytes, (qName, _qlen, qs, qe, str, tName, _tlen, ts, te, ident) => {
-    const to = tOff.get(tName);
-    const qo = qOff.get(qName);
-    if (to === undefined || qo === undefined) {
+  const skipped = scanRecords(bytes, (qName, qlen, qs, qe, str, tName, tlen, ts, te, ident) => {
+    const tb = tBands.get(tName);
+    const qb = qBands.get(qName);
+    if (tb === undefined || qb === undefined) {
       unknown++;
       return;
     }
+    const tLoc = localizePafSide(tb, tlen, ts, te);
+    const qLoc = localizePafSide(qb, qlen, qs, qe);
+    if (tLoc === null || qLoc === null) {
+      mismatch++;
+      return;
+    }
+    if (tlen !== tb.width || qlen !== qb.width) remapped++;
     if (ident < identMin) identMin = ident;
-    x.push(to + ts);
-    y.push(qo + qs);
+    x.push(tb.start + tLoc);
+    y.push(qb.start + qLoc);
     dx.push(te - ts);
     dy.push(qe - qs);
     strand.push(str);
@@ -235,11 +283,15 @@ export function parsePafOnto(bytes, target, query) {
   const count = x.n;
   if (count === 0) {
     throw new Error(
-      unknown > 0
-        ? `No alignments matched the loaded sequence names (${unknown} lines name other sequences).`
-        : skipped > 0
-          ? `No usable alignments (${skipped} malformed lines) — is this a PAF file?`
-          : 'Empty PAF file.',
+      mismatch > 0
+        ? `No alignments fit the loaded axes: ${mismatch} lines carry coordinates for a different ` +
+          'sequence extent (a different assembly, or a whole-genome PAF over an unrelated slice?)' +
+          (unknown > 0 ? `; ${unknown} lines name other sequences` : '') + '.'
+        : unknown > 0
+          ? `No alignments matched the loaded sequence names (${unknown} lines name other sequences).`
+          : skipped > 0
+            ? `No usable alignments (${skipped} malformed lines) — is this a PAF file?`
+            : 'Empty PAF file.',
     );
   }
 
@@ -255,6 +307,8 @@ export function parsePafOnto(bytes, target, query) {
     },
     skipped,
     unknown,
+    mismatch,
+    remapped,
     identMin,
   };
 }

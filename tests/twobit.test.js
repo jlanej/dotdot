@@ -189,3 +189,94 @@ test('ranged: large spans stream in chunks with progress and one retry', async (
     globalThis.fetch = origFetch;
   }
 });
+
+test('twobit: non-zero version is refused by name', async () => {
+  const fx = buildTwoBit([{ name: 'c', seq: 'ACGT' }]).slice();
+  fx[4] = 1; // version 1 stores 64-bit offsets — a different layout
+  let msg = '';
+  try {
+    await reader(fx).index();
+  } catch (err) {
+    msg = err instanceof Error ? err.message : String(err);
+  }
+  assert(msg.includes('version 1'), `expected a version error, got: ${msg}`);
+});
+
+test('ranged: a truncated chunk body fails loudly after one retry', async () => {
+  const FILE = new Uint8Array(3000);
+  const origFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = /** @type {any} */ (
+    async (/** @type {any} */ _url, /** @type {any} */ init) => {
+      const m = /bytes=(\d+)-(\d+)/.exec(init.headers.Range);
+      if (!m) throw new Error('no Range header');
+      const s = Number(m[1]);
+      const e = Number(m[2]) + 1;
+      calls++;
+      // The middle chunk always comes back 100 bytes short — a truncated
+      // transfer that must never silently zero-fill into "sequence".
+      const body = s === 1000 ? FILE.slice(s, e - 100) : FILE.slice(s, e);
+      return new Response(body, { status: 206 });
+    }
+  );
+  try {
+    const fetchRange = makeRangeFetcher('http://example.test/x.2bit', 1000);
+    let msg = '';
+    try {
+      await fetchRange(0, 3000);
+    } catch (err) {
+      msg = err instanceof Error ? err.message : String(err);
+    }
+    assert(msg.includes('truncated'), `expected a truncation error, got: ${msg}`);
+    assertEq(calls, 3); // first chunk once, the bad chunk tried twice
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test('ranged: a 200 whole-file answer is sliced from byte 0, never treated as mid-file bytes', async () => {
+  const FILE = Uint8Array.from({ length: 500 }, (_, i) => i & 0xff);
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = /** @type {any} */ (
+    async () =>
+      new Response(FILE, { status: 200, headers: { 'content-length': String(FILE.length) } })
+  );
+  try {
+    const fetchRange = makeRangeFetcher('http://example.test/small.bb', 1000);
+    const out = await fetchRange(100, 200);
+    assertEq(out.length, 100);
+    assertEq(out[0], 100); // file byte 100 — the old code returned byte 0 here
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});
+
+test('ranged: a Range-ignoring server on a big file is refused up front', async () => {
+  const origFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = /** @type {any} */ (
+    async () => {
+      calls++;
+      return new Response(new Uint8Array(10), {
+        status: 200,
+        headers: { 'content-length': String(5e9) },
+      });
+    }
+  );
+  try {
+    const fetchRange = makeRangeFetcher('http://example.test/big.bb', 1000);
+    let msg = '';
+    try {
+      await fetchRange(4000, 8000);
+    } catch (err) {
+      msg = err instanceof Error ? err.message : String(err);
+    }
+    // Either refusal is correct (impls differ on whether the constructed
+    // content-length survives); the guarantee is no mid-file mis-slice and
+    // no full-body download loop.
+    assert(/ignored the Range|shorter \(/.test(msg), msg);
+    assertEq(calls, 1); // permanent error: no retry
+  } finally {
+    globalThis.fetch = origFetch;
+  }
+});

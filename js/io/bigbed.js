@@ -51,32 +51,55 @@ export class RemoteBigBed {
   constructor(url, io = {}) {
     this.url = url;
     this.fetchRange = io.fetchRange ?? makeRangeFetcher(url);
-    /** @type {{chromTreeOffset:number, fullIndexOffset:number, fieldCount:number, definedFieldCount:number, uncompressBufSize:number} | null} */
-    this.head = null;
-    /** @type {Map<string, {id: number, size: number}> | null} */
-    this.chromMap = null;
+    /** @type {Promise<{chromTreeOffset:number, fullIndexOffset:number, fieldCount:number, definedFieldCount:number, uncompressBufSize:number}> | null} */
+    this.headPromise = null;
+    /** @type {Promise<Map<string, {id: number, size: number}>> | null} */
+    this.chromPromise = null;
   }
 
-  async header() {
-    if (this.head) return this.head;
+  /**
+   * Header fields, memoized as a PROMISE so concurrent first callers (the
+   * x and y lanes build in parallel) share one request; rejections
+   * un-cache so a transient failure doesn't poison the reader.
+   */
+  header() {
+    if (!this.headPromise) {
+      this.headPromise = this.readHeader();
+      this.headPromise.catch(() => {
+        this.headPromise = null;
+      });
+    }
+    return this.headPromise;
+  }
+
+  async readHeader() {
     const b = await this.fetchRange(0, 64);
+    if (b.length < 64) throw new Error('Not a bigBed file (response too short for a header).');
     const dv = view(b);
     if (dv.getUint32(0, true) !== HEADER_MAGIC) {
       throw new Error('Not a little-endian bigBed file (bad signature).');
     }
-    this.head = {
+    return {
       chromTreeOffset: Number(dv.getBigUint64(8, true)),
       fullIndexOffset: Number(dv.getBigUint64(24, true)),
       fieldCount: dv.getUint16(32, true),
       definedFieldCount: dv.getUint16(34, true),
       uncompressBufSize: dv.getUint32(52, true),
     };
-    return this.head;
   }
 
-  /** Chromosome name -> {id, size}, walking the B+ tree (cached). */
-  async chroms() {
-    if (this.chromMap) return this.chromMap;
+  /** Chromosome name -> {id, size}, walking the B+ tree (memoized). */
+  chroms() {
+    if (!this.chromPromise) {
+      this.chromPromise = this.readChroms();
+      this.chromPromise.catch(() => {
+        this.chromPromise = null;
+      });
+    }
+    return this.chromPromise;
+  }
+
+  async readChroms() {
     const head = await this.header();
     const hb = await this.fetchRange(head.chromTreeOffset, head.chromTreeOffset + 32);
     const hdv = view(hb);
@@ -87,16 +110,18 @@ export class RemoteBigBed {
     /** @type {Map<string, {id: number, size: number}>} */
     const map = new Map();
     const td = new TextDecoder();
+    // Leaf items (key + id + size) and internal items (key + child offset)
+    // happen to be the same size in this tree: keySize + 8.
     const itemBytes = keySize + 8;
     /** @param {number} off */
     const walk = async (off) => {
       const nh = await this.fetchRange(off, off + 4);
       const isLeaf = nh[0] === 1;
       const count = view(nh).getUint16(2, true);
-      const body = await this.fetchRange(off + 4, off + 4 + count * (isLeaf ? itemBytes : keySize + 8));
+      const body = await this.fetchRange(off + 4, off + 4 + count * itemBytes);
       const bdv = view(body);
       for (let i = 0; i < count; i++) {
-        const p = i * (isLeaf ? itemBytes : keySize + 8);
+        const p = i * itemBytes;
         if (isLeaf) {
           const raw = body.subarray(p, p + keySize);
           let z = raw.indexOf(0);
@@ -109,7 +134,6 @@ export class RemoteBigBed {
       }
     };
     await walk(head.chromTreeOffset + 32);
-    this.chromMap = map;
     return map;
   }
 
@@ -198,12 +222,17 @@ export class RemoteBigBed {
           if (z < 0) z = data.length;
           if (cid === c.id && s < end && e > start) {
             const rest = td.decode(data.subarray(p, z)).split('\t');
+            // Real tracks carry itemRgb "0" (meaning none) — passing it
+            // through would build the invalid CSS `rgb(0)` and silently
+            // paint with whatever fillStyle came before.
+            const rgbRaw = defined >= 9 ? rest[5] : undefined;
+            const rgb = rgbRaw && /^\d{1,3},\d{1,3},\d{1,3}$/.test(rgbRaw) ? rgbRaw : null;
             items.push({
               start: s,
               end: e,
               name: defined >= 4 ? (rest[0] ?? '') : '',
               strand: defined >= 6 ? (rest[2] ?? '') : '',
-              rgb: defined >= 9 && rest[5] ? rest[5] : null,
+              rgb,
             });
           }
           p = z + 1;

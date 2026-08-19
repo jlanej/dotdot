@@ -90,3 +90,25 @@ test('fasta: ";" comment lines are skipped anywhere, not just before records', (
   assertArrayEq(Array.from(catalog.starts), [0, 4, 8]);
   assertEq(codesToString(codes), 'ACGTTTTT');
 });
+
+test('fasta: mid-sequence ">" and empty records surface as warnings', () => {
+  // A record swallowed by a missing newline (`cat a.fa b.fa` without one)
+  // parses "successfully" — the warning is the only trace of the lost record.
+  const r = parseFasta(enc.encode('>a\nACGT>b\nGGGG\n'));
+  assertEq(r.catalog.names.length, 1);
+  assert(r.warnings.length === 1 && r.warnings[0].includes("'>'"), r.warnings.join('; '));
+  const r2 = parseFasta(enc.encode('>a\n>b\nACGT\n'));
+  assert(r2.warnings.some((w) => w.includes('empty record')), r2.warnings.join('; '));
+  // Clean input carries no warnings.
+  assertEq(parseFasta(enc.encode('>a\nACGT\n')).warnings.length, 0);
+});
+
+test('fasta: duplicate names across a merge are warned, coordinates untouched', () => {
+  const a = parseFasta(enc.encode('>chr1\nACGT\n'), 'f1');
+  const b = parseFasta(enc.encode('>chr1\nGGCC\n'), 'f2');
+  const m = mergeParsedFasta([a, b]);
+  assertEq(m.catalog.names.join(','), 'chr1,chr1');
+  assertEq(m.catalog.total, 8);
+  const w = m.warnings ?? [];
+  assert(w.some((x) => x.includes('duplicate sequence names')), w.join('; '));
+});

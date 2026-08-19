@@ -101,3 +101,35 @@ test('paf: parsePafOnto throws when nothing matches', () => {
   }
   assert(threw, 'expected a throw');
 });
+
+test('paf: parsePafOnto drops extent mismatches instead of misplacing them', () => {
+  // t1 claims length 2000 in the PAF; a band of width 800 cannot hold those
+  // coordinates — the records must be counted, never drawn at wrong x.
+  const target = { names: ['t1', 't2'], starts: new Float64Array([0, 800, 1300]), total: 1300 };
+  const query = { names: ['q1', 'q2'], starts: new Float64Array([0, 1000, 4000]), total: 4000 };
+  const r = parsePafOnto(enc.encode(PAF), target, query);
+  assertEq(r.mismatch, 2);
+  assertEq(r.segments.count, 1); // only the t2 record fits (width 500 == len 500)
+  assertEq(r.segments.x[0], 800); // t2 band start + local 0
+});
+
+test('paf: parsePafOnto remaps genomic-coordinate records onto @offset slices', () => {
+  // t1's band is a 400 bp slice starting at genomic 400 (@offset=400). The
+  // PAF carries full-chromosome t1 coordinates: 500-600 falls inside the
+  // window and lands at local 100. t2's band (width 200, no offset) cannot
+  // hold t2's claimed 500 bp extent → mismatch. q2 stays unknown.
+  const target = {
+    names: ['t1', 't2'],
+    starts: new Float64Array([0, 400, 600]),
+    total: 600,
+    offsets: Float64Array.from([400, 0]),
+  };
+  const query = { names: ['q1'], starts: new Float64Array([0, 1000]), total: 1000 };
+  const r = parsePafOnto(enc.encode(PAF), target, query);
+  assertEq(r.segments.count, 1);
+  assertEq(r.remapped, 1);
+  assertEq(r.mismatch, 1); // the t2 record: claimed len 500 vs band width 200
+  assertEq(r.unknown, 1); // the q2 record
+  assertEq(r.segments.x[0], 100); // 500 - offset 400
+  assertEq(r.segments.y[0], 100); // q1 is slice-local (len matches width)
+});

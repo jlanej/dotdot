@@ -940,18 +940,30 @@ function newLoadIntent() {
   shareBase = null;
 }
 
-/** @param {{segments: import('./core/types.js').SegmentStore, skipped: number, unknown: number}} msg */
+/** @param {{segments: import('./core/types.js').SegmentStore, skipped: number, unknown: number, mismatch?: number, remapped?: number}} msg */
 function onOverlay(msg) {
   state.overlay = { segments: msg.segments, name: overlayName };
   renderer.setOverlay(msg.segments);
   rowOverlay.hidden = false;
   chkOverlay.checked = true;
   const parts = [`Aligner overlay: ${formatCount(msg.segments.count)} calls drawn over the plot.`];
+  if (msg.remapped) {
+    parts.push(`${formatInt(msg.remapped)} full-sequence calls placed by their genomic coordinates.`);
+  }
   if (msg.unknown > 0) parts.push(`${formatInt(msg.unknown)} lines named sequences not on these axes (dropped).`);
+  if (msg.mismatch) {
+    parts.push(
+      `${formatInt(msg.mismatch)} lines carried coordinates for a different sequence extent — ` +
+        'wrong assembly or window? (dropped, not misplaced).',
+    );
+  }
   if (msg.skipped > 0) parts.push(`${formatInt(msg.skipped)} malformed lines skipped.`);
   toast(parts.join(' '));
   updateLegend();
   markDirty();
+  // An ANI grid may have been superseded by this overlay parse — let the
+  // settle watcher re-request it.
+  if (aniMode()) lastContainSig = '';
 }
 
 function clearOverlay() {

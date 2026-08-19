@@ -48,21 +48,44 @@ export class RemoteTwoBit {
   constructor(url, io = {}) {
     this.url = url;
     this.fetchRange = io.fetchRange ?? makeRangeFetcher(url);
-    /** @type {Map<string, number> | null} name -> record offset */
-    this.offsets = null;
-    /** @type {Map<string, SeqMeta>} */
-    this.meta = new Map();
+    /** @type {Promise<Map<string, number>> | null} name -> record offset */
+    this.indexPromise = null;
+    /** @type {Map<string, Promise<SeqMeta>>} */
+    this.metaPromises = new Map();
   }
 
-  /** Parse the header + sequence index (cached). */
-  async index() {
-    if (this.offsets) return this.offsets;
+  /**
+   * Parse the header + sequence index. Memoized as a PROMISE so concurrent
+   * first callers (the x and y annotation lanes, parallel region fetches)
+   * share one request; a rejection un-caches so a transient network error
+   * doesn't poison the reader forever.
+   */
+  index() {
+    if (!this.indexPromise) {
+      this.indexPromise = this.readIndex();
+      this.indexPromise.catch(() => {
+        this.indexPromise = null;
+      });
+    }
+    return this.indexPromise;
+  }
+
+  /** @returns {Promise<Map<string, number>>} */
+  async readIndex() {
     let size = 64 * 1024;
     for (;;) {
       const bytes = await this.fetchRange(0, size);
+      if (bytes.length < 16) throw new Error('Not a 2bit file (response too short for a header).');
       const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
       if (dv.getUint32(0, true) !== SIGNATURE) {
         throw new Error('Not a little-endian 2bit file (bad signature).');
+      }
+      // Version 1 (faToTwoBit -long) stores 64-bit index offsets — parsing
+      // it with this version-0 layout would read garbage offsets, so refuse
+      // by name instead of misdecoding.
+      const version = dv.getUint32(4, true);
+      if (version !== 0) {
+        throw new Error(`Unsupported 2bit version ${version} (only version 0's 32-bit offsets are supported).`);
       }
       const count = dv.getUint32(8, true);
       /** @type {Map<string, number>} */
@@ -78,10 +101,7 @@ export class RemoteTwoBit {
         offsets.set(name, dv.getUint32(p + 1 + nameSize, true));
         p += 1 + nameSize + 4;
       }
-      if (ok) {
-        this.offsets = offsets;
-        return offsets;
-      }
+      if (ok) return offsets;
       if (size > 8 * 1024 * 1024) throw new Error('2bit index unexpectedly large.');
       size *= 4;
     }
@@ -97,9 +117,23 @@ export class RemoteTwoBit {
    * @param {string} name
    * @returns {Promise<SeqMeta>}
    */
-  async seqMeta(name) {
-    const cached = this.meta.get(name);
-    if (cached) return cached;
+  seqMeta(name) {
+    let p = this.metaPromises.get(name);
+    if (!p) {
+      p = this.readSeqMeta(name);
+      p.catch(() => {
+        this.metaPromises.delete(name);
+      });
+      this.metaPromises.set(name, p);
+    }
+    return p;
+  }
+
+  /**
+   * @param {string} name
+   * @returns {Promise<SeqMeta>}
+   */
+  async readSeqMeta(name) {
     const offsets = await this.index();
     const rec = offsets.get(name);
     if (rec === undefined) throw new Error(`Sequence "${name}" is not in this reference.`);
@@ -120,12 +154,12 @@ export class RemoteTwoBit {
       nBlocks.push([dvn.getUint32(i * 4, true), dvn.getUint32(nBlockCount * 4 + i * 4, true)]);
     }
     const maskBlockCount = dvn.getUint32(8 * nBlockCount, true);
+    // A corrupt mask count would silently shift dnaOffset into garbage bases
+    // — the same plausibility cap the N blocks get.
+    if (maskBlockCount > 10_000_000) throw new Error('Implausible 2bit mask-block count.');
     const dnaOffset = rec + 8 + 8 * nBlockCount + 4 + 8 * maskBlockCount + 4;
 
-    /** @type {SeqMeta} */
-    const meta = { dnaSize, dnaOffset, nBlocks };
-    this.meta.set(name, meta);
-    return meta;
+    return { dnaSize, dnaOffset, nBlocks };
   }
 
   /**
@@ -136,35 +170,42 @@ export class RemoteTwoBit {
    * @returns {Promise<Uint8Array>}
    */
   async fetchRegion(name, start, end, onProgress) {
+    if (!Number.isFinite(start) || !Number.isFinite(end)) {
+      throw new Error(`Non-numeric region bounds for ${name}: ${start}-${end}.`);
+    }
     const meta = await this.seqMeta(name);
     const s = Math.max(0, Math.floor(start));
     const e = Math.min(meta.dnaSize, Math.ceil(end));
     if (e <= s) throw new Error(`Empty region ${name}:${start}-${end} (length ${meta.dnaSize}).`);
 
-    const byteA = meta.dnaOffset + (s >> 2);
-    const byteB = meta.dnaOffset + ((e - 1) >> 2) + 1;
+    // Byte math via floor-division, not >>2: positions past 2^31 (legal in
+    // version-0 2bit, real in non-human genomes) wrap negative under 32-bit
+    // shifts. The hot loop walks a relative byte cursor instead.
+    const b0 = Math.floor(s / 4);
+    const byteA = meta.dnaOffset + b0;
+    const byteB = meta.dnaOffset + Math.floor((e - 1) / 4) + 1;
     const packed = await this.fetchRange(byteA, byteB, onProgress);
 
     const out = new Uint8Array(e - s);
-    const b0 = s >> 2;
     let i = s;
-    // Head: bases before the first whole packed byte.
+    // Head: bases before the first whole packed byte (≤ 3 iterations).
     while (i < e && (i & 3) !== 0) {
-      out[i - s] = BASE_ASCII[(packed[(i >> 2) - b0] >> ((3 - (i & 3)) * 2)) & 3];
+      out[i - s] = BASE_ASCII[(packed[Math.floor(i / 4) - b0] >> ((3 - (i & 3)) * 2)) & 3];
       i++;
     }
-    // Middle: whole bytes, four bases per table hit.
+    // Middle: whole bytes, four bases per table hit, byte cursor incremented.
     let w = i - s;
-    for (const mEnd = e - 3; i < mEnd; i += 4, w += 4) {
-      const o4 = packed[(i >> 2) - b0] * 4;
+    let pb = Math.floor(i / 4) - b0;
+    for (const mEnd = e - 3; i < mEnd; i += 4, w += 4, pb++) {
+      const o4 = packed[pb] * 4;
       out[w] = BYTE_BASES[o4];
       out[w + 1] = BYTE_BASES[o4 + 1];
       out[w + 2] = BYTE_BASES[o4 + 2];
       out[w + 3] = BYTE_BASES[o4 + 3];
     }
-    // Tail: the final partial byte.
+    // Tail: the final partial byte (≤ 3 iterations).
     for (; i < e; i++) {
-      out[i - s] = BASE_ASCII[(packed[(i >> 2) - b0] >> ((3 - (i & 3)) * 2)) & 3];
+      out[i - s] = BASE_ASCII[(packed[Math.floor(i / 4) - b0] >> ((3 - (i & 3)) * 2)) & 3];
     }
     for (const [bs, size] of meta.nBlocks) {
       const a = Math.max(bs, s);

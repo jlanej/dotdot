@@ -15,11 +15,14 @@ const td = new TextDecoder();
 /**
  * Parse FASTA bytes into 2-bit-alphabet codes plus a sequence catalog.
  * Single pass over the raw bytes; tolerates CRLF, lowercase, blank lines,
- * headerless single-sequence files, and `;` comment lines.
+ * headerless single-sequence files, and `;` comment lines. Suspicious
+ * shapes that parse but usually mean a broken file (a `>` inside a
+ * sequence line — a record swallowed by a missing newline; a zero-length
+ * record) come back as human-readable `warnings`.
  *
  * @param {Uint8Array} bytes
  * @param {string} [fallbackName] name used for a headerless file
- * @returns {{catalog: AxisCatalog, codes: Uint8Array}}
+ * @returns {{catalog: AxisCatalog, codes: Uint8Array, warnings: string[]}}
  */
 export function parseFasta(bytes, fallbackName = 'seq') {
   const n = bytes.length;
@@ -33,6 +36,7 @@ export function parseFasta(bytes, fallbackName = 'seq') {
   let w = 0;
   let i = 0;
   let sawRecord = false;
+  let gtMidLine = 0;
 
   while (i < n) {
     const b = bytes[i];
@@ -75,7 +79,10 @@ export function parseFasta(bytes, fallbackName = 'seq') {
       while (i < n) {
         const c = bytes[i];
         if (c === NL) break;
-        if (c !== CR && c !== SP && c !== TAB) codes[w++] = CODE[c];
+        if (c !== CR && c !== SP && c !== TAB) {
+          if (c === GT) gtMidLine++;
+          codes[w++] = CODE[c];
+        }
         i++;
       }
       i++;
@@ -90,11 +97,28 @@ export function parseFasta(bytes, fallbackName = 'seq') {
   for (let s = 0; s < startList.length; s++) starts[s] = startList[s];
   starts[startList.length] = w;
 
+  /** @type {string[]} */
+  const warnings = [];
+  if (gtMidLine > 0) {
+    warnings.push(
+      `${gtMidLine} '>' character${gtMidLine > 1 ? 's' : ''} inside sequence lines — a header without a ` +
+        'preceding newline (concatenated files?) was read as sequence, so a record may be missing',
+    );
+  }
+  /** @type {string[]} */
+  const empties = [];
+  for (let s = 0; s < names.length; s++) {
+    if (starts[s] === starts[s + 1]) empties.push(names[s]);
+  }
+  if (empties.length > 0) {
+    warnings.push(`empty record${empties.length > 1 ? 's' : ''}: ${empties.slice(0, 3).join(', ')}${empties.length > 3 ? '…' : ''}`);
+  }
+
   /** @type {import('../core/types.js').AxisCatalog} */
   const catalog = { names, starts, total: w };
   if (offsetList.some((o) => o > 0)) catalog.offsets = Float64Array.from(offsetList);
 
-  return { catalog, codes: codes.subarray(0, w) };
+  return { catalog, codes: codes.subarray(0, w), warnings };
 }
 
 /**
@@ -113,12 +137,20 @@ export function looksLikeFasta(bytes) {
 /**
  * Merge separately parsed FASTAs into one axis — the multi-file axis
  * feature: sequences from every file lie end to end in one catalog, each
- * keeping its own name, ruler, and @offset display coordinates.
- * @param {{catalog: AxisCatalog, codes: Uint8Array}[]} parts
- * @returns {{catalog: AxisCatalog, codes: Uint8Array}}
+ * keeping its own name, ruler, and @offset display coordinates. Duplicate
+ * record names across the merge (hap1.fa + hap2.fa both carrying "chr1")
+ * are legal but make name-based lookups ambiguous — they surface as a
+ * warning rather than a silent first/last-wins.
+ * @param {{catalog: AxisCatalog, codes: Uint8Array, warnings?: string[]}[]} parts
+ * @returns {{catalog: AxisCatalog, codes: Uint8Array, warnings?: string[]}}
  */
 export function mergeParsedFasta(parts) {
-  if (parts.length === 1) return parts[0];
+  if (parts.length === 1) return parts[0]; // identity — warnings ride along
+  /** @type {string[]} */
+  const warnings = [];
+  for (const p of parts) {
+    if (p.warnings) warnings.push(...p.warnings);
+  }
   let total = 0;
   let anyOffsets = false;
   for (const p of parts) {
@@ -144,8 +176,21 @@ export function mergeParsedFasta(parts) {
     base += p.codes.length;
   }
   startList.push(base);
+  const seen = new Set();
+  const dups = new Set();
+  for (const nm of names) {
+    if (seen.has(nm)) dups.add(nm);
+    seen.add(nm);
+  }
+  if (dups.size > 0) {
+    const list = [...dups].slice(0, 3).join(', ');
+    warnings.push(
+      `duplicate sequence names across files (${list}${dups.size > 3 ? '…' : ''}) — ` +
+        'name-based lookups (region jump, aligner overlays) are ambiguous for them',
+    );
+  }
   /** @type {AxisCatalog} */
   const catalog = { names, starts: Float64Array.from(startList), total: base };
   if (anyOffsets) catalog.offsets = Float64Array.from(offsetList);
-  return { catalog, codes };
+  return { catalog, codes, warnings };
 }
