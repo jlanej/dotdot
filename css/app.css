@@ -7,12 +7,17 @@
   --page: #f9f9f7;
   --ink: #0b0b0b;
   --ink-2: #52514e;
-  --muted: #898781;
+  --muted: #716f68; /* 4.9:1 on --page — hints and tick labels stay AA */
   --grid: #e1e0d9;
   --baseline: #c3c2b7;
   --border: rgba(11, 11, 11, 0.1);
-  --accent: #2a78d6;   /* categorical slot 1 — forward strand */
+  /* Chrome accent: the forward-strand hue, darkened so link text on the page
+     and white text on primary buttons both clear 4.5:1 (the data layer keeps
+     the exact validated palette via the JS colormap). */
+  --accent: #2465bd;
   --accent-2: #eb6834; /* categorical slot 2 — reverse strand */
+  /* Primary-button fill, both themes: white label ≥ 4.5:1. */
+  --accent-strong: #2465bd;
   --critical: #d03b3b;
   --panel: #ffffff;
 }
@@ -342,8 +347,8 @@ input.combo:focus,
 .btn.primary {
   width: 100%;
   margin-top: 6px;
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
   color: #fff;
   font-weight: 600;
 }

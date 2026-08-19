@@ -75,7 +75,8 @@ same view live:
   identity by exact multiset containment, the satellite view that needs no
   enumeration at all (see below).
 - **Honest by construction** — every approximation is either visible or
-  consented to: capped repeat regions hatch and count in the scoreboard, the
+  consented to: capped repeat regions count in the scoreboard (and hatch in
+  the identity-heatmap view), the
   effective cutoff prints in a note when it tightens, quadratic satellite
   windows are *predicted* from the occurrence histogram and asked about
   before the grind (with a one-click fix), exact mode over 128 Mb asks with a
@@ -131,7 +132,7 @@ No installation. Serve the repo statically and open it:
 python3 scripts/serve.py
 ```
 
-Then visit <http://127.0.0.1:8420/> and click **Demo: chr17 loci** — real
+Then visit <http://127.0.0.1:8420/> and click **chr17 loci demo** — real
 data, computed alignment-free in your browser: two slices of T2T-CHM13
 chr17, **streamed live from the reference** (committed copies are the
 offline fallback), against the corresponding regions of both NA19240
@@ -145,7 +146,7 @@ haplotypes, with minimap2's calls arriving as the audit overlay.
   through. Jump to it with `G` → `chr17_ROI10.9:10.88M-10.92M` (true
   coordinates work directly).
 
-**Full chr17** runs the whole-chromosome comparison — alignment-free
+**full chr17 × NA19240** runs the whole-chromosome comparison — alignment-free
 whenever the fetched FASTAs are present (`scripts/fetch_realdata.sh`),
 falling back to the committed aligner PAF on a fresh clone. The intended
 rhythm at that scale: let the coarse auto-sampled pass finish, pan the
@@ -185,14 +186,16 @@ Satellite arrays are quadratic: N repeat copies really do match N² ways, so
 the chr8 centromere alone would need ~6 *billion* anchor pairs — no segment
 budget reaches that, and every dot-plot tool that caps repeat k-mers quietly
 renders "too deep to enumerate" the same as "not similar". dotdot refuses the
-lie twice. In match modes, capped regions wear an explicit **hatch** ("not
-searched", counted in the scoreboard, bought back with the **repeat budget**
-dial). And the **ANI heatmap** draw mode escapes the trap altogether: every
-pair of tiles in the visible window is compared by the **multiset
-containment** of its exact k-mer counts, mapped to ANI = c^(1/k) — no matches
-enumerated, no occurrence cap, nothing skipped. Cost scales with *tiles*,
-never occurrences, so the deepest satellite core prices the same as unique
-sequence.
+lie twice. In the identity-heatmap view, capped regions wear an explicit
+**hatch** ("not searched" — counted in the scoreboard in every mode, bought
+back with the **repeat budget** dial). And the **ANI heatmap** draw mode
+escapes the trap altogether: every pair of tiles in the visible window is
+compared by the **multiset containment** of its exact k-mer counts, mapped to
+ANI = c^(1/k) — no matches enumerated, no occurrence cap (windows past ~48 Mb
+subsample both tiles' multisets uniformly, a symmetric estimate; zoom in and
+the counts are exact). Per-group cost is bounded by the tiles a k-mer
+touches — at worst tiles², never occurrences² — so the deepest satellite
+core costs on the order of unique sequence.
 
 ![the chr8 centromere as a complete ANI mosaic: viridis identity landscape with the young HOR core in yellow](docs/ani_chr8_cen.png)
 
@@ -225,7 +228,7 @@ repeat families as families, regardless of strand. The margin lanes agree:
 CenSat names the blocks (`hsat3_22_17`, `mon_22_7`…) while the multiplicity
 lane traces the same topology from the index alone — no annotation needed,
 so it works on any FASTA. Live:
-[`?ref=t2t&refregion=chr22:10M-13M` + `col=2`](https://jlanej.github.io/dotdot/?ref=t2t&refregion=chr22%3A10%2C000%2C000-13%2C000%2C000#v=0-3000001:0-3000001&len=100&col=2).*
+[`?ref=t2t&refregion=chr22:10M-13M` + `len=100&col=2`](https://jlanej.github.io/dotdot/?ref=t2t&refregion=chr22%3A10%2C000%2C000-13%2C000%2C000#v=0-3000001:0-3000001&len=100&col=2).*
 
 ### Reference genomes, no downloads
 
@@ -251,7 +254,8 @@ Any static file server hosts dotdot as-is (GitHub Pages included). The
 bundled server also sends `Cross-Origin-Opener-Policy: same-origin` and
 `Cross-Origin-Embedder-Policy: require-corp` — with those headers (Netlify and
 Cloudflare Pages can set them; GitHub Pages cannot) the k-mer engine matches
-on all CPU cores; without them it runs the identical single-worker path.
+on up to 8 CPU cores (two are left for the UI); without them it runs the
+identical single-worker path.
 
 ### Loading data
 
@@ -262,10 +266,10 @@ on all CPU cores; without them it runs the identical single-worker path.
 | Many FASTAs | file buttons multi-select to stack several files on one axis; dropping 3+ makes the first the target and the rest the query — each sequence keeps its own ruler, with alternating band shading separating regions |
 | PAF / PAF.gz | optional aligner audit: any PAF-emitting aligner's output on the same axes |
 | Reference dropdown | T2T-CHM13v2.0 / GRCh38 windows streamed from UCSC 2bit files — self-plot, or the target for added FASTAs |
-| URL parameters | `?demo=1` · `?ref=t2t&refregion=chrX:57.8M-60.7M` · `?target=<url>&query=<url>[&overlay=<paf-url>]` · `?paf=<url>` · plus `k=`, `gap=`, `occ=` (`off` = no repeat masking), `minrun=`, `sample=` (`off` = truly exact, `off 512M` pre-approves the RAM), `budget=` (`off` = unbounded anchors), `anitiles=`, `region=`, and a `#v=` view fragment carrying viewport, draw mode (`draw=heat`/`ani`), color mode, and filters |
+| URL parameters | `?demo=1` · `?ref=t2t&refregion=chrX:57.8M-60.7M` · `?target=<url>&query=<url>[&overlay=<paf-url>]` · `?paf=<url>` · plus `k=`, `gap=`, `occ=` (`off` = no repeat masking), `minrun=`, `sample=` (`off` = truly exact, `off 512M` pre-approves the RAM), `budget=` (`off` = unbounded anchors), `wall=` (raise the segment wall, to `64M`), `anitiles=`, `region=`, and a `#v=` view fragment carrying viewport, draw mode (`draw=heat`/`ani`), color mode, filters, and auto-refine |
 | Share view | one click copies a link reproducing the exact data, viewport, draw and color modes, display settings, and non-default matching options — every finding becomes a URL |
 
-Practical envelope: up to ~50 Mb of combined sequence the engine runs dense
+Practical envelope: up to ~48 Mb of sequence per axis the engine runs dense
 and exact (bacteria, fungi, chromosome pairs, plasmids, viral genomes).
 Beyond that it switches itself into a sampled genome mode — target-index
 striding, query-position sampling, an occurrence cutoff chosen from the
@@ -277,9 +281,9 @@ on both axes (guarded by a consent popup with the real RAM number past
 128 Mb of target, pre-approvable as `off 512M`, engine wall at ~1 Gb), and
 the occurrence cap and anchor budget disable outright — verified by the
 self-plot litmus that every k-mer of chr22 indexes with zero cap leaks. Try
-the committed sample:
-[`?target=testdata/target.fa&query=testdata/query.fa`](http://127.0.0.1:8420/?target=testdata/target.fa&query=testdata/query.fa)
-(regenerate the FASTAs with `scripts/make_testdata.py`).
+the bundled sample pair — generate the FASTAs once with
+`scripts/make_testdata.py` (they are git-ignored), then open
+[`?target=testdata/target.fa&query=testdata/query.fa`](http://127.0.0.1:8420/?target=testdata/target.fa&query=testdata/query.fa).
 
 ## Real data at scale: chr17 vs. NA19240
 
@@ -311,12 +315,12 @@ on an Apple-silicon laptop:
 both haplotype bands, loaded standalone in under a second — each band ruled
 in its own coordinates.*
 
-One-click versions of this dataset live on the demo buttons: **Demo: chr17
-loci** (target slices streamed live from the T2T reference, committed
+One-click versions of this dataset live on the demo buttons: **chr17 loci
+demo** (target slices streamed live from the T2T reference, committed
 copies as the offline fallback — always alignment-free, including the
-heterozygous 4.9 kb deletion at chr17:10.895 Mb) and **Full chr17**
-(alignment-free when `scripts/fetch_realdata.sh` has run; the committed
-574 kB minimap2 PAF otherwise).
+heterozygous 4.9 kb deletion at chr17:10.895 Mb) and **full chr17 ×
+NA19240** (alignment-free when `scripts/fetch_realdata.sh` has run; the
+committed 574 kB minimap2 PAF otherwise).
 
 ## Progressive detail: sampling and Refine view
 
@@ -431,13 +435,13 @@ open http://127.0.0.1:8420/tests/typecheck.html   # strict typecheck in the brow
 ```
 
 - Tests are dependency-free dual-runtime suites: the same files run in the
-  browser page and under `deno test tests/` in CI (143 tests: engine
+  browser page and under `deno test tests/` in CI (146 tests: engine
   coordinates on both strands and all k, reverse-complement mapping, gap
   bridging, boundary discipline, range-restricted indexing/matching,
   multicore chunk-stitch parity against single-core, sampling/density
   resolution and the exact-mode guards, occurrence-cap semantics including
   true off, saturation intervals and hatch painting, the multiplicity
-  profile and its ramps, multiset-containment ANI grids, share-link
+  profile and its ramps, multiset-containment ANI grids, share-hash
   round-trips, parsers, BGZF/gzip fixtures, 2bit and bigBed decoding against
   in-memory fixtures, camera math, picking, region expressions with
   true-coordinate offsets, colormap monotonicity, formatting).

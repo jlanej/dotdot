@@ -21,6 +21,7 @@ const CR = 13;
 const TAB = 9;
 const HASH = 35;
 const PLUS = 43;
+const MINUS = 45;
 
 const td = new TextDecoder();
 
@@ -77,7 +78,8 @@ function scanRecords(bytes, onRecord) {
           Number.isFinite(qlen) && Number.isFinite(qs) && Number.isFinite(qe) &&
           Number.isFinite(tlen) && Number.isFinite(ts) && Number.isFinite(te) &&
           Number.isFinite(nmatch) && Number.isFinite(alnlen) &&
-          fe[4] - fs[4] === 1 && qe > qs && te > ts
+          fe[4] - fs[4] === 1 && (strandByte === PLUS || strandByte === MINUS) &&
+          qe > qs && te > ts
         ) {
           const qName = td.decode(bytes.subarray(fs[0], fe[0]));
           const tName = td.decode(bytes.subarray(fs[5], fe[5]));

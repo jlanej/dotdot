@@ -46,18 +46,32 @@ export function makeRangeFetcher(url, chunkBytes = 8 * 1024 * 1024) {
     let w = 0;
     for (let s = start; s < endEx; s += chunkBytes) {
       const e = Math.min(endEx, s + chunkBytes);
+      // Chunk spans are always fully inside the caller's request, so a short
+      // body is never a legitimate EOF clamp — it is a truncated transfer.
+      // Silently zero-filling here would decode as plausible wrong sequence
+      // (0x00 = poly-T in 2bit); fail the chunk instead so the retry (and
+      // then the caller) sees a loud, actionable error.
+      const oneExact = async () => {
+        const part = await one(s, e);
+        if (part.length !== e - s) {
+          throw new Error(
+            `Range request returned ${part.length} of ${e - s} bytes — truncated response from the server`,
+          );
+        }
+        return part;
+      };
       /** @type {Uint8Array} */
       let part;
       try {
-        part = await one(s, e);
+        part = await oneExact();
       } catch {
         // One retry per chunk: a 60 MB stream should survive a transient
         // hiccup without starting over.
         await new Promise((r) => setTimeout(r, 1000));
-        part = await one(s, e);
+        part = await oneExact();
       }
-      out.set(part.subarray(0, e - s), w);
-      w += e - s;
+      out.set(part, w);
+      w += part.length;
       if (onProgress) onProgress(w, total);
     }
     return out;

@@ -267,10 +267,15 @@ function computeKmer(id, tParsed, qParsed, optsIn, t0, window = null) {
   };
   const budgetX = /** @type {any} */ (opts).budgetX || 1;
   const budgetLabel = budgetX === Infinity ? 'budget off' : `budget ${budgetX}×`;
+  // With cap and budget both off the effective cutoff is Infinity — say
+  // "off", never interpolate the literal Infinity into user-facing text.
+  const cutoffLabel = Number.isFinite(maxOccEff)
+    ? `repeat cutoff ${maxOccEff * stride}× (auto${budgetX > 1 ? `, ${budgetLabel}` : ''})`
+    : 'repeat cutoff off';
   const samplingNote =
     stride > 1 || qSample > 1 || maxOccEff < userCapEntries
       ? `large input: sampling 1/${stride} target k-mers, 1/${qSample} query positions; ` +
-        `repeat cutoff ${maxOccEff * stride}× (auto${budgetX > 1 ? `, ${budgetLabel}` : ''})`
+        cutoffLabel
       : '';
   const satNote =
     satBp > 0.01 * tLenEff

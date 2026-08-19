@@ -21,7 +21,7 @@
 
 /**
  * @typedef {Object} KmerOptions
- * @property {number} k          word size, 4..16
+ * @property {number} k          word size, 4..26 (>16 uses exact-double packing)
  * @property {number} maxGap     bridge runs on one diagonal across <= this many bases
  * @property {number} maxOcc     skip k-mers with more target occurrences than this
  * @property {number} minRunLen  drop merged runs shorter than this many bases (0 = keep all)

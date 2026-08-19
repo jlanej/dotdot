@@ -10,9 +10,10 @@
 #   testdata/demo/query.fa[.gz]     matching NA19240 haplotype slices
 #   testdata/demo/minimap2_demo.paf audit-overlay alignments (local record coords)
 #
-# The target slices are exact coordinate cuts, so the committed fallback stays
-# byte-identical to what the app streams live from the UCSC 2bit at the same
-# coordinates (js/main.js loadDemo must use the same LOCI ranges below).
+# The target slices are exact coordinate cuts, so the committed fallback is
+# parse-identical to what the app streams live from the UCSC 2bit at the same
+# coordinates — same records, names, and @offset tokens; only line wrapping
+# differs (js/main.js loadDemo must use the same LOCI ranges below).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

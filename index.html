@@ -25,7 +25,8 @@
           <div class="minlen-row">
             <input type="range" id="in-minlen-range" min="0" max="100" step="1" value="0"
               aria-label="min segment length (log scale)" />
-            <input type="text" id="in-minlen" class="combo" list="dl-minlen" value="off" spellcheck="false" autocomplete="off" />
+            <input type="text" id="in-minlen" class="combo" list="dl-minlen" value="off" spellcheck="false" autocomplete="off"
+              aria-label="min segment length" />
           </div>
           <datalist id="dl-minlen">
             <option value="off"></option>
@@ -101,7 +102,7 @@
         <h2>Matching <button class="help" data-help="matching" aria-label="about matching options">?</button></h2>
         <div class="ctl">
           <label for="in-k">k-mer size <button class="help" data-help="k">?</button>
-            <input type="number" id="in-k-num" min="4" max="26" step="1" value="15" /></label>
+            <input type="number" id="in-k-num" min="4" max="26" step="1" value="15" aria-label="k-mer size" /></label>
           <input type="range" id="in-k" min="8" max="26" step="1" value="15" />
         </div>
         <div class="ctl">

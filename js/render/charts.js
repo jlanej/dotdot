@@ -148,9 +148,12 @@ export function groupedBarsSVG(spec) {
       const v = Number(spec.series[si].values[b] ?? 0);
       if (v < 1) continue;
       const x = padL + b * groupW + 1 + si * (barW + 1);
-      const y = padT + yOf(v);
+      // A count of 1 is log10 = 0 — floor the bar so an occupied bin never
+      // renders identically to an empty one on an axis whose baseline is 1.
+      const h = Math.max(1.5, plotH - yOf(v));
+      const y = padT + plotH - h;
       parts.push(
-        `<rect x="${r1(x)}" y="${r1(y)}" width="${r1(barW)}" height="${r1(padT + plotH - y)}" rx="1.5" fill="${spec.series[si].color}"/>`,
+        `<rect x="${r1(x)}" y="${r1(y)}" width="${r1(barW)}" height="${r1(h)}" rx="1.5" fill="${spec.series[si].color}"/>`,
       );
     }
   }

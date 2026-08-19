@@ -221,7 +221,9 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
   theme = readTheme();
   renderer.setTheme(mode);
   updateLegend();
+  if (state.data) updateStats(); // scoreboard swatches are theme-derived
   lastAnnoSig = ''; // multiplicity-lane ink is theme-mixed; rebuild
+  repaintHeatCanvas(); // heat/ANI pixels were painted in the old palette
   markDirty();
 });
 
@@ -647,6 +649,10 @@ function onData(data, reqId = -1) {
   heatBin = null;
   heatSat = null;
   lastHeatSig = '';
+  // Recompute on same-sized data refits to identical bounds — the same view
+  // signature. Without this reset the ANI settle watcher would consider the
+  // stale grid current and never rebuild (mode says ANI, segments draw).
+  lastContainSig = '';
   btnCompute.textContent = data.source === 'kmer' ? 'Recompute' : 'Compute dot plot';
 
   // Build the picking grid after the first frame so the plot appears
@@ -1447,7 +1453,30 @@ function rebuildHeatmap() {
   heatCanvas.height = ny;
   /** @type {CanvasRenderingContext2D} */ (heatCanvas.getContext('2d')).putImageData(img, 0, 0);
   heatBin = bin;
+  // Direct calls (mode change, strand toggle, pending view) count as the
+  // settle rebin for the current view — without the stamp the next tick
+  // would rebin the same millions of segments a second time.
+  lastHeatSig = lastViewSig;
   updateLegend();
+  markDirty();
+}
+
+/**
+ * Repaint the existing heat/ANI bin with the current theme's colormap.
+ * The bin grid itself is theme-independent — only the paint changes — so a
+ * theme flip never needs a rebin or a worker round-trip.
+ */
+function repaintHeatCanvas() {
+  if (!heatBin || !heatCanvas || !heatLike()) return;
+  const cm = buildColormap(mode);
+  if (heatSat) {
+    Object.assign(
+      heatSat,
+      mode === 'dark' ? { r: 138, g: 145, b: 160, a: 150 } : { r: 122, g: 128, b: 142, a: 165 },
+    );
+  }
+  const img = paintHeatmap(heatBin, aniMode() ? cm.aniData : cm.data, 0, heatRange.lo, heatRange.hi, heatSat);
+  /** @type {CanvasRenderingContext2D} */ (heatCanvas.getContext('2d')).putImageData(img, 0, 0);
   markDirty();
 }
 
@@ -1623,7 +1652,8 @@ async function loadDemo() {
     let source;
     try {
       // Must match scripts/make_demo.sh LOCI so the streamed target stays
-      // byte-identical to the committed fallback.
+      // interchangeable with the committed fallback (same records, names,
+      // and @offset coordinates; only line wrapping differs).
       const buf = await streamRefRegions(REFERENCES[0], [
         { chrom: 'chr17', start0: 18_000_000, end0: 19_600_000, name: 'chr17_17p11.2' },
         { chrom: 'chr17', start0: 10_600_000, end0: 11_200_000, name: 'chr17_ROI10.9' },
@@ -1785,7 +1815,10 @@ let autoTimer;
 function scheduleAutoCompute() {
   clearTimeout(autoTimer);
   autoTimer = setTimeout(() => {
-    if (state.fileTarget && !state.computing) computeKmer();
+    // No in-flight guard: submit() supersedes safely, and skipping here
+    // would leave the fresh data chips describing a plot that never
+    // computes (the old result still passes the id gate and renders).
+    if (state.fileTarget) computeKmer();
   }, 150);
 }
 
@@ -2569,9 +2602,13 @@ window.addEventListener('keydown', (e) => {
       break;
     case '1':
       chkFwd.checked = !chkFwd.checked;
+      // Programmatic .checked fires no change event — dispatch it so the
+      // heatmap rebin (and anything else on the listener) sees the toggle.
+      chkFwd.dispatchEvent(new Event('change', { bubbles: true }));
       break;
     case '2':
       chkRev.checked = !chkRev.checked;
+      chkRev.dispatchEvent(new Event('change', { bubbles: true }));
       break;
     default:
       return;
@@ -2737,7 +2774,7 @@ function onRegionRefined(msg) {
   }
   const total = keep.length + ns.count;
   if (total > Math.max(20_000_000, (wallOverride || 16_000_000) * 1.25)) {
-    toast('Refining this window would exceed the segment budget — narrow the view or raise min match length.', true);
+    toast('Refining this window would exceed the segment wall — narrow the view or raise min match length.', true);
     return;
   }
   const merged = allocSegments(total);
@@ -2818,11 +2855,16 @@ $('btn-clear').addEventListener('click', () => {
   heatBin = null;
   heatSat = null;
   lastHeatSig = '';
+  lastContainSig = '';
+  lastViewSig = ''; // restart the settle bus — the next data must not
+  lastJump = { expr: '', idx: -1 }; // inherit this session's signatures
+  clearTimeout(autoTimer);
   activeReq = -1;
   setComputing(false);
   newLoadIntent();
   boundActions = null;
   lastKmer = null;
+  lastContain = null;
   state.data = null;
   state.grid = null;
   state.view = null;
@@ -2976,7 +3018,7 @@ function updateLegend() {
     legendEl.innerHTML =
       `<div class="row"><span class="lab">tile</span><span class="ramp" style="background:${cm.aniRampCss()}"></span></div>` +
       `<div class="row"><span class="lab"></span><span class="lab">${(heatRange.lo * 100).toFixed(1)}% k-mer ANI</span><span style="flex:1"></span><span class="lab">${(heatRange.hi * 100).toFixed(1)}%</span></div>` +
-      `<div class="row"><span class="lab" style="white-space:normal">multiset containment — no cap, nothing skipped${res}</span></div>`;
+      `<div class="row"><span class="lab" style="white-space:normal">multiset containment — no occurrence cap${res}</span></div>`;
   } else if (heatMode()) {
     // The heatmap's ramp is contrast-stretched to the observed tile range.
     legendEl.innerHTML =
@@ -3376,7 +3418,7 @@ const HELP = {
   k:
     'Exact-match word size — type any value from <b>4 to 26</b> (the slider covers 8+). Longer k ' +
     '→ fewer chance matches and faster, but blinder to diverged sequence; 15 suits most ' +
-    'comparisons, 16–21 helps at chromosome scale. k above 16 doubles index memory.',
+    'comparisons, 16–21 helps at chromosome scale. k above 16 costs ~1.5× index memory.',
   gap:
     'Merge co-linear matches on one diagonal across up to this many mismatched bases. Type any ' +
     'value ("64", "1kb", …) — presets are suggestions. Larger values give longer, cleaner ' +
@@ -3415,7 +3457,7 @@ const HELP = {
     'query-side interval only — the target may still stride, and the result note says when. ' +
     '<b>off</b> is <b>true full density</b>, unbounded: every target k-mer indexed, every ' +
     'query position tested, occurrence caps in exact counts. Because the index lives in RAM ' +
-    '(~0.5 GB per 50 Mb, about double for k &gt; 16), going past 128 Mb of target first ' +
+    '(~0.5 GB per 50 Mb, ~1.5× that for k &gt; 16), going past 128 Mb of target first ' +
     '<b>asks</b> with the real estimate — one click to proceed or fall back. Pre-approve with ' +
     '<b>off 512M</b> (skips the ask up to 512 Mb; travels in share links). The only hard wall ' +
     'is ~1 Gb, where the browser cannot allocate the index at all. Tip: keep auto for the ' +
