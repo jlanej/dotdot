@@ -655,30 +655,45 @@ async function handleBelongs(req) {
   const scaled = pickScaled(space.codes.length);
   const rec = req.opts.rec;
   if (rec != null && rec >= 0 && rec < nR) {
+    const winBp = Number(/** @type {any} */ (req.opts).win) > 0
+      ? Number(/** @type {any} */ (req.opts).win)
+      : undefined;
     const r = gatherDecompose(
-      space.codes, space.bounds, rec, k, { scaled },
+      space.codes, space.bounds, rec, k, { scaled, tileBp: winBp },
       (d, t) => progress(req.id, 'Decomposing record', d / t),
     );
-    post({
-      id: req.id,
-      type: 'belongsGather',
-      rec,
-      k,
-      scaled: r.scaled,
-      tileBp: r.tileBp,
-      totMass: r.totMass,
-      explained: r.explained,
-      truncated: r.truncated,
-      // Concatenation coords → record-local coords; main owns the catalogs
-      // and turns these into names and genomic positions.
-      components: r.components.map((c) => ({
-        rec: c.rec,
-        lo: c.lo - space.bounds[c.rec],
-        hi: c.hi - space.bounds[c.rec],
-        mass: c.mass,
-      })),
-      elapsedMs: performance.now() - t0,
-    });
+    post(
+      {
+        id: req.id,
+        type: 'belongsGather',
+        rec,
+        k,
+        scaled: r.scaled,
+        tileBp: r.tileBp,
+        totMass: r.totMass,
+        explained: r.explained,
+        contestedTotal: r.contestedTotal,
+        truncated: r.truncated,
+        // Concatenation coords → record-local coords; main owns the catalogs
+        // and turns these into names and genomic positions.
+        components: r.components.map((c) => ({
+          rec: c.rec,
+          lo: c.lo - space.bounds[c.rec],
+          hi: c.hi - space.bounds[c.rec],
+          mass: c.mass,
+          contested: c.contested,
+        })),
+        // Record-side localization: paint[qw*nR + r] = claimed mass of slice
+        // qw attributed to record r; totalPerQwin normalizes per slice.
+        paint: r.paint,
+        qWin: r.qWin,
+        qwinBp: r.qwinBp,
+        totalPerQwin: r.totalPerQwin,
+        nR,
+        elapsedMs: performance.now() - t0,
+      },
+      [r.paint.buffer, r.totalPerQwin.buffer],
+    );
     return;
   }
   const m = belongsMatrix(

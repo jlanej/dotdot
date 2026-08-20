@@ -163,6 +163,17 @@ test('compute: belongs gather — record-local coordinates, cross-plot record or
   assertEq(g.rec, 2);
   assertEq(g.totMass, 2000 - 14);
   assertEq(g.components.length, 2, `two source windows, got ${g.components.length}`);
+  // The chimera diagnostics ride along: paint localizes each half to its
+  // source record, contested is near zero (x and y are unrelated).
+  assertEq(g.nR, 3);
+  assertEq(g.paint.length, g.qWin * 3);
+  assert(g.contestedTotal < 0.02 * g.explained, `unrelated homes barely contested (${g.contestedTotal})`);
+  const firstHalfFromX = (() => {
+    let s = 0;
+    for (let qw = 0; qw < Math.floor(g.qWin / 2) - 1; qw++) s += g.paint[qw * 3 + 0];
+    return s;
+  })();
+  assert(firstHalfFromX > 0, 'paint attributes the first half to record x');
   for (const c of g.components) {
     assert(c.rec === 0 || c.rec === 1, 'components land in target records');
     assert(c.lo >= 0 && c.hi <= 3000, `record-local coords, got [${c.lo}, ${c.hi})`);

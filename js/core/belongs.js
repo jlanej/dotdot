@@ -299,79 +299,115 @@ export function belongsMatrix(codes, bounds, k, opts = {}, onProgress) {
  * @property {number} lo window start, concatenation coords (inclusive)
  * @property {number} hi window end, concatenation coords (exclusive)
  * @property {number} mass sampled k-mer mass claimed by this window
+ * @property {number} contested claimed mass whose species also occur in at
+ *   least one OTHER record — content that could have landed elsewhere; the
+ *   greedy's choice between such homes is parsimony (ties break to load
+ *   order), not evidence
  */
 
 /**
  * Greedy decomposition of record `rec`'s k-mer mass over uniform windows of
- * every OTHER record: sourmash-gather semantics at window resolution. Each
- * round claims the window explaining the most still-unclaimed mass, then
- * subtracts its claim — a k-mer copy shared by two windows is attributed to
- * exactly one, so component masses are disjoint and sum to at most the
- * record's total. Adjacent chosen windows of one record merge into ranges.
+ * every OTHER record: sourmash-gather semantics at window resolution.
+ *
+ * Claiming is a transportation step under twin budgets — per species,
+ * take = min(record copies remaining, window copies unspent), debited from
+ * BOTH sides — so claims are disjoint: a record copy is never explained
+ * twice and a window never explains more copies than it holds. Adjacent
+ * chosen windows of one record merge into ranges.
+ *
+ * Beyond the components, two diagnostics separate "misassembled" from
+ * "highly homologous" from "clearly one source":
+ * - paint: the record is split into qWindows equal slices, and every claim
+ *   is distributed over the slices its species occupies (proportional to
+ *   the species' copy counts there). paint[qw*nR + r] = claimed mass of
+ *   slice qw attributed to record r. A chimera shows spatially SEGMENTED
+ *   colors; a clean placement one color; unexplained slices stay dark.
+ * - contested (per component + total): claimed mass whose species exist in
+ *   ≥ 2 distinct candidate records. High contested = the attribution was a
+ *   coin flip between near-equal homes — read the matrix row for ambiguity.
  *
  * @param {Uint8Array} codes concatenation of every record's codes
  * @param {Float64Array | number[]} bounds record boundaries (see belongsMatrix)
  * @param {number} rec the record to decompose
  * @param {number} k
  * @param {{scaled?: number, cap?: number, maxTiles?: number, maxRounds?: number,
- *          minFrac?: number, minTileBp?: number}} [opts]
+ *          minFrac?: number, minTileBp?: number, tileBp?: number, qWindows?: number}} [opts]
  * @param {(done: number, total: number) => void} [onProgress]
  * @returns {{components: GatherComponent[], totMass: number, explained: number,
- *            tileBp: number, scaled: number, truncated: boolean}}
+ *            contestedTotal: number, tileBp: number, scaled: number,
+ *            truncated: boolean, paint: Float64Array, qWin: number,
+ *            qwinBp: number, totalPerQwin: Float64Array}}
  */
 export function gatherDecompose(codes, bounds, rec, k, opts = {}, onProgress) {
   const nR = bounds.length - 1;
   const maxTiles = Math.max(16, opts.maxTiles ?? 192);
-  const maxRounds = Math.max(1, opts.maxRounds ?? 512);
-  const minFrac = opts.minFrac ?? 0.005;
+  const maxRounds = Math.max(1, opts.maxRounds ?? 2048);
+  const minFrac = opts.minFrac ?? 0.001;
   const scaled = opts.scaled ?? pickScaled(codes.length, opts.cap);
   const recLo = Number(bounds[rec]);
   const recHi = Number(bounds[rec + 1]);
+  const recLen = Math.max(1, recHi - recLo);
   const otherSpan = Math.max(1, codes.length - (recHi - recLo));
-  const tileBp = Math.max(opts.minTileBp ?? 1024, Math.ceil(otherSpan / maxTiles));
+  // Window width: explicit override (floored, and coarsened so the tile
+  // count stays walkable), else span/budget with a floor.
+  let tileBp;
+  if (opts.tileBp && opts.tileBp > 0) {
+    tileBp = Math.max(256, Math.floor(opts.tileBp), Math.ceil(otherSpan / 8192));
+  } else {
+    tileBp = Math.max(opts.minTileBp ?? 1024, Math.ceil(otherSpan / maxTiles));
+  }
+  const qWinAsk = Math.max(1, Math.min(opts.qWindows ?? 96, recLen));
+  const qwinBp = Math.ceil(recLen / qWinAsk);
+  // The realized slice count (ceil rounding can undershoot the ask).
+  const qWin = Math.ceil(recLen / qwinBp);
 
-  // Bucket edges: every record's uniform window cuts, except rec — its whole
-  // span is one bucket (its own copies are what we're explaining, not an
-  // explanation). tileOf[bucket] maps back; REC = rec's bucket id.
+  // Bucket edges: every record's uniform window cuts; rec itself is cut into
+  // qWin slices (bucket ids [recB0, recB0+qWin)) so claims can be localized
+  // along the record being explained.
   /** @type {number[]} */
   const edges = [0];
   /** @type {number[]} */
   const bucketRec = [];
   /** @type {number[]} */
   const bucketLo = [];
-  let recBucket = -1;
+  let recB0 = -1;
   for (let r = 0; r < nR; r++) {
     const lo = Number(bounds[r]);
     const hi = Number(bounds[r + 1]);
-    if (r === rec) {
-      recBucket = edges.length - 1;
-      bucketRec.push(r);
-      bucketLo.push(lo);
-      edges.push(hi);
-      continue;
-    }
-    for (let t = lo; t < hi; t += tileBp) {
+    const step = r === rec ? qwinBp : tileBp;
+    if (r === rec) recB0 = edges.length - 1;
+    for (let t = lo; t < hi; t += step) {
       bucketRec.push(r);
       bucketLo.push(t);
-      edges.push(Math.min(hi, t + tileBp));
+      edges.push(Math.min(hi, t + step));
     }
   }
+  const recB1 = recB0 + qWin;
   const nB = edges.length - 1;
 
   const s = scanCanonical(codes, bounds, edges, k, scaled, onProgress);
   const { kv, bucket, n } = s;
 
-  // Materialize per-species (recCount, tile run) for species present in rec.
+  // Materialize per-species data for species present in rec: target-side
+  // (tile, count) runs, record-side (slice, count) runs, the record count,
+  // and how many DISTINCT candidate records hold the species (contested).
   let gCap = 1 << 14;
   let gRecCnt = new Float64Array(gCap);
   let gRunStart = new Int32Array(gCap + 1);
+  let gQStart = new Int32Array(gCap + 1);
+  let gMultiRec = new Uint8Array(gCap);
   let nG = 0;
   let tCap = 1 << 16;
   let tTile = new Int32Array(tCap);
   let tCnt = new Float64Array(tCap);
   let nT = 0;
+  let qCap = 1 << 16;
+  let qSlice = new Int32Array(qCap);
+  let qCnt = new Float64Array(qCap);
+  let nQ = 0;
   const cnt = new Float64Array(nB);
   const touched = new Int32Array(nB);
+  const totalPerQwin = new Float64Array(qWin);
   let totMass = 0;
 
   let g = 0;
@@ -381,9 +417,10 @@ export function gatherDecompose(codes, bounds, rec, k, opts = {}, onProgress) {
     while (e < n && kv[e] === v) e++;
     let cRec = 0;
     let nTouched = 0;
+    let nQTouched = 0;
     for (let j = g; j < e; j++) {
       const b = bucket[j];
-      if (b === recBucket) {
+      if (b >= recB0 && b < recB1) {
         cRec++;
       } else {
         if (cnt[b] === 0) touched[nTouched++] = b;
@@ -392,6 +429,21 @@ export function gatherDecompose(codes, bounds, rec, k, opts = {}, onProgress) {
     }
     if (cRec > 0) {
       totMass += cRec;
+      // Record-side slice counts (second pass over the run, rec buckets only).
+      for (let j = g; j < e; j++) {
+        const b = bucket[j];
+        if (b >= recB0 && b < recB1) {
+          if (cnt[b] === 0) {
+            touched[nTouched + nQTouched] = b;
+            nQTouched++;
+          }
+          cnt[b]++;
+        }
+      }
+      for (let a = 0; a < nQTouched; a++) {
+        const b = touched[nTouched + a];
+        totalPerQwin[b - recB0] += cnt[b];
+      }
       if (nTouched > 0) {
         if (nG === gCap) {
           gCap *= 2;
@@ -401,6 +453,12 @@ export function gatherDecompose(codes, bounds, rec, k, opts = {}, onProgress) {
           const b2 = new Int32Array(gCap + 1);
           b2.set(gRunStart);
           gRunStart = b2;
+          const b3 = new Int32Array(gCap + 1);
+          b3.set(gQStart);
+          gQStart = b3;
+          const b4 = new Uint8Array(gCap);
+          b4.set(gMultiRec);
+          gMultiRec = b4;
         }
         while (nT + nTouched > tCap) {
           tCap *= 2;
@@ -411,30 +469,46 @@ export function gatherDecompose(codes, bounds, rec, k, opts = {}, onProgress) {
           b2.set(tCnt.subarray(0, nT));
           tCnt = b2;
         }
+        while (nQ + nQTouched > qCap) {
+          qCap *= 2;
+          const a = new Int32Array(qCap);
+          a.set(qSlice.subarray(0, nQ));
+          qSlice = a;
+          const b2 = new Float64Array(qCap);
+          b2.set(qCnt.subarray(0, nQ));
+          qCnt = b2;
+        }
         gRecCnt[nG] = cRec;
         gRunStart[nG] = nT;
+        gQStart[nG] = nQ;
+        let firstRec = -1;
+        let multi = 0;
         for (let a = 0; a < nTouched; a++) {
-          tTile[nT] = touched[a];
-          tCnt[nT] = cnt[touched[a]];
+          const t = touched[a];
+          tTile[nT] = t;
+          tCnt[nT] = cnt[t];
           nT++;
+          const tr = bucketRec[t];
+          if (firstRec < 0) firstRec = tr;
+          else if (tr !== firstRec) multi = 1;
+        }
+        gMultiRec[nG] = multi;
+        for (let a = 0; a < nQTouched; a++) {
+          const b = touched[nTouched + a];
+          qSlice[nQ] = b - recB0;
+          qCnt[nQ] = cnt[b];
+          nQ++;
         }
         nG++;
       }
     }
-    for (let a = 0; a < nTouched; a++) cnt[touched[a]] = 0;
+    for (let a = 0; a < nTouched + nQTouched; a++) cnt[touched[a]] = 0;
     g = e;
   }
   gRunStart[nG] = nT;
+  gQStart[nG] = nQ;
 
-  // Greedy transportation rounds over the materialized counts. Twin
-  // constraints make the attribution honest: a species' claims never exceed
-  // its copies in the record (remaining), and never exceed its copies in a
-  // window (per-pair used) — so neither side of the multiset is spent twice.
-  // Contributions update incrementally when a claim changes them, which
-  // keeps hundreds of rounds near-free: total work is bounded by pair
-  // degree, not rounds × pairs.
-
-  // Inverted index: each tile's (species, pair) list.
+  // Greedy transportation rounds (see the claim contract in the JSDoc).
   const tpStart = new Int32Array(nB + 1);
   for (let j = 0; j < nT; j++) tpStart[tTile[j] + 1]++;
   for (let t = 0; t < nB; t++) tpStart[t + 1] += tpStart[t];
@@ -462,19 +536,22 @@ export function gatherDecompose(codes, bounds, rec, k, opts = {}, onProgress) {
     }
   }
   const claimed = new Float64Array(nB);
+  const contestedTile = new Float64Array(nB);
+  const paint = new Float64Array(qWin * nR);
   const minFloor = Math.max(1, minFrac * totMass);
   let truncated = false;
   for (let round = 0; round < maxRounds; round++) {
     let best = -1;
     let bestMass = 0;
     for (let t = 0; t < nB; t++) {
-      if (t !== recBucket && perTile[t] > bestMass) {
+      if ((t < recB0 || t >= recB1) && perTile[t] > bestMass) {
         bestMass = perTile[t];
         best = t;
       }
     }
     if (best < 0 || bestMass < minFloor) break;
     if (round === maxRounds - 1) truncated = true;
+    const bestRec = bucketRec[best];
     for (let a = tpStart[best]; a < tpStart[best + 1]; a++) {
       const gi = tpSpecies[a];
       const j0 = tpPair[a];
@@ -484,7 +561,6 @@ export function gatherDecompose(codes, bounds, rec, k, opts = {}, onProgress) {
       if (cap0 <= 0) continue;
       const take = rem < cap0 ? rem : cap0;
       const newRem = rem - take;
-      // Every window this species touches sees its contribution change.
       for (let j = gRunStart[gi]; j < gRunStart[gi + 1]; j++) {
         const capJ = tCnt[j] - used[j];
         const oldC = rem < capJ ? rem : capJ;
@@ -495,17 +571,25 @@ export function gatherDecompose(codes, bounds, rec, k, opts = {}, onProgress) {
       used[j0] += take;
       remaining[gi] = newRem;
       claimed[best] += take;
+      if (gMultiRec[gi]) contestedTile[best] += take;
+      // Localize the claim along the record: spread it over the slices this
+      // species occupies, weighted by the species' copies there.
+      const scale = take / gRecCnt[gi];
+      for (let j = gQStart[gi]; j < gQStart[gi + 1]; j++) {
+        paint[qSlice[j] * nR + bestRec] += qCnt[j] * scale;
+      }
     }
   }
 
-  // Components = maximal runs of adjacent claimed windows within one record
-  // (disjoint claims sum to the mass of the union window).
+  // Components = maximal runs of adjacent claimed windows within one record.
   /** @type {GatherComponent[]} */
   const components = [];
   let explained = 0;
+  let contestedTotal = 0;
   for (let t = 0; t < nB; t++) {
     if (claimed[t] <= 0) continue;
     explained += claimed[t];
+    contestedTotal += contestedTile[t];
     const r = bucketRec[t];
     const lo = bucketLo[t];
     const hi = Number(edges[t + 1]);
@@ -513,10 +597,14 @@ export function gatherDecompose(codes, bounds, rec, k, opts = {}, onProgress) {
     if (last && last.rec === r && last.hi === lo) {
       last.hi = hi;
       last.mass += claimed[t];
+      last.contested += contestedTile[t];
     } else {
-      components.push({ rec: r, lo, hi, mass: claimed[t] });
+      components.push({ rec: r, lo, hi, mass: claimed[t], contested: contestedTile[t] });
     }
   }
   components.sort((a, b) => b.mass - a.mass);
-  return { components, totMass, explained, tileBp, scaled, truncated };
+  return {
+    components, totMass, explained, contestedTotal, tileBp, scaled, truncated,
+    paint, qWin, qwinBp, totalPerQwin,
+  };
 }

@@ -83,7 +83,10 @@ same view live:
   greedily, each k-mer copy claimed once — "62 % of this contig is explained
   by chr17:18.2–18.6M". Large inputs sample k-mer *space* (FracMinHash),
   never positions, so cross-record ratios stay unbiased — and the card
-  discloses when.
+  discloses when. Ambiguity is measured, not hidden: a **contested share**
+  and a **position strip** separate misassembled from highly-homologous from
+  clearly-one-source, and the full claim contract lives behind **Methods…**
+  on the card.
 - **Honest by construction** — every approximation is either visible or
   consented to: capped repeat regions count in the scoreboard (and hatch in
   the identity-heatmap view), the
@@ -255,14 +258,23 @@ against a whole chromosome arm. Hover a cell for both directions plus the
 k-mer ANI estimate; click it and the plot zooms to that record pair.
 
 **where?** goes one level deeper: a greedy decomposition of one record's
-k-mer mass over windows of all the others, in the spirit of sourmash's
+k-mer mass over windows of all the others (the window width is a dial on
+the card; auto ≈ candidate span ÷ 192), in the spirit of sourmash's
 `gather`, with each k-mer copy claimed exactly once against both the
 record's and the window's counts — so the shares are disjoint and sum to
-the explained total. On the bundled demo it reads: 97.5 % of NA19240's
-hap1 slice is explained by the CHM13 window and the sister haplotype, and
-the 2.5 % remainder is the haplotype's own private sequence — the 250 kb
-*inversion* costs nothing, because canonical containment doesn't care about
-orientation.
+the explained total. Two diagnostics ride along to separate *misassembled*
+from *highly homologous* from *clearly one source*: a **position strip**
+that paints the record slice-by-slice with the source that claimed it
+(misassembly reads as contiguous blocks from different sources), and a
+**contested share** — claimed content that also exists in another record,
+i.e. how much of the attribution was a coin flip between near-equal homes.
+On the bundled demo it reads: 99 % of NA19240's hap1 slice is explained,
+**96 % contested** between the CHM13 window and the sister haplotype —
+ambiguity declared, not hidden — and the residue is the haplotype's own
+private sequence; the 250 kb *inversion* costs nothing, because canonical
+containment doesn't care about orientation. The full definitions, the
+claim contract, and a reading guide for the three cases live behind
+**Methods…** on the card itself.
 
 ![belongs matrix of the five acrocentric short arms](docs/belongs_acro.png)
 
@@ -484,7 +496,7 @@ open http://127.0.0.1:8420/tests/typecheck.html   # strict typecheck in the brow
 ```
 
 - Tests are dependency-free dual-runtime suites: the same files run in the
-  browser page and under `deno test tests/` in CI (194 tests: engine
+  browser page and under `deno test tests/` in CI (197 tests: engine
   coordinates on both strands and all k, reverse-complement mapping, gap
   bridging, boundary discipline, range-restricted indexing/matching,
   multicore chunk-stitch parity against single-core, sampling/density

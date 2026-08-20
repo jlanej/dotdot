@@ -222,3 +222,58 @@ test('gather: novel content stays unexplained', () => {
   const frac = r.explained / r.totMass;
   assert(frac > 0.47 && frac < 0.53, `half explained, got ${frac.toFixed(3)}`);
 });
+
+test('gather: paint localizes sources along the record — the chimera signature', () => {
+  const x = randCodes(6000, 91);
+  const y = randCodes(6000, 92);
+  const q = new Uint8Array(5000);
+  q.set(x.slice(1000, 3500), 0);
+  q.set(y.slice(2000, 4500), 2500);
+  const { codes, bounds } = cat([x, y, q]);
+  const r = gatherDecompose(codes, bounds, 2, 15, {
+    scaled: 1, maxTiles: 16, minFrac: 0.001, qWindows: 10,
+  });
+  assertEq(r.qWin, 10);
+  assertEq(r.qwinBp, 500);
+  // Slices 0..4 (record positions 0–2500) came from X (rec 0), 5..9 from Y —
+  // a misassembly reads as spatial segmentation, not as blended shares.
+  for (let qw = 0; qw < 10; qw++) {
+    const fromX = r.paint[qw * 3 + 0];
+    const fromY = r.paint[qw * 3 + 1];
+    const own = qw < 5 ? fromX : fromY;
+    const other = qw < 5 ? fromY : fromX;
+    assert(own > 0.9 * r.totalPerQwin[qw], `slice ${qw} dominated by its true source`);
+    assert(other < 0.05 * r.totalPerQwin[qw], `slice ${qw} untouched by the other source`);
+  }
+});
+
+test('gather: contested separates shared homes from unique ones', () => {
+  const z = randCodes(4000, 93);
+  const q = z.slice(0, 2000);
+  // Two identical candidate homes: every claim had a second possible home.
+  const dup = cat([z, z.slice(), q]);
+  const rd = gatherDecompose(dup.codes, dup.bounds, 2, 15, {
+    scaled: 1, maxTiles: 16, minTileBp: 512, minFrac: 0.001,
+  });
+  assertEq(rd.contestedTotal, rd.explained, 'duplicate homes: all claims contested');
+  assert(rd.components[0].contested === rd.components[0].mass, 'per-component contested agrees');
+  // One candidate home: nothing is contested.
+  const solo = cat([z, q]);
+  const rs = gatherDecompose(solo.codes, solo.bounds, 1, 15, {
+    scaled: 1, maxTiles: 16, minFrac: 0.001,
+  });
+  assertEq(rs.contestedTotal, 0, 'a single home cannot be contested');
+  assertEq(rs.components[0].contested, 0);
+});
+
+test('gather: explicit window override sets the granularity', () => {
+  const x = randCodes(6000, 94);
+  const q = x.slice(1000, 3000);
+  const { codes, bounds } = cat([x, q]);
+  const r = gatherDecompose(codes, bounds, 1, 15, { scaled: 1, tileBp: 512, minFrac: 0.001 });
+  assertEq(r.tileBp, 512);
+  const c = r.components[0];
+  assertEq(c.lo % 512, 0, 'windows aligned to the override');
+  assert(c.lo <= 1000 && c.hi >= 3000 - 14, 'coverage preserved at fine granularity');
+  assertEq(r.explained, r.totMass, 'a pure slice is fully explained');
+});

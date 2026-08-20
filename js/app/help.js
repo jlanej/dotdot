@@ -167,14 +167,95 @@ const HELP = {
     'is the share of the <i>row’s</i> k-mers — copy counts included, strands canonical, so a ' +
     'reverse-complemented contig still belongs — found anywhere in the <i>column</i>. Rows ' +
     'normalize by themselves, so a short fragment reads honestly against a whole chromosome. ' +
-    'Hover a cell for both directions and the k-mer ANI estimate (containment^(1/k), the ANI ' +
-    'heatmap’s statistic); click a plottable cell to zoom to that pair. <b>where?</b> ' +
-    'decomposes one record over windows of the others, greedily, each k-mer copy claimed once ' +
-    '(sourmash-gather style): “62% of this contig is explained by chr17:18.2–18.6M”. Large ' +
-    'inputs are sampled by k-mer <i>value</i> (FracMinHash, disclosed in the card) — never by ' +
-    'position, which would bias cross-record ratios. <b>Shared content is not locus ' +
-    'homology</b>: repeat families make unrelated loci “belong”.',
+    'Hover a cell for both directions and the k-mer ANI estimate; click a plottable cell to ' +
+    'zoom to that pair. <b>where?</b> decomposes one record over windows of the others — ' +
+    'greedy: each round the most-explanatory window <b>claims</b> its k-mers, debiting both ' +
+    'the record’s copies and the window’s own, so shares are disjoint; between near-identical ' +
+    'homes the first winner takes the shared mass (ties break to load order). That is ' +
+    '<b>parsimony, not affinity</b> — for ambiguous placement read the matrix row, and watch ' +
+    'the <i>contested</i> share and the position strip. <b>Shared content is not locus ' +
+    'homology</b>: repeat families make unrelated loci “belong”. Full definitions, the claim ' +
+    'contract, and a reading guide: <b>Methods…</b> at the bottom of the card.',
 };
+
+/**
+ * The Belongs deep-dive: full definitions, the claim contract, and the
+ * reading guide — the card's Methods… view. The "?" popover above is the
+ * quick layer; this is the complete one. Plain-text math on purpose.
+ */
+export const BELONGS_METHODS =
+  `<h4>The statistic</h4>
+<p class="stats-sum">Every sequence is a <b>multiset</b> of canonical k-mers: each window of k
+bases contributes min(kmer, revcomp) — one species per window, so orientation never matters
+(an inverted contig belongs exactly as much). For records A and B with per-species copy
+counts c<sub>A</sub>(s) and c<sub>B</sub>(s):</p>
+<p class="stats-sum">shared(A,B) = Σ<sub>s</sub> min(c<sub>A</sub>(s), c<sub>B</sub>(s)) ·
+containment C(A ⊂ B) = shared / Σ<sub>s</sub> c<sub>A</sub>(s) ·
+k-mer ANI ≈ (shared / min(mass<sub>A</sub>, mass<sub>B</sub>))<sup>1/k</sup></p>
+<p class="stats-sum">Counting <b>copies</b> (multiset) rather than distinct species (set) is
+what keeps tandem arrays honest: set containment saturates the moment one copy matches;
+count-weighted containment still notices when one record carries 50× more of the family.
+Containment — not Jaccard — is the right normalization for unequal lengths: a fragment is
+judged by <i>its own</i> mass, wherever it lands.</p>
+
+<h4>Sampling</h4>
+<p class="stats-sum">Past ~24M k-mers the scan samples k-mer <b>value</b> space (FracMinHash):
+a species is kept iff hash(s) &lt; 2³²/scaled, so it is in or out <i>globally</i> — every
+record sees the same sample and ratios stay unbiased. Sampling <b>positions</b> instead (the
+plot index’s stride) would require a k-mer to survive sampling independently on every side,
+collapsing min() for unique content. scaled is disclosed on the card; scaled = 1 is exact.
+The hash is deterministic — reruns agree.</p>
+
+<h4>The gather (“where?”)</h4>
+<p class="stats-sum">Every other record is cut into uniform windows (the <b>window</b> dial;
+auto = combined span of the others ÷ 192, floored at 1 kb). Two budgets exist per species:
+copies still unexplained in the record, and unspent copies in each window. Each round the
+window that could explain the most still-unclaimed mass wins and <b>claims</b>: per species,
+take = min(record remaining, window unspent), debited from <i>both</i> budgets. Hence the
+guarantees — no record copy explained twice, no window explaining more copies than it holds,
+shares disjoint and summing to the explained total. Rounds stop when the best window would
+add &lt; max(1 k-mer, 0.1% of the record’s mass). Adjacent claimed windows of one record
+merge into ranges.</p>
+<p class="stats-sum"><b>The one thing to internalize:</b> between near-identical homes, the
+first winner absorbs the shared mass and exact ties break to the lowest window id — earlier
+record, in load order. The decomposition is a <i>parsimonious cover</i> (“one sufficient
+explanation”), not an affinity distribution. Ambiguity is measured by the two diagnostics
+below and by the matrix row, whose cells are computed independently with no claiming at
+all.</p>
+
+<h4>Reading the three cases</h4>
+<div class="belongs-wrap"><table class="belongs-table">
+<thead><tr><th>signature</th><th>matrix row</th><th>position strip</th><th>contested</th></tr></thead>
+<tbody>
+<tr><th>clearly one source</th><td>one high cell</td><td>one color end to end</td><td>low</td></tr>
+<tr><th>highly homologous (ambiguous)</th><td>two+ high cells</td><td>one color, or salt-and-pepper between the tied homes</td><td><b>high</b></td></tr>
+<tr><th>misassembled / chimeric</th><td>mid-level cells</td><td><b>contiguous blocks</b>, different sources by position</td><td>any</td></tr>
+</tbody></table></div>
+<p class="stats-sum">The <b>position strip</b> cuts the record into slices and paints each by
+the record whose windows claimed it (claims are spread over the slices a species occupies,
+weighted by its copies there). Misassembly is <i>spatial</i>: long contiguous blocks from
+different sources. Homology is <i>statistical</i>: the same stretch claimable by several
+sources — the strip may salt-and-pepper between tied homes (a tie-break artifact, window by
+window), and the real signal is the contested share, defined per component as the claimed
+mass whose species also occur in ≥ 2 candidate records. Unexplained slices stay dark: content found in
+nothing loaded (novel sequence, or below the sampling floor).</p>
+
+<h4>Limits</h4>
+<p class="stats-sum">Shared content is <b>not</b> locus homology — repeat families carry
+“belongs” across unrelated loci (the acrocentric arms all belong to each other). The
+statistic is blind to order and orientation by construction: a shuffled or inverted record
+has identical containment. Contested is record-level: two near-identical windows <i>inside
+one record</i> are not counted. At scaled &gt; 1 all shares carry sampling noise at the
+margins. k is the plot’s k: smaller k drifts toward compositional similarity, larger k
+toward strict identity.</p>
+
+<h4>Lineage</h4>
+<p class="stats-sum">Containment index and screening: Mash Screen (Ondov 2019). Value
+sampling and greedy decomposition: FracMinHash / sourmash gather (Irber 2022) — here made
+count-weighted, window-resolved, and capacity-constrained on both sides. Tile ANI by
+containment: the ModDotPlot lineage, shared with this app’s ANI heatmap. The matrix is exact
+(or FracMinHash-estimated) multiset containment — deliberately not alignment identity and
+not anchor identity; the app names which is which, everywhere.</p>`;
 
 /** Accessible names for the "?" buttons — a rotor list of twenty identical
  * "question mark" entries helps nobody. @type {Record<string, string>} */

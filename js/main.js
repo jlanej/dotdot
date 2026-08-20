@@ -15,7 +15,7 @@ import { resolveRegion, parseBp } from './core/region.js';
 import { buildViewHash, parseViewHash, writeMatchParams, readMatchParams } from './core/share.js';
 import { GlRenderer } from './render/gl.js';
 import { drawUnderlay, drawOverlay, LAYOUT, LANE_H, LANE_X0, LANE_Y0, setAnnotationLanes } from './render/axes.js';
-import { buildColormap, buildMultiplicityTex, hexToRgb } from './render/colormap.js';
+import { buildColormap, buildMultiplicityTex, hexToRgb, oklchToSrgb, rgbToHex } from './render/colormap.js';
 import { segmentDistributions, occupancyBins, groupedBarsSVG, ladderLabels } from './render/charts.js';
 import { formatBp, formatInt, formatCount } from './render/format.js';
 import { looksLikePaf } from './io/paf.js';
@@ -24,7 +24,7 @@ import { RemoteBigBed } from './io/bigbed.js';
 import { REFERENCES, parseBrowserRegion, splitRegionList, splitCrossSpec } from './refs.js';
 import { exportPng, compositeCanvases } from './export/png.js';
 import { exportSvg } from './export/svg.js';
-import { initHelp, closeHelp } from './app/help.js';
+import { initHelp, closeHelp, BELONGS_METHODS } from './app/help.js';
 import { statsPop, confirmPop, enterModal, closeConfirm, closeStatsPop, setConfirmDismiss, confirmCard } from './app/dialogs.js';
 import { ViewSettle } from './app/settle.js';
 import { LaneBuilder, multLane } from './app/annotations.js';
@@ -3041,7 +3041,7 @@ function doClearAll() {
   lastBaseKmer = null;
   lastContain = null;
   lastBelongs = null;
-  belongsUi = { gen: -1, k: 0, matrix: null, gathers: new Map(), sel: -1, pending: -1 };
+  belongsUi = { gen: -1, k: 0, matrix: null, gathers: new Map(), sel: -1, pending: -1, win: '', view: 'card' };
   btnBelongs.hidden = true;
   queryLocal = false;
   queryShareUrl = null;
@@ -3593,8 +3593,8 @@ btnStatsDetail.addEventListener('click', openStatsPop);
 // position striding would not). Shared content ≠ locus homology; the card
 // and the help entry both say so.
 
-/** @type {{gen: number, k: number, matrix: any, gathers: Map<number, any>, sel: number, pending: number}} */
-let belongsUi = { gen: -1, k: 0, matrix: null, gathers: new Map(), sel: -1, pending: -1 };
+/** @type {{gen: number, k: number, matrix: any, gathers: Map<number, any>, sel: number, pending: number, win: string, view: 'card' | 'methods'}} */
+let belongsUi = { gen: -1, k: 0, matrix: null, gathers: new Map(), sel: -1, pending: -1, win: '', view: 'card' };
 
 function belongsRecordCount() {
   const d = state.data;
@@ -3608,10 +3608,11 @@ function submitBelongs(rec = null) {
   lastBelongs = { rec };
   lastSubmitKind = 'belongs';
   const sendData = workerGen !== dataGen;
+  const winBp = rec != null && belongsUi.win ? parseBp(belongsUi.win) : 0;
   submit({
     type: 'belongs',
     gen: dataGen,
-    opts: { k: currentK(), rec: rec ?? undefined },
+    opts: { k: currentK(), rec: rec ?? undefined, win: winBp > 0 ? winBp : undefined },
     target: sendData ? state.fileTarget.bufs : null,
     query: sendData ? (state.fileQuery ? state.fileQuery.bufs : null) : null,
   });
@@ -3625,7 +3626,7 @@ function openBelongsPop() {
     return;
   }
   if (belongsUi.gen !== dataGen || belongsUi.k !== currentK()) {
-    belongsUi = { gen: dataGen, k: currentK(), matrix: null, gathers: new Map(), sel: -1, pending: -1 };
+    belongsUi = { gen: dataGen, k: currentK(), matrix: null, gathers: new Map(), sel: -1, pending: -1, win: '', view: 'card' };
   }
   renderBelongs();
   statsPop.hidden = false;
@@ -3679,6 +3680,12 @@ function aniHex(t) {
   return `#${((1 << 24) | (a[i] << 16) | (a[i + 1] << 8) | a[i + 2]).toString(16).slice(1)}`;
 }
 
+/** Categorical record color for the position strip: golden-angle OKLCH hues. @param {number} i */
+function belongsRecColor(i) {
+  const h = ((i * 137.508 + 30) % 360) * (Math.PI / 180);
+  return rgbToHex(oklchToSrgb(0.72, 0.12, h));
+}
+
 /** @param {number} x fraction → percent label */
 function belongsPct(x) {
   return x >= 0.095 ? `${Math.round(x * 100)}%` : `${(x * 100).toFixed(1)}%`;
@@ -3697,6 +3704,16 @@ function belongsElide(s) {
 function renderBelongs() {
   const d = state.data;
   if (!d) return;
+  if (belongsUi.view === 'methods') {
+    statsPop.innerHTML =
+      `<div class="stats-card" id="belongs-card">` +
+      `<div class="stats-head"><h3><button class="linklike" id="belongs-back">← Belongs</button> — methods</h3>` +
+      `<button class="stats-close" aria-label="close">×</button></div>` +
+      BELONGS_METHODS +
+      `</div>`;
+    bindBelongs();
+    return;
+  }
   const m = belongsUi.matrix;
   let html =
     `<div class="stats-card" id="belongs-card">` +
@@ -3761,45 +3778,97 @@ function renderBelongs() {
       : `FracMinHash estimate: 1/${scaled} of ${k}-mer space, value-sampled so every record sees the same sample. `) +
     `Cell = share of the <i>row’s</i> k-mer mass found in the <i>column</i> — content sharing, not locus ` +
     `homology (repeat families carry it across unrelated loci). Hover for both directions and k-mer ANI; ` +
-    `<i>where?</i> decomposes a record over windows of the others.</p>`;
+    `<i>where?</i> decomposes a record over windows of the others. ` +
+    `<button class="linklike" id="belongs-methods">Methods…</button></p>`;
 
   // Gather panel for the selected record.
   const sel = belongsUi.pending >= 0 ? belongsUi.pending : belongsUi.sel;
   if (sel >= 0) {
     const g = belongsUi.gathers.get(sel);
-    html += `<div class="stats-chart"><h4>where does ${belongsEsc(lab[sel])} belong?</h4>`;
+    html +=
+      `<div class="stats-chart"><h4>where does ${belongsEsc(lab[sel])} belong? ` +
+      `<span class="axis-note">window <input id="belongs-win" list="belongs-win-list" ` +
+      `value="${belongsEsc(belongsUi.win || 'auto')}" size="6" spellcheck="false" ` +
+      `aria-label="gather window size"><datalist id="belongs-win-list">` +
+      `<option value="auto"></option><option value="50kb"></option>` +
+      `<option value="250kb"></option><option value="1Mb"></option></datalist></span></h4>`;
     if (!g) {
       html += `<p class="stats-sum">Decomposing over windows of the other records…</p>`;
     } else {
+      // Position strip: the record cut into slices, each painted by the
+      // record whose windows claimed it — misassembly reads as segmentation.
+      const nRr = g.nR;
+      const selCat = !self && sel >= nRecT ? d.query : d.target;
+      const selJ = !self && sel >= nRecT ? sel - nRecT : sel;
+      const recLen = selCat.starts[selJ + 1] - selCat.starts[selJ];
+      /** @type {number[]} */
+      const present = [];
+      for (let r = 0; r < nRr; r++) {
+        let mass = 0;
+        for (let qw = 0; qw < g.qWin; qw++) mass += g.paint[qw * nRr + r];
+        if (mass > 0) present.push(r);
+      }
+      let strip = `<div class="belongs-strip" role="img" aria-label="record positions painted by claiming source">`;
+      for (let qw = 0; qw < g.qWin; qw++) {
+        let best = -1;
+        let bestM = 0;
+        let tot = 0;
+        for (const r of present) {
+          const mass = g.paint[qw * nRr + r];
+          tot += mass;
+          if (mass > bestM) {
+            bestM = mass;
+            best = r;
+          }
+        }
+        const frac = Math.min(1, tot / Math.max(1e-9, g.totalPerQwin[qw]));
+        const lo = qw * g.qwinBp;
+        const hi = Math.min(recLen, lo + g.qwinBp);
+        const title =
+          `${belongsRegion(sel, lo, hi, nRecT)} · ${belongsPct(frac)} explained` +
+          (best >= 0 ? ` · mostly ${lab[best]}` : '');
+        const bg =
+          best >= 0 && frac > 0.02
+            ? `color-mix(in srgb, ${belongsRecColor(best)} ${Math.round(20 + frac * 70)}%, transparent)`
+            : 'transparent';
+        strip += `<span style="background:${bg}" title="${belongsEsc(title)}"></span>`;
+      }
+      strip += `</div>`;
+      html += strip;
+      let legend = `<div class="belongs-legend">`;
+      for (const r of present) {
+        legend +=
+          `<span class="chip-leg"><span class="swatch" style="background:${belongsRecColor(r)}"></span>` +
+          `${belongsEsc(belongsElide(lab[r]))}</span>`;
+      }
+      legend += `<span class="chip-leg"><span class="swatch swatch-unex"></span>unexplained</span></div>`;
+      html += legend;
       const shown = g.components.slice(0, 8);
-      let bar = `<div class="belongs-bar" role="img" aria-label="explained fraction bar">`;
-      let claimed = 0;
-      shown.forEach((/** @type {any} */ c, /** @type {number} */ i) => {
-        const w = (c.mass / g.totMass) * 100;
-        claimed += c.mass;
-        bar += `<span style="width:${w.toFixed(2)}%;background:${aniHex(i % 2 ? 0.55 : 0.75)}"></span>`;
-      });
-      const rest = g.explained - claimed;
-      if (rest > 0) bar += `<span style="width:${((rest / g.totMass) * 100).toFixed(2)}%;background:${aniHex(0.3)}"></span>`;
-      bar += `</div>`;
-      html += bar;
+      let shownMass = 0;
       let list = `<ol class="belongs-list">`;
       for (const c of shown) {
+        shownMass += c.mass;
+        const cf = c.mass > 0 ? c.contested / c.mass : 0;
         list +=
           `<li><b>${belongsPct(c.mass / g.totMass)}</b> — ` +
           `${belongsEsc(belongsRegion(c.rec, c.lo, c.hi, nRecT))}` +
-          `${!self && c.rec >= nRecT ? ' <span class="dim">(y axis)</span>' : ''}</li>`;
+          `${!self && c.rec >= nRecT ? ' <span class="dim">(y axis)</span>' : ''}` +
+          ` <span class="dim">· ${belongsPct(cf)} contested</span></li>`;
       }
       if (g.components.length > shown.length) {
+        const rest = g.explained - shownMass;
         list += `<li class="dim">+ ${g.components.length - shown.length} smaller windows (${belongsPct(rest / g.totMass)})</li>`;
       }
       const unex = 1 - g.explained / Math.max(1, g.totMass);
-      list += `<li class="dim">unexplained: ${belongsPct(unex)}${g.truncated ? ' (component cap reached — tail counts here)' : ''}</li>`;
+      list += `<li class="dim">unexplained: ${belongsPct(unex)}${g.truncated ? ' (round cap reached — tail counts here)' : ''}</li>`;
       list += `</ol>`;
       html += list;
+      const cAll = g.explained > 0 ? g.contestedTotal / g.explained : 0;
       html +=
-        `<p class="stats-sum">Greedy decomposition over ${formatBp(g.tileBp)} windows — each k-mer copy ` +
-        `claimed once, so the shares are disjoint and sum to the explained total.</p>`;
+        `<p class="stats-sum">${formatBp(g.tileBp)} windows · <b>${belongsPct(cAll)} contested</b> — ` +
+        `claimed content that also exists in another record. Between such homes the pick is ` +
+        `parsimony (ties break to load order), not evidence: read the matrix row for ambiguity. ` +
+        `Claims debit both the record’s copies and the window’s, so shares are disjoint.</p>`;
     }
     html += `</div>`;
   }
@@ -3814,6 +3883,27 @@ function bindBelongs() {
   if (!card) return;
   const x = card.querySelector('.stats-close');
   if (x) x.addEventListener('click', closeStatsPop);
+  const win = card.querySelector('#belongs-win');
+  if (win instanceof HTMLInputElement) {
+    win.addEventListener('change', () => {
+      const t = win.value.trim().toLowerCase();
+      const bp = t === '' || t === 'auto' ? 0 : parseBp(t);
+      if (t !== '' && t !== 'auto' && !(bp > 0)) {
+        toast('Gather window: a size like 250kb, or auto.', true);
+        win.value = belongsUi.win || 'auto';
+        return;
+      }
+      belongsUi.win = bp > 0 ? t : '';
+      // Window width changes every decomposition — recompute the open one.
+      belongsUi.gathers.clear();
+      const sel = belongsUi.sel >= 0 ? belongsUi.sel : belongsUi.pending;
+      if (sel >= 0 && !state.computing) {
+        belongsUi.pending = sel;
+        submitBelongs(sel);
+        renderBelongs();
+      }
+    });
+  }
   card.addEventListener('click', (e) => {
     const t = /** @type {HTMLElement} */ (e.target);
     const td = t.closest('td.zoom');
@@ -3828,6 +3918,16 @@ function bindBelongs() {
       const { pw, ph } = state.sizes;
       state.view.fitRect(d.target.starts[c], yCat.starts[yr], d.target.starts[c + 1], yCat.starts[yr + 1], pw, ph);
       markDirty();
+      return;
+    }
+    if (t.closest('#belongs-methods')) {
+      belongsUi.view = 'methods';
+      renderBelongs();
+      return;
+    }
+    if (t.closest('#belongs-back')) {
+      belongsUi.view = 'card';
+      renderBelongs();
       return;
     }
     const wb = t.closest('.belongs-where');
