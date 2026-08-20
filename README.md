@@ -276,6 +276,18 @@ containment doesn't care about orientation. The full definitions, the
 claim contract, and a reading guide for the three cases live behind
 **Methods…** on the card itself.
 
+The matrix itself has three lenses (a **cells** toggle, no recompute): plain
+shared content; **exclusive to pair** — content held by exactly those two
+records, which no third home could explain (the placement-deciding
+complement of communal repeat mass); and **unique content** — containment
+restricted to the row's single-copy k-mers, which removes the repeat haze
+entirely (on the bundled demo, the 10 % cross-locus "sharing" between two
+unrelated chr17 windows collapses to ~1 % under this lens while true homes
+stay at 94–99 %). Hovering any cell reports every metric at once, including
+the **copy ratio** of the shared vocabulary — a collapsed-repeat detector,
+since containment can look perfect while one side carries fifty-fold fewer
+copies of what it shares.
+
 ![belongs matrix of the five acrocentric short arms](docs/belongs_acro.png)
 
 *The five **acrocentric p-arms** (70.5 Mb, streamed straight from
@@ -289,6 +301,14 @@ the card also discloses its sampling: 1/4 of 15-mer space by hash
 (FracMinHash), both sides sampled identically. Live:
 [`?ref=t2t&refregion=chr13p,chr14p,chr15p,chr21p,chr22p&minrun=300`](https://jlanej.github.io/dotdot/?ref=t2t&refregion=chr13p%2Cchr14p%2Cchr15p%2Cchr21p%2Cchr22p&minrun=300)
 → Belongs….*
+
+And when the answer needs to leave the browser, the **Report** button in
+Export composes everything into a one-page PNG: the current plot, all three
+belongs grids, the gather panel with its position strip, the distribution
+charts, and the honesty footers — drawn natively on canvas (no DOM
+screenshots), themed, with the reproduce link in the header.
+
+![one-page dotdot report: plot, belongs grids, gather, distributions](docs/report_demo.png)
 
 ### Reference genomes, no downloads
 
@@ -496,7 +516,7 @@ open http://127.0.0.1:8420/tests/typecheck.html   # strict typecheck in the brow
 ```
 
 - Tests are dependency-free dual-runtime suites: the same files run in the
-  browser page and under `deno test tests/` in CI (197 tests: engine
+  browser page and under `deno test tests/` in CI (204 tests: engine
   coordinates on both strands and all k, reverse-complement mapping, gap
   bridging, boundary discipline, range-restricted indexing/matching,
   multicore chunk-stitch parity against single-core, sampling/density

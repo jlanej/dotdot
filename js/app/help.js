@@ -173,9 +173,14 @@ const HELP = {
     'the record’s copies and the window’s own, so shares are disjoint; between near-identical ' +
     'homes the first winner takes the shared mass (ties break to load order). That is ' +
     '<b>parsimony, not affinity</b> — for ambiguous placement read the matrix row, and watch ' +
-    'the <i>contested</i> share and the position strip. <b>Shared content is not locus ' +
-    'homology</b>: repeat families make unrelated loci “belong”. Full definitions, the claim ' +
-    'contract, and a reading guide: <b>Methods…</b> at the bottom of the card.',
+    'the <i>contested</i> share and the position strip. The <b>cells</b> toggle re-lenses the ' +
+    'matrix: <i>exclusive to pair</i> (content no third home could explain) and <i>unique ' +
+    'content</i> (repeat families removed) — hover any cell for every metric, including the ' +
+    'copy ratio of shared content. <b>Shared content is not locus homology</b>: repeat ' +
+    'families make unrelated loci “belong”. Full definitions, the claim contract, and a ' +
+    'reading guide: <b>Methods…</b> at the bottom of the card. The <b>Report</b> button in ' +
+    'Export composes the plot, these grids, the gather, and the distribution charts into ' +
+    'one PNG.',
 };
 
 /**
@@ -219,6 +224,16 @@ what keeps tandem arrays honest: set containment saturates the moment one copy m
 count-weighted containment still notices when one record carries 50× more of the family.
 Containment — not Jaccard — is the right normalization for unequal lengths: a fragment is
 judged by <i>its own</i> mass, wherever it lands.</p>
+<p class="stats-sum">The <b>cells</b> toggle re-lenses the same scan. <b>exclusive to
+pair</b> keeps only species held by exactly those two records — content no third home could
+explain, the placement-deciding complement of communal repeat mass (the matrix-level twin
+of the gather's contested share). <b>unique content</b> keeps only the row's single-copy
+species — containment with the row's own repeat families removed, so satellite commons
+stop inflating "belongs"; a record with no single-copy k-mers shows a dash, honestly. The
+hover adds a fourth instrument, the <b>copy ratio</b> of the shared vocabulary (Σ row
+copies ÷ Σ column copies over common species): a collapsed-repeat detector, because
+containment can look perfect while one side carries fifty-fold fewer copies of what it
+shares. All four come from the one scan — no extra compute.</p>
 
 <h4>Sampling</h4>
 <p class="stats-sum">Past ~24M k-mers the scan samples k-mer <b>value</b> space (FracMinHash):

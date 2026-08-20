@@ -247,20 +247,40 @@ function swap2(kv, bucket, i, j) {
  * exact statistic. All masses live in the same 1/scaled sample of k-mer
  * space, so the ratios estimate the exact ones without cross-side bias.
  *
+ * Three further accumulators fall out of the same walk:
+ * - exclusive[i*nR + j] (i < j, symmetric): Σ min over species held by
+ *   EXACTLY records i and j — content only this pair can explain, the
+ *   placement-deciding complement of communal repeat mass.
+ * - uniq[i*nR + j] (directional): how many of record i's SINGLE-COPY
+ *   species occur in j; uniqTot[i] = i's singleton species count. This is
+ *   containment with the row's repeat mass removed — repeat families stop
+ *   inflating "belongs".
+ * - crossMass[i*nR + j] (directional): Σ of record i's copies over species
+ *   shared with j. The ratio crossMass[i][j] / crossMass[j][i] is the bulk
+ *   copy-number ratio of the COMMON vocabulary — a collapsed-repeat
+ *   detector (containment can look fine while one side carries 50× fewer
+ *   copies of what it shares).
+ *
  * @param {Uint8Array} codes concatenation of every record's codes
  * @param {Float64Array | number[]} bounds record boundaries, bounds[0] = 0,
  *   bounds[nR] = codes.length
  * @param {number} k
  * @param {{scaled?: number, cap?: number}} [opts]
  * @param {(done: number, total: number) => void} [onProgress]
- * @returns {{shared: Float64Array, tot: Float64Array, nR: number, scaled: number}}
+ * @returns {{shared: Float64Array, exclusive: Float64Array, uniq: Float64Array,
+ *            uniqTot: Float64Array, crossMass: Float64Array, tot: Float64Array,
+ *            nR: number, scaled: number}}
  */
 export function belongsMatrix(codes, bounds, k, opts = {}, onProgress) {
   const nR = bounds.length - 1;
   const scaled = opts.scaled ?? pickScaled(codes.length, opts.cap);
   const s = scanCanonical(codes, bounds, bounds, k, scaled, onProgress);
   const shared = new Float64Array(nR * nR);
+  const exclusive = new Float64Array(nR * nR);
+  const uniq = new Float64Array(nR * nR);
+  const crossMass = new Float64Array(nR * nR);
   const tot = new Float64Array(nR);
+  const uniqTot = new Float64Array(nR);
   const cnt = new Float64Array(nR);
   const touched = new Int32Array(nR);
   const { kv, bucket, n } = s;
@@ -275,22 +295,30 @@ export function belongsMatrix(codes, bounds, k, opts = {}, onProgress) {
       if (cnt[r] === 0) touched[nT++] = r;
       cnt[r]++;
     }
+    const pairOnly = nT === 2;
     for (let a = 0; a < nT; a++) {
       const ra = touched[a];
       const ca = cnt[ra];
       tot[ra] += ca;
+      if (ca === 1) uniqTot[ra]++;
       for (let b = a + 1; b < nT; b++) {
         const rb = touched[b];
-        const m = ca < cnt[rb] ? ca : cnt[rb];
+        const cb = cnt[rb];
+        const m = ca < cb ? ca : cb;
         // One symmetric write per unordered pair, at [min, max].
-        if (ra < rb) shared[ra * nR + rb] += m;
-        else shared[rb * nR + ra] += m;
+        const sym = ra < rb ? ra * nR + rb : rb * nR + ra;
+        shared[sym] += m;
+        if (pairOnly) exclusive[sym] += m;
+        if (ca === 1) uniq[ra * nR + rb] += 1;
+        if (cb === 1) uniq[rb * nR + ra] += 1;
+        crossMass[ra * nR + rb] += ca;
+        crossMass[rb * nR + ra] += cb;
       }
     }
     for (let a = 0; a < nT; a++) cnt[touched[a]] = 0;
     g = e;
   }
-  return { shared, tot, nR, scaled };
+  return { shared, exclusive, uniq, uniqTot, crossMass, tot, nR, scaled };
 }
 
 /**

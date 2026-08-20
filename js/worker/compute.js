@@ -705,6 +705,10 @@ async function handleBelongs(req) {
       id: req.id,
       type: 'belongsResult',
       shared: m.shared,
+      exclusive: m.exclusive,
+      uniq: m.uniq,
+      uniqTot: m.uniqTot,
+      crossMass: m.crossMass,
       tot: m.tot,
       nR: m.nR,
       nRecT: space.nRecT,
@@ -712,7 +716,7 @@ async function handleBelongs(req) {
       scaled: m.scaled,
       elapsedMs: performance.now() - t0,
     },
-    [m.shared.buffer, m.tot.buffer],
+    [m.shared.buffer, m.exclusive.buffer, m.uniq.buffer, m.uniqTot.buffer, m.crossMass.buffer, m.tot.buffer],
   );
 }
 

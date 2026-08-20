@@ -277,3 +277,81 @@ test('gather: explicit window override sets the granularity', () => {
   assert(c.lo <= 1000 && c.hi >= 3000 - 14, 'coverage preserved at fine granularity');
   assertEq(r.explained, r.totMass, 'a pure slice is fully explained');
 });
+
+test('matrix: exclusive containment counts only pair-private species', () => {
+  // X and Y both carry A (communal); B lives in X and P only; C in Y only.
+  const A = randCodes(1500, 101);
+  const B = randCodes(1500, 102);
+  const C = randCodes(1500, 103);
+  const X = new Uint8Array(3000);
+  X.set(A, 0);
+  X.set(B, 1500);
+  const Y = new Uint8Array(3000);
+  Y.set(A, 0);
+  Y.set(C, 1500);
+  const P = B.slice();
+  const { codes, bounds } = cat([X, Y, P]);
+  const m = belongsMatrix(codes, bounds, 15, { scaled: 1 });
+  /** @param {number} i @param {number} j @param {Float64Array} arr */
+  const at = (i, j, arr) => (i < j ? arr[i * 3 + j] : arr[j * 3 + i]);
+  // P ⊂ X is total, and ALL of it is exclusive (B is nowhere else).
+  assertEq(at(2, 0, m.shared), m.tot[2], 'P fully contained in X');
+  assertEq(at(2, 0, m.exclusive), m.tot[2], 'and all of it pair-private');
+  // X ∩ Y share the communal A — none of it is exclusive-free... it IS
+  // pair-exclusive (A lives only in X and Y), so exclusive == shared there.
+  assertEq(at(0, 1, m.exclusive), at(0, 1, m.shared), 'A is private to the X,Y pair');
+  // P shares nothing meaningful with Y, exclusively or otherwise.
+  assert(at(2, 1, m.shared) < 5, 'P and Y unrelated');
+});
+
+test('matrix: exclusive drops to zero when a third home holds the content', () => {
+  const B = randCodes(2000, 111);
+  const X = B.slice();
+  const Y = B.slice();
+  const P = B.slice(0, 1000);
+  const { codes, bounds } = cat([X, Y, P]);
+  const m = belongsMatrix(codes, bounds, 15, { scaled: 1 });
+  /** @param {number} i @param {number} j @param {Float64Array} arr */
+  const at = (i, j, arr) => (i < j ? arr[i * 3 + j] : arr[j * 3 + i]);
+  assertEq(at(2, 0, m.shared), m.tot[2], 'P contained in X');
+  assertEq(at(2, 0, m.exclusive), 0, 'but nothing is exclusive — Y holds it too');
+  assertEq(at(2, 1, m.exclusive), 0);
+});
+
+test('matrix: unique-content containment ignores the repeat haze', () => {
+  // Two records sharing a deep satellite but with private unique halves:
+  // shared containment is inflated by the satellite; unique-content is ~0.
+  const unit = stringToCodes('ACGGT');
+  const sat = new Uint8Array(1000);
+  for (let i = 0; i < 200; i++) sat.set(unit, i * 5);
+  const R1 = new Uint8Array(2000);
+  R1.set(sat, 0);
+  R1.set(randCodes(1000, 121), 1000);
+  const R2 = new Uint8Array(2000);
+  R2.set(sat, 0);
+  R2.set(randCodes(1000, 122), 1000);
+  const { codes, bounds } = cat([R1, R2]);
+  const m = belongsMatrix(codes, bounds, 15, { scaled: 1 });
+  const sharedC = m.shared[1] / m.tot[0];
+  const uniqC = m.uniqTot[0] > 0 ? m.uniq[0 * 2 + 1] / m.uniqTot[0] : 0;
+  assert(sharedC > 0.3, `satellite inflates shared containment (${sharedC})`);
+  assert(uniqC < 0.05, `unique-content sees through it (${uniqC})`);
+  // And a genuine fragment keeps unique-content high.
+  const F = R1.slice(1200, 1800); // from R1's unique half
+  const c2 = cat([R1, R2, F.slice()]);
+  const m2 = belongsMatrix(c2.codes, c2.bounds, 15, { scaled: 1 });
+  const uniqF = m2.uniq[2 * 3 + 0] / m2.uniqTot[2];
+  assert(uniqF > 0.95, `true fragment stays lit in unique mode (${uniqF})`);
+});
+
+test('matrix: crossMass ratio reads copy-number skew of shared content', () => {
+  const E = randCodes(2000, 131);
+  const F = new Uint8Array(6000); // E three times over: 3x the copies
+  F.set(E, 0);
+  F.set(E, 2000);
+  F.set(E, 4000);
+  const { codes, bounds } = cat([E, F]);
+  const m = belongsMatrix(codes, bounds, 15, { scaled: 1 });
+  const ratio = m.crossMass[1 * 2 + 0] / m.crossMass[0 * 2 + 1];
+  assertClose(ratio, 3, 0.05, `F carries ~3x the copies of the shared content (${ratio})`);
+});

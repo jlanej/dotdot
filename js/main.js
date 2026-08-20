@@ -23,6 +23,8 @@ import { RemoteTwoBit, regionToFasta } from './io/twobit.js';
 import { RemoteBigBed } from './io/bigbed.js';
 import { REFERENCES, parseBrowserRegion, splitRegionList, splitCrossSpec } from './refs.js';
 import { exportPng, compositeCanvases } from './export/png.js';
+import { buildReport } from './export/report.js';
+import { downloadBlob } from './export/download.js';
 import { exportSvg } from './export/svg.js';
 import { initHelp, closeHelp, BELONGS_METHODS } from './app/help.js';
 import { statsPop, confirmPop, enterModal, closeConfirm, closeStatsPop, setConfirmDismiss, confirmCard } from './app/dialogs.js';
@@ -85,6 +87,7 @@ const selRefPreset = /** @type {HTMLSelectElement} */ ($('sel-refpreset'));
 const rowRefPreset = $('row-refpreset');
 const btnCompute = /** @type {HTMLButtonElement} */ ($('btn-compute'));
 const btnPng = /** @type {HTMLButtonElement} */ ($('btn-png'));
+const btnReport = /** @type {HTMLButtonElement} */ ($('btn-report'));
 const btnSvg = /** @type {HTMLButtonElement} */ ($('btn-svg'));
 const btnRefine = /** @type {HTMLButtonElement} */ ($('btn-refine'));
 const btnShare = /** @type {HTMLButtonElement} */ ($('btn-share'));
@@ -812,6 +815,7 @@ function onData(data, reqId = -1) {
   updateStats();
   btnPng.disabled = false;
   btnSvg.disabled = false;
+  btnReport.disabled = false;
   btnShare.disabled = false;
   setRefineEnabled(data.source === 'kmer' && !!state.fileTarget);
   panelDetail.hidden = false;
@@ -3041,7 +3045,7 @@ function doClearAll() {
   lastBaseKmer = null;
   lastContain = null;
   lastBelongs = null;
-  belongsUi = { gen: -1, k: 0, matrix: null, gathers: new Map(), sel: -1, pending: -1, win: '', view: 'card' };
+  belongsUi = { gen: -1, k: 0, matrix: null, gathers: new Map(), sel: -1, pending: -1, win: '', view: 'card', cells: 'shared' };
   btnBelongs.hidden = true;
   queryLocal = false;
   queryShareUrl = null;
@@ -3070,6 +3074,7 @@ function doClearAll() {
   segScan = { ref: null, fwd: 0, rev: 0, bpFwd: 0, bpRev: 0 };
   statsPopCache = { ref: null, mode: '', html: '' };
   btnCompute.disabled = true;
+  btnReport.disabled = true;
   btnCompute.textContent = 'Compute dot plot';
   legendEl.className = 'empty';
   legendEl.textContent = 'no data';
@@ -3103,6 +3108,230 @@ $('btn-clear').addEventListener('click', () => {
     ],
   );
 });
+
+// ---- Report export: one PNG with the plot, belongs grids, gather, charts --
+
+/** Resolve CSS var() tokens in an SVG string to literal colors. @param {string} svg */
+function resolveSvgVars(svg) {
+  const cs = getComputedStyle(document.documentElement);
+  return svg.replace(/var\((--[a-z0-9-]+)\)/gi, (_, n) => cs.getPropertyValue(n).trim() || '#888888');
+}
+
+async function exportReport() {
+  const d = state.data;
+  if (!d) return;
+  btnReport.disabled = true;
+  try {
+    // Full-resolution frame of the current view, same stash dance as capture.
+    const stashCursor = state.cursor;
+    const stashFps = state.fpsOn;
+    state.cursor = null;
+    state.fpsOn = false;
+    draw(2);
+    const plot = compositeCanvases({ underlay, glCanvas: glcanvas, overlay, dpr: 2 });
+    state.cursor = stashCursor;
+    state.fpsOn = stashFps;
+    draw(window.devicePixelRatio || 1);
+
+    const rootCs = getComputedStyle(document.documentElement);
+    /** @param {string} n @param {string} fb */
+    const tok = (n, fb) => rootCs.getPropertyValue(n).trim() || fb;
+    const theme = {
+      bg: tok('--page', '#0b0d10'),
+      panel: tok('--panel', '#14171c'),
+      ink: tok('--ink', '#e8eaee'),
+      ink2: tok('--ink-2', '#c6cad2'),
+      muted: tok('--muted', '#8a909b'),
+      border: tok('--border', '#2a2f37'),
+      family: getComputedStyle(document.body).fontFamily.replace(/"/g, "'"),
+    };
+
+    // Belongs grids ride along when the matrix is fresh for this data.
+    /** @type {import('./export/report.js').ReportSpec['matrix']} */
+    let matrix = null;
+    const bm = belongsUi.gen === dataGen ? belongsUi.matrix : null;
+    if (bm) {
+      const nRb = bm.nR;
+      const labels = [];
+      for (let i = 0; i < nRb; i++) labels.push(belongsLabel(i, bm.nRecT));
+      /** @param {Float64Array} arr @param {number} i @param {number} j */
+      const sym = (arr, i, j) => (i < j ? arr[i * nRb + j] : arr[j * nRb + i]);
+      matrix = {
+        labels,
+        aniHex,
+        grids: [
+          {
+            title: 'shared content — row ⊂ col',
+            valueOf: (r, c) => (bm.tot[r] > 0 ? sym(bm.shared, r, c) / bm.tot[r] : 0),
+          },
+          {
+            title: 'exclusive to pair',
+            valueOf: (r, c) => (bm.tot[r] > 0 ? sym(bm.exclusive, r, c) / bm.tot[r] : 0),
+          },
+          {
+            title: 'unique content',
+            valueOf: (r, c) => (bm.uniqTot[r] > 0 ? bm.uniq[r * nRb + c] / bm.uniqTot[r] : NaN),
+          },
+        ],
+      };
+    }
+
+    /** @type {import('./export/report.js').ReportGather | null} */
+    let gather = null;
+    const sel = belongsUi.sel;
+    const gg = bm && sel >= 0 ? belongsUi.gathers.get(sel) : null;
+    if (gg && bm) {
+      const labels = matrix ? /** @type {NonNullable<typeof matrix>} */ (matrix).labels : [];
+      /** @type {string[]} */
+      const legend = [];
+      /** @type {string[]} */
+      const legendColors = [];
+      const colors = [];
+      for (let r = 0; r < gg.nR; r++) {
+        colors.push(belongsRecColor(r));
+        let mass = 0;
+        for (let qw = 0; qw < gg.qWin; qw++) mass += gg.paint[qw * gg.nR + r];
+        if (mass > 0) {
+          legend.push(belongsElide(labels[r] ?? `record ${r + 1}`));
+          legendColors.push(belongsRecColor(r));
+        }
+      }
+      legend.push('unexplained');
+      legendColors.push(theme.muted);
+      const rows = gg.components.slice(0, 6).map(
+        (/** @type {any} */ c) =>
+          `${belongsPct(c.mass / gg.totMass)} — ${belongsRegion(c.rec, c.lo, c.hi, bm.nRecT)}` +
+          ` · ${belongsPct(c.mass > 0 ? c.contested / c.mass : 0)} contested`,
+      );
+      const unex = 1 - gg.explained / Math.max(1, gg.totMass);
+      const cAll = gg.explained > 0 ? gg.contestedTotal / gg.explained : 0;
+      gather = {
+        title: `where does ${labels[sel] ?? 'the record'} belong?`,
+        g: gg,
+        colors,
+        legend,
+        legendColors,
+        rows,
+        foot:
+          `${formatBp(gg.tileBp)} windows · ${belongsPct(cAll)} contested · ` +
+          `${belongsPct(unex)} unexplained — claims are disjoint; ties break to load order (parsimony, not affinity)`,
+      };
+    }
+
+    const cm = buildColormap(mode);
+    /** @type {{title: string, svg: string}[]} */
+    const charts = [];
+    const dist = segmentDistributions(d.segments);
+    if (dist) {
+      charts.push({
+        title: 'segment length (log count)',
+        svg: resolveSvgVars(
+          groupedBarsSVG({
+            binLabels: ladderLabels(dist.lengths.edges),
+            series: [
+              { name: 'forward', color: cm.fwdFlat, values: dist.lengths.fwd },
+              { name: 'reverse', color: cm.revFlat, values: dist.lengths.rev },
+            ],
+          }),
+        ),
+      });
+      const idLabels = [];
+      for (let i = 0; i < dist.identity.fwd.length; i++) {
+        idLabels.push(`${((dist.identity.lo + i * dist.identity.width) * 100).toFixed(1)}%`);
+      }
+      charts.push({
+        title: 'anchor identity (log count)',
+        svg: resolveSvgVars(
+          groupedBarsSVG({
+            binLabels: idLabels,
+            series: [
+              { name: 'forward', color: cm.fwdFlat, values: dist.identity.fwd },
+              { name: 'reverse', color: cm.revFlat, values: dist.identity.rev },
+            ],
+          }),
+        ),
+      });
+    }
+    const km = d.stats.kmer;
+    if (km) {
+      const occ = occupancyBins(km.occCount);
+      charts.push({
+        title: `k-mer occurrence spectrum (distinct ${km.k}-mers, log count)`,
+        svg: resolveSvgVars(
+          groupedBarsSVG({
+            binLabels: occ.map((o) => o.label),
+            series: [{ name: 'distinct', color: cm.fwdFlat, values: occ.map((o) => o.count) }],
+          }),
+        ),
+      });
+    }
+
+    const tLabel = d.target.names.length === 1 ? d.target.names[0] : `${d.target.names.length} sequences`;
+    const qLabel = state.fileQuery
+      ? d.query.names.length === 1
+        ? d.query.names[0]
+        : `${d.query.names.length} sequences`
+      : 'self';
+    const sub = [
+      `target ${d.target.names.length} seq · ${formatBp(d.target.total)} — query ` +
+        `${d.query.names.length} seq · ${formatBp(d.query.total)} · ${formatCount(d.segments.count)} segments · ` +
+        (d.source === 'kmer' ? `alignment-free${km ? `, k=${km.k}` : ''}` : 'PAF import'),
+      `generated ${new Date().toISOString().slice(0, 10)}` +
+        (shareBase ? ` · reproduce: ${location.origin}${location.pathname}?${shareBase}` : ' · local files'),
+    ];
+    const footer = [];
+    if (d.source === 'kmer') {
+      footer.push(
+        'Plot identity is anchor identity (exact k-mer anchor coverage of each merged run) — deliberately not alignment identity and not ANI.',
+      );
+    }
+    if (bm) {
+      footer.push(
+        `Belongs: count-weighted canonical ${bm.k}-mer containment` +
+          (bm.scaled > 1
+            ? `, FracMinHash-estimated over 1/${bm.scaled} of k-mer space (every record sees the same sample)`
+            : ' (exact)') +
+          ' · shared content is not locus homology — repeat families carry it across unrelated loci.',
+      );
+    }
+    if (gather) {
+      footer.push(
+        'Gather: greedy cover — each k-mer copy claimed once against both the record and the window; contested = claimable elsewhere.',
+      );
+    }
+
+    const canvas = await buildReport({
+      plot,
+      plotDpr: 2,
+      dpr: 2,
+      title: `dotdot report — ${tLabel} × ${qLabel}`,
+      sub,
+      theme,
+      matrix,
+      gather,
+      charts,
+      footer,
+    });
+    canvas.toBlob((b) => {
+      if (b) downloadBlob(b, 'dotdot-report.png');
+    }, 'image/png');
+    // The rendered report, for rigs and tests (same spirit as __dotdotCapture).
+    lastReportCanvas = canvas;
+  } catch (err) {
+    toast(`Report failed: ${err instanceof Error ? err.message : String(err)}`, true);
+  } finally {
+    btnReport.disabled = !state.data;
+  }
+}
+/** @type {HTMLCanvasElement | null} */
+let lastReportCanvas = null;
+Object.defineProperty(globalThis, '__dotdotReport', {
+  value: async () => {
+    await exportReport();
+    return lastReportCanvas ? lastReportCanvas.toDataURL('image/png') : null;
+  },
+});
+btnReport.addEventListener('click', () => void exportReport());
 
 btnPng.addEventListener('click', () => {
   const stashCursor = state.cursor;
@@ -3593,8 +3822,8 @@ btnStatsDetail.addEventListener('click', openStatsPop);
 // position striding would not). Shared content ≠ locus homology; the card
 // and the help entry both say so.
 
-/** @type {{gen: number, k: number, matrix: any, gathers: Map<number, any>, sel: number, pending: number, win: string, view: 'card' | 'methods'}} */
-let belongsUi = { gen: -1, k: 0, matrix: null, gathers: new Map(), sel: -1, pending: -1, win: '', view: 'card' };
+/** @type {{gen: number, k: number, matrix: any, gathers: Map<number, any>, sel: number, pending: number, win: string, view: 'card' | 'methods', cells: 'shared' | 'excl' | 'uniq'}} */
+let belongsUi = { gen: -1, k: 0, matrix: null, gathers: new Map(), sel: -1, pending: -1, win: '', view: 'card', cells: 'shared' };
 
 function belongsRecordCount() {
   const d = state.data;
@@ -3626,7 +3855,7 @@ function openBelongsPop() {
     return;
   }
   if (belongsUi.gen !== dataGen || belongsUi.k !== currentK()) {
-    belongsUi = { gen: dataGen, k: currentK(), matrix: null, gathers: new Map(), sel: -1, pending: -1, win: '', view: 'card' };
+    belongsUi = { gen: dataGen, k: currentK(), matrix: null, gathers: new Map(), sel: -1, pending: -1, win: '', view: 'card', cells: 'shared' };
   }
   renderBelongs();
   statsPop.hidden = false;
@@ -3728,6 +3957,10 @@ function renderBelongs() {
   }
   const { nR, nRecT, k, scaled } = m;
   const shared = /** @type {Float64Array} */ (m.shared);
+  const exclusive = /** @type {Float64Array} */ (m.exclusive);
+  const uniqM = /** @type {Float64Array} */ (m.uniq);
+  const uniqTot = /** @type {Float64Array} */ (m.uniqTot);
+  const crossMass = /** @type {Float64Array} */ (m.crossMass);
   const tot = /** @type {Float64Array} */ (m.tot);
   const self = !state.fileQuery;
   const lab = [];
@@ -3735,6 +3968,13 @@ function renderBelongs() {
   /** @param {number} i @param {number} j */
   const shr = (i, j) => (i < j ? shared[i * nR + j] : shared[j * nR + i]);
 
+  const cellsMode = belongsUi.cells;
+  html +=
+    `<p class="stats-sum belongs-cellsrow">cells: <select id="belongs-cells" aria-label="cell metric">` +
+    `<option value="shared"${cellsMode === 'shared' ? ' selected' : ''}>shared content</option>` +
+    `<option value="excl"${cellsMode === 'excl' ? ' selected' : ''}>exclusive to pair</option>` +
+    `<option value="uniq"${cellsMode === 'uniq' ? ' selected' : ''}>unique content</option>` +
+    `</select> <span class="dim">— hover any cell for every metric</span></p>`;
   let tbl = `<div class="belongs-wrap"><table class="belongs-table"><thead><tr><th>row ⊂ col</th>`;
   for (let c = 0; c < nR; c++) tbl += `<th title="${belongsEsc(lab[c])}">${belongsEsc(belongsElide(lab[c]))}</th>`;
   tbl += `<th></th></tr></thead><tbody>`;
@@ -3750,22 +3990,41 @@ function renderBelongs() {
       const back = tot[c] > 0 ? s / tot[c] : 0;
       const denom = Math.min(tot[r], tot[c]);
       const ani = denom > 0 && s > 0 ? Math.pow(s / denom, 1 / k) : 0;
+      const excl = r < c ? exclusive[r * nR + c] : exclusive[c * nR + r];
+      const exclR = tot[r] > 0 ? excl / tot[r] : 0;
+      const uniqR = uniqTot[r] > 0 ? uniqM[r * nR + c] / uniqTot[r] : NaN;
+      const massRC = crossMass[r * nR + c];
+      const massCR = crossMass[c * nR + r];
+      const ratio = massCR > 0 ? massRC / massCR : 0;
       // Zoom lands on the plot's axes: columns must be target records; rows
       // must live on the y axis (query records on cross plots, anything on
       // self plots — the axes share one catalog there).
       const zoomable = c < nRecT && (self || r >= nRecT) && cont > 0;
-      const title =
-        `${belongsPct(cont)} of ${lab[r]} occurs in ${lab[c]} · ${belongsPct(back)} the other way` +
-        (ani > 0 ? ` · k-mer ANI ≈ ${(ani * 100).toFixed(1)}%` : '') +
-        (zoomable ? ' · click to zoom the plot here' : '');
-      const tint =
-        cont > 0
-          ? ` style="background:color-mix(in srgb, ${aniHex(cont)} ${Math.round(12 + cont * 30)}%, transparent)"`
-          : '';
+      const titleLines = [
+        `${belongsPct(cont)} of ${lab[r]} occurs in ${lab[c]} · ${belongsPct(back)} the other way`,
+        `exclusive to this pair: ${belongsPct(exclR)} of ${lab[r]}`,
+        Number.isFinite(uniqR)
+          ? `unique content: ${belongsPct(uniqR)} of ${lab[r]}’s single-copy k-mers occur in ${lab[c]}`
+          : `unique content: — (${lab[r]} has no single-copy k-mers)`,
+      ];
+      if (s > 0 && (ratio >= 1.15 || ratio <= 1 / 1.15)) {
+        titleLines.push(
+          ratio >= 1.15
+            ? `shared content sits at ~${ratio.toFixed(1)}× higher copy in ${lab[r]}`
+            : `shared content sits at ~${(1 / ratio).toFixed(1)}× higher copy in ${lab[c]}`,
+        );
+      }
+      if (ani > 0) titleLines.push(`k-mer ANI ≈ ${(ani * 100).toFixed(1)}%`);
+      if (zoomable) titleLines.push('click to zoom the plot here');
+      const val = cellsMode === 'excl' ? exclR : cellsMode === 'uniq' ? uniqR : cont;
+      const shown = Number.isFinite(val) && val > 0;
+      const tint = shown
+        ? ` style="background:color-mix(in srgb, ${aniHex(val)} ${Math.round(12 + val * 30)}%, transparent)"`
+        : '';
       tbl +=
-        `<td${tint} title="${belongsEsc(title)}"` +
+        `<td${tint} title="${belongsEsc(titleLines.join('\n'))}"` +
         (zoomable ? ` class="zoom" data-r="${r}" data-c="${c}"` : '') +
-        `>${cont > 0 ? belongsPct(cont) : '<span class="dim">·</span>'}</td>`;
+        `>${shown ? belongsPct(val) : `<span class="dim">${Number.isFinite(val) ? '·' : '—'}</span>`}</td>`;
     }
     tbl += `<td><button class="linklike belongs-where" data-rec="${r}">where?</button></td></tr>`;
   }
@@ -3883,6 +4142,13 @@ function bindBelongs() {
   if (!card) return;
   const x = card.querySelector('.stats-close');
   if (x) x.addEventListener('click', closeStatsPop);
+  const cellsSel = card.querySelector('#belongs-cells');
+  if (cellsSel instanceof HTMLSelectElement) {
+    cellsSel.addEventListener('change', () => {
+      belongsUi.cells = /** @type {'shared'|'excl'|'uniq'} */ (cellsSel.value);
+      renderBelongs();
+    });
+  }
   const win = card.querySelector('#belongs-win');
   if (win instanceof HTMLInputElement) {
     win.addEventListener('change', () => {

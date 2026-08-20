@@ -19,6 +19,7 @@ import './compute.test.js';
 import './format.test.js';
 import './refs.test.js';
 import './region.test.js';
+import './report.test.js';
 import './settle.test.js';
 import './share.test.js';
 import './twobit.test.js';
