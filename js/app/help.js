@@ -184,7 +184,29 @@ const HELP = {
  * quick layer; this is the complete one. Plain-text math on purpose.
  */
 export const BELONGS_METHODS =
-  `<h4>The statistic</h4>
+  `<h4>The gist</h4>
+<p class="stats-sum">Chop every sequence into all its overlapping k-letter words and keep
+them in a bag — copies included, and either reading direction counts as the same word.
+Everything on this card is arithmetic on those bags: nothing is ever aligned, and word
+order is ignored on purpose.</p>
+<p class="stats-sum"><b>The matrix</b> asks “how much of this bag is in that one?” Each
+cell: take the row’s words — a word carried five times counts five — and see how many the
+column’s bag can match, then divide by the row’s total. A short contig is judged against
+its own bag, so it reads fairly against a whole chromosome.</p>
+<p class="stats-sum"><b>where?</b> asks “which pieces of everything else could this bag
+have come from?” The other sequences are cut into windows and the words are dealt out like
+tracing borrowed phrases to their sources: the window able to account for the most
+still-unaccounted words claims them — one copy each, never more copies than the window
+itself holds — and the game repeats until nothing worth claiming remains. Every word is
+attributed exactly once, which is why the shares add up.</p>
+<p class="stats-sum"><b>The catch:</b> when two sources hold the same words, whoever is
+picked first takes them — the decomposition is one <i>sufficient</i> explanation, not the
+only one. That is what the extra instruments are for: <b>contested</b> counts claimed words
+that also sit in another source’s bag (high = the pick was a coin flip; check the matrix
+row), and the <b>strip</b> paints where along your record each source’s claims land — a
+glued-together assembly shows as blocks from different sources.</p>
+
+<h4>The statistic</h4>
 <p class="stats-sum">Every sequence is a <b>multiset</b> of canonical k-mers: each window of k
 bases contributes min(kmer, revcomp) — one species per window, so orientation never matters
 (an inverted contig belongs exactly as much). For records A and B with per-species copy
