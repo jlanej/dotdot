@@ -303,6 +303,57 @@ screenshots), themed, with the reproduce link in the header.
 
 ![one-page dotdot report: plot, belongs grids, gather, distributions](docs/report_demo.png)
 
+### Worked example: the contig no one could place
+
+A real placement problem, end to end. `NA19240#1#JAHEOM020000014.1` is a
+~5.4 Mb contig from the HPRC NA19240 paternal assembly that its own
+pipeline left off every chromosome — in that haplotype, no acrocentric
+short arm reached chromosome level at all. Dotting it against all five
+acrocentric p-arms is one URL against the bundled dev server (any local
+file works the same way through the query picker):
+
+```text
+/?ref=t2t&refregion=chr13p,chr14p,chr15p,chr21p,chr22p&query=testdata/real/<the contig>.fa.gz&minrun=300
+```
+
+The instruments then tell a story no single number could:
+
+- **Shared containment** runs high against several arms at once, with
+  k-mer ANI so similar across chr13p, chr14p and chr21p that identity
+  alone cannot pick a home.
+- The **exclusive** lens collapses toward zero everywhere — almost nothing
+  in this contig is private to any one pair — and even the **unique** lens
+  stays high against three different arms: the contig's single-copy
+  sequence is *itself* multi-arm.
+- **where?** explains nearly all of it at very high contested fractions,
+  and the position strip comes out as contiguous blocks: the distal
+  portion attributed to chr21p (with a small chr14p-flavored insert), the
+  proximal portion to chr13p. Blocks *plus* high contested is the third
+  pattern in the Methods reading guide — not a chimera, but sequence that
+  genuinely lives on several arms, with the individual's haplotype mosaic
+  across chromosome labels (the acrocentric pseudo-homologous territory of
+  Guarracino et al. 2023).
+- The **plot** settles orientation and colinearity: a full-length forward
+  diagonal against chr21p (the best single home), a proximal-only diagonal
+  against chr13p, and an **inverted** homolog on chr14p. Horizontal
+  streaks mark arm-side arrays the contig carries only once — corroborated
+  by the hover's copy ratio, and exactly where a read-depth check would go
+  next.
+
+So the assembly's own "unplaced" call is correct — and now *quantified*:
+best single home chr21p, proximal block shared with chr13p, orientation
+flipped relative to chr14p, a small remainder genuinely private. A
+best-hit pipeline would have guessed an arm and been overconfident; the
+contested share is the number that says "don't". One press of **Report**
+turns the whole session into a single PNG:
+
+![the worked example as a one-page report: the contig against five acrocentric p-arms, every panel agreeing it is real, multi-arm, and correctly unplaced](docs/belongs_contig_report.png)
+
+To repeat it with the same contig, `samtools faidx` it out of the HPRC
+assembly (`scripts/fetch_realdata.sh` shows the ranged-fetch pattern
+against the same bucket) — or drop any contig of your own on the query
+slot; the workflow is identical.
+
 ### Reference genomes, no downloads
 
 The **Reference** dropdown gives instant material with no files at all:
