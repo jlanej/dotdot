@@ -159,13 +159,6 @@ haplotypes, with minimap2's calls arriving as the audit overlay.
   through. Jump to it with `G` → `chr17_ROI10.9:10.88M-10.92M` (true
   coordinates work directly).
 
-**full chr17 × NA19240** runs the whole-chromosome comparison — alignment-free
-whenever the fetched FASTAs are present (`scripts/fetch_realdata.sh`),
-falling back to the committed aligner PAF on a fresh clone. The intended
-rhythm at that scale: let the coarse auto-sampled pass finish, pan the
-overview, zoom into anything interesting, and hit **Refine view** for exact
-local detail.
-
 ![the demo: both chr17 loci vs all four NA19240 haplotype slices — separators and per-sequence true-coordinate rulers, with minimap2's calls inked on top](docs/demo_17p11.png)
 
 *The demo's 2×4 region lattice: every sequence rules its own true
@@ -395,12 +388,12 @@ on an Apple-silicon laptop:
 both haplotype bands, loaded standalone in under a second — each band ruled
 in its own coordinates.*
 
-One-click versions of this dataset live on the demo buttons: **chr17 loci
-demo** (target slices streamed live from the T2T reference, committed
+A one-click version of this dataset lives on the **chr17 loci demo**
+button (target slices streamed live from the T2T reference, committed
 copies as the offline fallback — always alignment-free, including the
-heterozygous 4.9 kb deletion at chr17:10.895 Mb) and **full chr17 ×
-NA19240** (alignment-free when `scripts/fetch_realdata.sh` has run; the
-committed 574 kB minimap2 PAF otherwise).
+heterozygous 4.9 kb deletion at chr17:10.895 Mb); the full-chromosome
+FASTAs remain reproducible via `scripts/fetch_realdata.sh` and load like
+any local files.
 
 ## Progressive detail: sampling and Refine view
 

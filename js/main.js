@@ -1821,56 +1821,6 @@ async function loadDemo() {
   }
 }
 
-/**
- * Full chr17 × NA19240: alignment-free when the fetched FASTAs are present
- * (scripts/fetch_realdata.sh), otherwise the committed aligner PAF with a
- * pointer to the script.
- */
-async function loadFullChr17() {
-  const gen = ++refLoadGen;
-  const carriedRegion = queuedActions?.region;
-  queuedActions = null;
-  const T = 'testdata/real/chr17.fa';
-  const Q = 'testdata/real/NA19240_chr17.fa';
-  try {
-    const [tHead, qHead] = await Promise.all([
-      fetch(T, { method: 'HEAD' }).catch(() => null),
-      fetch(Q, { method: 'HEAD' }).catch(() => null),
-    ]);
-    if (gen !== refLoadGen) return;
-    if (tHead?.ok && qHead?.ok) {
-      inK.value = '16';
-      inKNum.value = '16';
-      const o = await fetchAsFile('testdata/real/NA19240_vs_chm13_chr17.paf');
-      toast(
-        'Computing the full 84 Mb × 170 Mb chr17 comparison alignment-free — this takes minutes ' +
-          '(Cancel anytime). minimap2’s calls will overlay when it finishes.',
-      );
-      const t = await fetchAsFile(T);
-      const q = await fetchAsFile(Q);
-      if (gen !== refLoadGen) return;
-      queuedActions = { overlay: o, region: carriedRegion };
-      queryLocal = false; // no shareBase here — the honest toast still applies
-      queryShareUrl = null;
-      setFasta('query', q);
-      setFasta('target', t);
-    } else {
-      const f = await fetchAsFile('testdata/real/NA19240_vs_chm13_chr17.paf');
-      if (gen !== refLoadGen) return;
-      queuedActions = { region: carriedRegion ?? 'chr17:18.3M-19.4M' };
-      setChip('chip-paf', f);
-      computePaf(f.buf);
-      shareBase = new URLSearchParams({ paf: 'testdata/real/NA19240_vs_chm13_chr17.paf' }).toString();
-      toast(
-        'Full-chromosome FASTAs are not present (run scripts/fetch_realdata.sh to get them) — ' +
-          'showing the aligner’s PAF view instead.',
-      );
-    }
-  } catch (err) {
-    toast(err instanceof Error ? err.message : String(err), true);
-  }
-}
-
 // --------------------------------------------------------------------------
 // Files
 
@@ -2843,7 +2793,6 @@ btnCompute.addEventListener('click', () => {
   if (state.fileTarget) computeKmer();
 });
 $('btn-demo2').addEventListener('click', () => void loadDemo());
-$('btn-demo-real2').addEventListener('click', () => void loadFullChr17());
 $('btn-hero').addEventListener('click', () => {
   // The README's hero region: select the T2T reference and stream the chr8
   // centromere's woven satellite arrays as a self-plot.
