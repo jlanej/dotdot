@@ -2,8 +2,8 @@
 /**
  * Shared typedefs plus the one authoritative definition of the SegmentStore
  * field list: every allocate / copy / transfer / filter of segment columns
- * goes through the helpers below, so adding a field is a change in exactly
- * one file.
+ * goes through the helpers below — except the two stores io/paf.js builds as
+ * object literals, so adding a field means editing this file and that one.
  */
 import { F64Vec, F32Vec, U8Vec } from './vec.js';
 
@@ -65,7 +65,7 @@ import { F64Vec, F32Vec, U8Vec } from './vec.js';
  */
 
 /**
- * Screen-space endpoints helper: writes [x0, y0, x1, y1] for segment i into
+ * World-space endpoints helper: writes [x0, y0, x1, y1] for segment i into
  * `out` (world bp coords, strand-aware).
  * @param {SegmentStore} s
  * @param {number} i

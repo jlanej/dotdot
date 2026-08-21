@@ -404,8 +404,10 @@ function swap(a, b, i, j) {
  * Restricting [qLo, qHi) processes only k-mers *starting* in that range
  * (with automatic rolling warm-up), so disjoint ranges tile the query with no
  * lost or duplicated anchors — the unit of multi-core parallelism. A run
- * crossing a range cut is emitted as two abutting collinear segments, which
- * render identically to one.
+ * crossing a range cut is emitted as two collinear segments that overlap by
+ * k-1 bp where the anchors are contiguous across the cut (the assembler's
+ * stitch tolerance subtracts that overlap back out), which render
+ * identically to one.
  *
  * @param {KmerIndex} index
  * @param {Uint8Array} qCodes query codes (already revcomp'd for strand 1)
@@ -474,7 +476,7 @@ export function matchStrand(index, qCodes, qStarts, qTotal, tStarts, tTotal, opt
     if (out.x.n >= segCap) {
       throw new Error(
         `${SEGMENT_WALL_ERROR} (${Math.round(segCap / 1e6)}M wall) — raise min match ` +
-          'length, restore an occurrence cap or sampling, or zoom in. The heatmap and ' +
+          'length, restore an occurrence cap or sampling, or zoom in. The ANI heatmap and ' +
           'multiplicity lane show full repeat depth without enumerating it.',
       );
     }

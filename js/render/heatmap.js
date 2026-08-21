@@ -161,8 +161,10 @@ export function buildSatMask(intervals, w0, w1, n) {
  * instead of transparency; cells with data always keep their data color.
  *
  * @param {HeatBin} bin
- * @param {Uint8Array | Uint8ClampedArray} cmData 256×4-row colormap pixels (RGBA)
- * @param {number} rampRow colormap row (0 = forward identity ramp)
+ * @param {Uint8Array | Uint8ClampedArray} cmData colormap pixels (RGBA), 256 texels per row —
+ *   either the 256×6 strand/mode/multiplicity table or the 256×1 ANI ramp
+ * @param {number} rampRow colormap row to read (0 = the forward identity ramp
+ *   of the 256×6 table, or the only row of the 256×1 ANI ramp)
  * @param {number} lo ramp start identity
  * @param {number} hi ramp end identity
  * @param {SatMasks | null} [sat]

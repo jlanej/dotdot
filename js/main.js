@@ -2530,7 +2530,7 @@ overlay.addEventListener('dblclick', (e) => {
   markDirty();
 });
 
-// Hover picking, throttled to the render loop.
+// Hover picking, throttled to a 40 ms poll of the last pointer position.
 setInterval(() => {
   if (!pendingHover) return;
   const e = pendingHover;
@@ -2553,7 +2553,7 @@ setInterval(() => {
         hoverCard.className = '';
         hoverCard.textContent = aniMode()
           ? `tile k-mer ANI ~${(v * 100).toFixed(1)}% (containment; ramp ${(heatRange.lo * 100).toFixed(1)}–${(heatRange.hi * 100).toFixed(1)}%)`
-          : `tile anchor identity ≥ ${(v * 100).toFixed(1)}% (ramp ${(heatRange.lo * 100).toFixed(1)}–${(heatRange.hi * 100).toFixed(1)}%)`;
+          : `tile best anchor identity ${(v * 100).toFixed(1)}% (ramp ${(heatRange.lo * 100).toFixed(1)}–${(heatRange.hi * 100).toFixed(1)}%)`;
       } else if (heatSatAt(wx, wy)) {
         hoverCard.className = '';
         hoverCard.textContent =
@@ -3152,6 +3152,13 @@ async function exportReport() {
           `${belongsPct(c.mass / gg.totMass)} — ${belongsRegion(c.rec, c.lo, c.hi, bm.nRecT)}` +
           ` · ${belongsPct(c.mass > 0 ? c.contested / c.mass : 0)} contested`,
       );
+      if (gg.components.length > 6) {
+        let shownMass = 0;
+        for (let i = 0; i < 6; i++) shownMass += gg.components[i].mass;
+        rows.push(
+          `+ ${gg.components.length - 6} smaller windows (${belongsPct((gg.explained - shownMass) / gg.totMass)})`,
+        );
+      }
       const unex = 1 - gg.explained / Math.max(1, gg.totMass);
       const cAll = gg.explained > 0 ? gg.contestedTotal / gg.explained : 0;
       gather = {
@@ -3189,7 +3196,7 @@ async function exportReport() {
         idLabels.push(`${((dist.identity.lo + i * dist.identity.width) * 100).toFixed(1)}%`);
       }
       charts.push({
-        title: 'anchor identity (log count)',
+        title: `${d.source === 'kmer' ? 'anchor identity' : 'identity'} (log count)`,
         svg: resolveSvgVars(
           groupedBarsSVG({
             binLabels: idLabels,
@@ -3226,7 +3233,9 @@ async function exportReport() {
         `${d.query.names.length} seq · ${formatBp(d.query.total)} · ${formatCount(d.segments.count)} segments · ` +
         (d.source === 'kmer' ? `alignment-free${km ? `, k=${km.k}` : ''}` : 'PAF import'),
       `generated ${new Date().toISOString().slice(0, 10)}` +
-        (shareBase ? ` · reproduce: ${location.origin}${location.pathname}?${shareBase}` : ' · local files'),
+        (shareBase
+          ? ` · data: ${location.origin}${location.pathname}?${shareBase} (viewport and matching options not in this link)`
+          : ' · local files'),
     ];
     const footer = [];
     if (d.source === 'kmer') {
@@ -3396,7 +3405,7 @@ function updateLegend() {
   legendEl.className = '';
   if (aniMode()) {
     const res = heatBin
-      ? ` · ${heatBin.nx}×${heatBin.ny} tiles (${formatBp((heatBin.x1 - heatBin.x0) / heatBin.nx)} each — zoom to refine)`
+      ? ` · ${heatBin.nx}×${heatBin.ny} tiles (${formatBp((heatBin.x1 - heatBin.x0) / heatBin.nx)} × ${formatBp((heatBin.y1 - heatBin.y0) / heatBin.ny)} each — zoom to refine)`
       : '';
     legendEl.innerHTML =
       `<div class="row"><span class="lab">tile</span><span class="ramp" style="background:${cm.aniRampCss()}"></span></div>` +
@@ -3607,10 +3616,14 @@ function wallRecovery(message) {
       `segments at these settings. Ways through:`,
     buttons,
     `The length filter keeps long-range structure and drops repeat confetti; sampling thins ` +
-      `everything evenly. Raising the wall recomputes and keeps everything — ` +
-      `~${Math.round((wallNext * 70) / 1e9)} GB of RAM+GPU at ${Math.round(wallNext / 1e6)}M, ` +
-      `frame rate roughly halves per doubling, and your GPU may refuse the buffer (64M is the ` +
-      `engine's hard limit). The ANI heatmap shows full repeat depth without enumerating at all.`,
+      `everything evenly. ` +
+      (wallNext > wallNow
+        ? `Raising the wall recomputes and keeps everything — ` +
+          `~${Math.round((wallNext * 70) / 1e9)} GB of RAM+GPU at ${Math.round(wallNext / 1e6)}M, ` +
+          `frame rate roughly halves per doubling, and your GPU may refuse the buffer (64M is the ` +
+          `engine's hard limit). `
+        : `The wall is already at the engine's 64M hard limit — it cannot be raised further. `) +
+      `The ANI heatmap shows full repeat depth without enumerating at all.`,
   );
   return true;
 }
@@ -4202,7 +4215,9 @@ window.addEventListener('keydown', (e) => {
 });
 
 // --------------------------------------------------------------------------
-// URL parameters: ?demo=1 | ?paf=url | ?target=url[&query=url] (+ k, gap, occ)
+// URL parameters: ?ref=id[&refregion=…][&query=url] | ?demo=1 | ?paf=url |
+// ?target=url[&query=url][&overlay=url] — plus ?region= and the matching
+// params (k, gap, occ, minrun, sample, budget, anitiles, wall).
 
 async function initFromUrl() {
   const p = new URLSearchParams(location.search);

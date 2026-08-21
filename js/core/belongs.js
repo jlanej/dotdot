@@ -90,14 +90,14 @@ export function pickScaled(totalBp, cap = 24_000_000) {
 /**
  * The one scan both features share: roll every window's forward and
  * reverse-complement forms in tandem across the concatenation (runs break at
- * N and at bucket edges' record boundaries exactly like buildIndex), take
+ * N and at record boundaries exactly like buildIndex, not at bucket edges), take
  * the canonical form, keep it when it passes the FracMinHash threshold, and
  * emit (canonical k-mer, bucket) pairs SORTED by k-mer — so equal-species
  * runs are contiguous for the callers' counting walks.
  *
  * Buckets are the caller's partition of the concatenation: record bounds for
  * the matrix, per-record windows for gather. Edges must be monotone, start
- * at 0 and end at codes.length; k-mer windows never straddle an edge (an
+ * at 0 and end at codes.length; k-mer windows may straddle an edge (an
  * edge is always a record boundary or a window cut inside one record — for
  * the matrix the former; gather passes both kinds and cuts ARE allowed to
  * split runs: a window is assigned to the bucket its START lies in, matching

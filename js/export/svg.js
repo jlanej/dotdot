@@ -185,9 +185,13 @@ export function exportSvg(p) {
   }
 
   // Chrome geometry comes from the same functions the screen uses, so the
-  // export inherits its density gates, per-band offset-aware rulers, label
-  // collision rules, and region separators — the file matches the screen
-  // by construction.
+  // export inherits its density gates, per-band offset-aware rulers, tick
+  // label collision (computeTicks measures with the estimator below), and
+  // region separators. Two screen-side rules do NOT come along, because they
+  // live in the canvas drawing code rather than in the shared geometry:
+  // band names are written unelided (bandLabels' maxW is ignored here), and
+  // the rotated y band names are never suppressed the way wide tick labels
+  // suppress them on screen.
   const stripes = [];
   for (const st of bandStripes(data.target, b.x0, b.x1, pw)) {
     const xa = LAYOUT.l + view.worldToPxX(st.a, pw);
@@ -260,6 +264,12 @@ export function exportSvg(p) {
         `<rect x="${xLeft}" y="${r2(LAYOUT.t + ph - r.b)}" width="11" height="${r2(Math.max(r.b - r.a, 1))}" fill="${r.fill}"/>`,
       );
     }
+    // The rotated lane name the canvas draws (render/axes.js) — the middle
+    // baseline is baked into the anchor so the glyphs sit inside the 11 px lane.
+    const labelX = xLeft + 9;
+    laneParts.push(
+      `<text x="${labelX}" y="${LAYOUT.t + 2}" text-anchor="end" fill="${theme.muted}" font-size="9" transform="rotate(-90 ${labelX} ${LAYOUT.t + 2})">${esc(annoY[li].label)}</text>`,
+    );
   }
 
   const svg = `<?xml version="1.0" encoding="UTF-8"?>

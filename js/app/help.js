@@ -59,7 +59,8 @@ const HELP = {
     'points: the count is <b>forward-strand</b> (reverse matches look up the ' +
     'reverse-complemented query in the same index, so on a self-plot at cap 1 a unique ' +
     'inverted pair still draws — each direction is unique); and on strided indexes the cap is ' +
-    'enforced in sampled units, so tiny caps round (a note says when; Refine view is exact).',
+    'enforced in sampled units, so tiny caps round (a note says when; under ~48 Mb of target, ' +
+    'Refine view is exact).',
   budget:
     'How many match anchors a compute may spend (~60M per strand at <b>auto</b>). The budget is ' +
     'what auto-tightens the repeat cutoff on repeat-rich inputs; <b>2×/4×/8×</b> multiply it, ' +
@@ -138,7 +139,7 @@ const HELP = {
     'merged run covered by exact k-mer anchors, after crediting sampling holes (bridged ' +
     'mismatch/indel bases count against it). It is deliberately not alignment identity ' +
     '(StainedGlass’s 100·M/(M+X+I+D)) nor k-mer ANI (ModDotPlot’s c^(1/k)) — it comes from ' +
-    'exact occurrence counts, no aligner. For PAF overlays the value is the aligner’s own ' +
+    'exact occurrence counts, no aligner. For PAF plots the value is the aligner’s own ' +
     'nmatch/alnlen. Instant — nothing recomputes.',
   strands:
     'Forward matches are blue; reverse-complement matches are orange — inversions appear as ' +
@@ -179,7 +180,7 @@ const HELP = {
     'copy ratio of shared content. <b>Shared content is not locus homology</b>: repeat ' +
     'families make unrelated loci “belong”. Full definitions, the claim contract, and a ' +
     'reading guide: <b>Methods…</b> at the bottom of the card. The <b>Report</b> button in ' +
-    'Export composes the plot, these grids, the gather, and the distribution charts into ' +
+    'the <b>View</b> panel composes the plot, these grids, the gather, and the distribution charts into ' +
     'one PNG.',
 };
 

@@ -9,7 +9,9 @@ import { parseBp } from './core/region.js';
 /**
  * @typedef {Object} RefPreset
  * @property {string} label
- * @property {string} region genome-browser syntax, 1-based inclusive
+ * @property {string} region region expression: browser syntax (1-based inclusive) or a
+ *   cytogenetic arm (`chr13p`), a comma/semicolon list of those, or two such sides joined
+ *   by " vs " — see splitCrossSpec / splitRegionList / parseBrowserRegion below
  */
 
 /**

@@ -480,7 +480,7 @@ export function bandStripes(cat, w0, w1, px) {
 export const STRIPE_ALPHA = 0.07;
 
 /**
- * Visible band-name labels with the shared placement rules (≤60 bands,
+ * Visible band-name labels with the shared placement rules (≤61 bands,
  * ≥34 px per band, centered midpoints). `worldToPx` maps a global axis
  * coordinate to px along the axis; the y axis passes its flipped mapper.
  * @param {import('../core/types.js').AxisCatalog} cat

@@ -7,7 +7,7 @@
   --page: #f9f9f7;
   --ink: #0b0b0b;
   --ink-2: #52514e;
-  --muted: #716f68; /* 4.9:1 on --page — hints and tick labels stay AA */
+  --muted: #716f68; /* 4.8:1 on --page — hints and tick labels stay AA */
   --grid: #e1e0d9;
   --baseline: #c3c2b7;
   --border: rgba(11, 11, 11, 0.1);

@@ -43,11 +43,10 @@ same view live:
   headers (the bundled dev server does).
 - **Progressive detail: coarse → zoom → Refine** — sampling is automatic by
   default but fully user-controllable (`auto`, `off`, or any pinned value),
-  and **Refine view** recomputes the *visible window* at full density —
-  fanned out across CPU cores like any other compute — and merges it into
-  the plot in place: whole-chromosome context stays coarse, the region
-  you're inspecting becomes exact, and axes/zoom/overlay never move. Measured: refining a 108 kb window took it from 834 to 34,096
-  segments while the rest of the plot stayed put.
+  and **Refine view** recomputes just the visible window at full density and
+  merges it in place — axes, zoom and overlay never move. Measured: refining
+  a 108 kb window took it from 834 to 34,096 segments while the rest of the
+  plot stayed put.
 - **Aligner audit via PAF** — load any PAF-emitting aligner's output
   (minimap2 etc., optionally gzipped; numbers parsed straight from bytes).
   Dropped onto an existing plot it becomes an **overlay**: the aligner's
@@ -88,13 +87,12 @@ same view live:
   clearly-one-source, and the full claim contract lives behind **Methods…**
   on the card.
 - **Honest by construction** — every approximation is either visible or
-  consented to: capped repeat regions count in the scoreboard (and hatch in
-  the identity-heatmap view), the
-  effective cutoff prints in a note when it tightens, quadratic satellite
-  windows are *predicted* from the occurrence histogram and asked about
-  before the grind (with a one-click fix), exact mode over 128 Mb asks with a
-  real RAM estimate instead of refusing, and `off` means off on every dial —
-  occurrence cap, sampling, and anchor budget can each be truly disabled.
+  consented to. The effective repeat cutoff prints in a note when it
+  tightens. Quadratic satellite windows are *predicted* from the occurrence
+  histogram and asked about before the grind, with a one-click fix. Exact
+  mode on a large target asks with a real RAM estimate instead of refusing.
+  And `off` means off on every dial: occurrence cap, sampling, and repeat
+  budget each disable outright.
 - **Annotation lanes from UCSC tracks** — CenSat satellite families (in the
   track's own colors), CAT/Liftoff genes, and SEDEF segmental duplications
   stream on demand as **bigBed byte ranges** into lanes along both axes, for
@@ -248,7 +246,8 @@ does an inverted haplotype), and each cell reports the share of the *row's*
 k-mer mass found anywhere in the *column*. Rows normalize by themselves —
 the containment index, not Jaccard — so a 30 kb fragment reads honestly
 against a whole chromosome arm. Hover a cell for both directions plus the
-k-mer ANI estimate; click it and the plot zooms to that record pair.
+k-mer ANI estimate; click a cell whose column is a target record and whose
+row is on the y axis, and the plot zooms to that record pair.
 
 **where?** goes one level deeper: a greedy decomposition of one record's
 k-mer mass over windows of all the others (the window width is a dial on
@@ -275,19 +274,20 @@ records, which no third home could explain (the placement-deciding
 complement of communal repeat mass); and **unique content** — containment
 restricted to the row's single-copy k-mers, which removes the repeat haze
 entirely (on the bundled demo, the 10 % cross-locus "sharing" between two
-unrelated chr17 windows collapses to ~1 % under this lens while true homes
-stay at 94–99 %). Hovering any cell reports every metric at once, including
-the **copy ratio** of the shared vocabulary — a collapsed-repeat detector,
-since containment can look perfect while one side carries fifty-fold fewer
+unrelated chr17 windows collapses to 3 % under this lens while true homes
+stay at 89–99 %). Hovering any cell reports every metric at once, and adds
+the **copy ratio** of the shared vocabulary whenever the two sides' copies
+of it differ by 15 % or more — a collapsed-repeat detector, since
+containment can look perfect while one side carries fifty-fold fewer
 copies of what it shares.
 
 ![belongs matrix of the five acrocentric short arms](docs/belongs_acro.png)
 
 *The five **acrocentric p-arms** (70.5 Mb, streamed straight from
-T2T-CHM13) as a belongs matrix: every arm shares 30–50 % of its k-mer mass
+T2T-CHM13) as a belongs matrix: every arm shares 32–73 % of its k-mer mass
 with every other — the famous satellite/rDNA commons that makes acrocentric
 short arms exchange material — while the ANI-tinted cells rank who shares
-most with whom. This is the second honesty rule printed on the card:
+most with whom. This is the honesty rule the card prints under every matrix:
 **shared content is not locus homology** — repeat families carry "belongs"
 across unrelated loci, and that is precisely what it measures. At this size
 the card also discloses its sampling: 1/4 of 15-mer space by hash
@@ -296,10 +296,10 @@ the card also discloses its sampling: 1/4 of 15-mer space by hash
 → Belongs….*
 
 And when the answer needs to leave the browser, the **Report** button in
-Export composes everything into a one-page PNG: the current plot, all three
-belongs grids, the gather panel with its position strip, the distribution
-charts, and the honesty footers — drawn natively on canvas (no DOM
-screenshots), themed, with the reproduce link in the header.
+the **View** panel composes everything into a one-page PNG: the current
+plot, all three belongs grids, the gather panel with its position strip,
+the distribution charts, and the honesty footers — drawn natively on canvas
+(no DOM screenshots), themed, with the reproduce link in the header.
 
 ![one-page dotdot report: plot, belongs grids, gather, distributions](docs/report_demo.png)
 
@@ -328,11 +328,11 @@ The instruments then tell a story no single number could:
 - **where?** explains nearly all of it at very high contested fractions,
   and the position strip comes out as contiguous blocks: the distal
   portion attributed to chr21p (with a small chr14p-flavored insert), the
-  proximal portion to chr13p. Blocks *plus* high contested is the third
-  pattern in the Methods reading guide — not a chimera, but sequence that
-  genuinely lives on several arms, with the individual's haplotype mosaic
-  across chromosome labels (the acrocentric pseudo-homologous territory of
-  Guarracino et al. 2023).
+  proximal portion to chr13p. Blocks *plus* high contested is the signature
+  the Methods reading guide files under misassembly — but this is no
+  chimera: sequence that genuinely lives on several arms, with the
+  individual's haplotype mosaic across chromosome labels (the acrocentric
+  pseudo-homologous territory of Guarracino et al. 2023).
 - The **plot** settles orientation and colinearity: a full-length forward
   diagonal against chr21p (the best single home), a proximal-only diagonal
   against chr13p, and an **inverted** homolog on chr14p. Horizontal
@@ -354,7 +354,7 @@ assembly (`scripts/fetch_realdata.sh` shows the ranged-fetch pattern
 against the same bucket) — or drop any contig of your own on the query
 slot; the workflow is identical.
 
-### Reference genomes, no downloads
+## Reference genomes, no downloads
 
 The **Reference** dropdown gives instant material with no files at all:
 selecting **T2T-CHM13v2.0** streams its default showcase window — the DXZ1
@@ -381,7 +381,7 @@ Cloudflare Pages can set them; GitHub Pages cannot) the k-mer engine matches
 on up to 8 CPU cores (two are left for the UI); without them it runs the
 identical single-worker path.
 
-### Loading data
+## Loading data
 
 | Input | How |
 |---|---|
@@ -390,22 +390,29 @@ identical single-worker path.
 | Many FASTAs | file buttons multi-select to stack several files on one axis; dropping 3+ makes the first the target and the rest the query — each sequence keeps its own ruler, with alternating band shading separating regions |
 | PAF / PAF.gz | optional aligner audit: any PAF-emitting aligner's output on the same axes |
 | Reference dropdown | T2T-CHM13v2.0 / GRCh38 windows streamed from UCSC 2bit files — self-plot, or the target for added FASTAs |
-| URL parameters | `?demo=1` · `?ref=t2t&refregion=chrX:57.8M-60.7M` · `?target=<url>&query=<url>[&overlay=<paf-url>]` · `?paf=<url>` · plus `k=`, `gap=`, `occ=` (`off` = no repeat masking), `minrun=`, `sample=` (`off` = truly exact, `off 512M` pre-approves the RAM), `budget=` (`off` = unbounded anchors), `wall=` (raise the segment wall, to `64M`), `anitiles=`, `region=`, and a `#v=` view fragment carrying viewport, draw mode (`draw=heat`/`ani`), color mode, filters, and auto-refine |
+| URL parameters | data: `?demo=1` · `?ref=t2t&refregion=chrX:57.8M-60.7M[&query=<url>]` · `?target=<url>&query=<url>[&overlay=<paf-url>]` · `?paf=<url>` — plus the matching and view options listed under the table |
 | Share view | one click copies a link reproducing the exact data, viewport, draw and color modes, display settings, and non-default matching options — every finding becomes a URL |
+
+Matching options also travel as URL parameters: `k=`, `gap=`, `minrun=`,
+`region=` and `anitiles=` set values directly; `occ=off` disables repeat
+masking, `budget=off` unbounds anchors, `sample=off` forces true exact mode
+(`off 512M` pre-approves the RAM), and `wall=64M` raises the 16 M ceiling on
+kept segments. A `#v=` fragment carries the viewport, draw mode
+(`draw=heat`/`ani`), color mode, filters, and auto-refine.
 
 Practical envelope: up to ~48 Mb of sequence per axis the engine runs dense
 and exact (bacteria, fungi, chromosome pairs, plasmids, viral genomes).
 Beyond that it switches itself into a sampled genome mode — target-index
 striding, query-position sampling, an occurrence cutoff chosen from the
-index's own repeat histogram to meet an anchor budget, and a minimum-evidence
-run filter — which carries it to full human chromosomes (see below), with
-multi-core matching when cross-origin isolation is available. Every one of
-those dials also goes to a true **off**: `sampling: off` is genuinely exact
-on both axes (guarded by a consent popup with the real RAM number past
-128 Mb of target, pre-approvable as `off 512M`, engine wall at ~1 Gb), and
-the occurrence cap and anchor budget disable outright — verified by the
-self-plot litmus that every k-mer of chr22 indexes with zero cap leaks. Try
-the bundled sample pair — generate the FASTAs once with
+index's own repeat histogram to meet an anchor budget, and a
+minimum-evidence run filter — which carries it to full human chromosomes
+(see below), multi-core wherever cross-origin isolation is available. Every
+one of those dials also goes to a true **off**: the occurrence cap and
+repeat budget disable outright, and `sampling: off` is genuinely exact on
+both axes — consent-gated past 128 Mb of target with the real RAM number
+(pre-approvable as `off 512M`), against a hard engine wall at ~1 Gb.
+
+Try the bundled sample pair — generate the FASTAs once with
 `scripts/make_testdata.py` (they are git-ignored), then open
 [`?target=testdata/target.fa&query=testdata/query.fa`](http://127.0.0.1:8420/?target=testdata/target.fa&query=testdata/query.fa).
 
@@ -439,12 +446,9 @@ on an Apple-silicon laptop:
 both haplotype bands, loaded standalone in under a second — each band ruled
 in its own coordinates.*
 
-A one-click version of this dataset lives on the **chr17 loci demo**
-button (target slices streamed live from the T2T reference, committed
-copies as the offline fallback — always alignment-free, including the
-heterozygous 4.9 kb deletion at chr17:10.895 Mb); the full-chromosome
-FASTAs remain reproducible via `scripts/fetch_realdata.sh` and load like
-any local files.
+Slices of this same dataset power the one-click **chr17 loci demo** — no
+download step required; the full-chromosome FASTAs above load like any
+local files.
 
 ## Progressive detail: sampling and Refine view
 
@@ -462,9 +466,11 @@ or the on-plot ✦ refines, and checking **auto** refines by itself whenever
 you rest at a zoomed view. Below, the demo's heterozygous **~4.9 kb
 deletion** at full detail, in true coordinates on both axes: hap2's k-mer
 diagonal halts at chr17:10,895,377, steps ~5 kb sideways across
-reference-only sequence with zero query advance, and resumes — while
-minimap2's deletion-spanning call (white ink) rides the same path, its two
-breakpoint diamonds flanking the gap exactly.
+reference-only sequence with zero query advance, and resumes — and minimap2
+does not bridge it either: its alignment stops dead at the left breakpoint
+(chr17:10,895,377) and a separate call restarts at the right one
+(chr17:10,900,693), so the white ink puts one breakpoint diamond on each
+side of the gap instead of a line across it.
 
 ![the heterozygous deletion at full detail: hap2's diagonal steps sideways across the deleted span, minimap2's call and breakpoint diamonds riding along](docs/roi_deletion_hap2.png)
 
@@ -492,12 +498,13 @@ filters never touch it.
 
 A note on the timings in this README: they were measured inside an embedded,
 *background-throttled* browser pane that granted the page a fraction of one
-CPU core — treat them as generous upper bounds on what a foreground tab does.
+CPU core. They are the pessimistic case — a foreground tab is faster.
 
-### Reading the plot
+## Reading the plot
 
 - x = target position, y = query position, laid out per sequence
-  (length-descending) with boundary gridlines and names on the axes.
+  (in load order; a standalone PAF sorts its axes by descending length) with
+  boundary gridlines and names on the axes.
 - Blue = forward matches; orange = reverse-complement matches (anti-diagonals
   are inversions). Color depth encodes **anchor identity** — the fraction of
   each merged run covered by exact k-mer anchors (bridged mismatch/indel bases
@@ -506,8 +513,11 @@ CPU core — treat them as generous upper bounds on what a foreground tab does.
   counts, no aligner involved. Darker is more identical in light mode,
   brighter in dark mode.
 - Broken diagonals are indels; off-diagonal blocks are duplications or
-  translocations; vertical/horizontal dashed columns are repeats hitting the
-  occurrence cap.
+  translocations; vertical/horizontal dashed columns are repeat families
+  still *under* the occurrence cap — one k-mer matching many loci on the
+  other axis. Repeats *over* the cap are skipped entirely, so they read as
+  absence (hatched in the identity-heatmap view, next bullet), never as
+  columns.
 - **Diagonal hatching** in the identity-heatmap view marks regions whose
   k-mers exceed the repeat cutoff: matches there were **never enumerated**,
   so an empty square means "not searched", not "not similar" — the classic
@@ -526,12 +536,13 @@ CPU core — treat them as generous upper bounds on what a foreground tab does.
 
 ```
 js/
-├── core/        dna packing · k-mer index+matcher · camera · picking grid · catalogs · regions · share grammar
+├── core/        dna packing · k-mer index+matcher · belongs (containment + gather) · camera · picking grid · catalogs · regions · share grammar
 ├── io/          FASTA and PAF parsers (byte-level) · remote 2bit + bigBed readers · gzip
 ├── worker/      compute coordinator (parse → index → match/plan) · pooled matcher
-├── render/      WebGL2 instanced renderer · shaders · OKLab colormaps · 2D axes chrome
-├── export/      PNG compositor · SVG builder
+├── render/      WebGL2 instanced renderer · shaders · OKLab colormaps · 2D axes chrome · identity-heatmap binning · distribution charts
+├── export/      PNG compositor · SVG builder · one-page report compositor
 ├── app/         help system · modal shell · settle bus (view-rest gates) · annotation lane builder
+├── refs.js      built-in reference genomes (remote 2bit presets + showcase regions)
 └── main.js      UI wiring, interactions, worker pool, render loop
 ```
 
@@ -576,11 +587,12 @@ open http://127.0.0.1:8420/tests/typecheck.html   # strict typecheck in the brow
   lane building against a fake track source (@offset mapping, band
   clipping, tile caching), parsers, BGZF/gzip fixtures, 2bit and bigBed decoding against
   in-memory fixtures, camera math, picking, region expressions with
-  true-coordinate offsets, colormap monotonicity, formatting).
+  true-coordinate offsets, colormap monotonicity, formatting, the
+  distribution-chart builders, and report layout).
 - `tests/typecheck.html` runs the real TypeScript compiler (fetched from a
-  CDN at dev time — nothing installs) over the same entry points CI checks
-  with `deno check`, so type errors surface locally on a machine with no
-  JavaScript runtime at all.
+  CDN at dev time — nothing installs) over CI's `deno check` entry points
+  plus the browser test suite, so type errors surface locally on a machine
+  with no JavaScript runtime at all.
 - `scripts/make_testdata.py` regenerates the synthetic assembly pair
   (`testdata/*.fa`, git-ignored) used to produce `testdata/example.paf` with
   minimap2; `scripts/fetch_realdata.sh` fetches the chr17 / NA19240 example;

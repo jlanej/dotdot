@@ -1,7 +1,8 @@
 // @ts-check
 /**
- * The modal shell shared by the distributions popup and every consent card
- * (exact-mode, volume pre-flight, wall recovery, stream consent, clear-all).
+ * The modal shell shared by the distributions popup, the Belongs card, and
+ * every consent card (exact-mode, volume pre-flight, wall recovery, stream
+ * consent, clear-all).
  * The cards are real dialogs to assistive tech: focus moves to the primary
  * action on open, Tab cycles inside, Escape/backdrop close, and focus
  * returns to the trigger. Card CONTENT and button behavior stay with the

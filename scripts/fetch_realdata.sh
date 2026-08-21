@@ -4,7 +4,7 @@
 # align them with minimap2. ~135 MB of downloads (ranged requests fetch only
 # chr17 from the 1.8 GB assembly files); needs samtools + minimap2 + curl.
 #
-# Outputs (git-ignored, in testdata/real/):
+# Outputs (in testdata/real/; git-ignored except the committed PAF):
 #   chr17.fa                      T2T-CHM13v2.0 chr17 (84,276,897 bp)
 #   NA19240_hap1_chr17.fa         NA19240#1#CM099585.1 (pat, gapless T2T contig)
 #   NA19240_hap2_chr17.fa         NA19240#2#CM099623.1 (mat, 1-gap scaffold)

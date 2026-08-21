@@ -32,7 +32,7 @@ test('report layout: grids and charts wrap at the report width', () => {
     nR: 8, // grid width 100 + 8*56 = 548 — two do not fit side by side
     gridCount: 3,
     gatherRows: 0,
-    chartCount: 3, // 460 wide — one per... two would exceed 720+pad? 460*2=920 > 720
+    chartCount: 3, // 460 wide — the 720 content width fits exactly one per row
     footerLines: 2,
   });
   assertEq(lay.grids[0].x, RL.pad);

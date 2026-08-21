@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Dev server for dotdot: python stdlib static server with revalidation.
 
-Identical to `python3 -m http.server` except every response carries
+Differs from `python3 -m http.server` in three response headers:
 `Cache-Control: no-cache`, so the browser revalidates modules on each load
-(304s keep it fast) and edits are never masked by heuristic caching.
+(304s keep it fast) and edits are never masked by heuristic caching; plus
+COOP `same-origin` and COEP `require-corp`, whose cross-origin isolation
+lets the k-mer engine fan matching across CPU cores via SharedArrayBuffer.
 
 Usage: python3 scripts/serve.py [port]   (default 8420, binds 127.0.0.1)
 """
@@ -16,8 +18,9 @@ class NoCacheHandler(SimpleHTTPRequestHandler):
     def end_headers(self):
         self.send_header('Cache-Control', 'no-cache')
         # Cross-origin isolation unlocks SharedArrayBuffer, which the k-mer
-        # engine uses to fan matching out across CPU cores. Everything dotdot
-        # loads is same-origin, so these cost nothing.
+        # engine uses to fan matching out across CPU cores. The app's own
+        # assets are same-origin, and its UCSC reads are explicit CORS
+        # requests (js/io/ranged.js), which require-corp already permits.
         self.send_header('Cross-Origin-Opener-Policy', 'same-origin')
         self.send_header('Cross-Origin-Embedder-Policy', 'require-corp')
         super().end_headers()

@@ -174,7 +174,7 @@ export function groupedBarsSVG(spec) {
 }
 
 /**
- * Bin labels for a length ladder: "≤10 bp", "≤20 bp", …
+ * Bin labels for a length ladder — each bin's upper edge: "10 bp", "20 bp", …
  * @param {number[]} edges
  */
 export function ladderLabels(edges) {

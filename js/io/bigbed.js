@@ -26,7 +26,7 @@ const RTREE_MAGIC = 0x2468ace0;
  * @property {number} start 0-based chromosome coordinate
  * @property {number} end   exclusive
  * @property {string} name
- * @property {string} strand '+', '-', or ''
+ * @property {string} strand '+', '-', '.' (unstranded), or '' (track carries no strand field)
  * @property {string | null} rgb "r,g,b" itemRgb when the track carries one
  */
 

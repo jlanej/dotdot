@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="light dark" />
-  <meta name="description" content="dotdot — hyperperformant interactive genomic dot plots. FASTA k-mer engine and minimap2 PAF viewer, entirely in your browser." />
+  <meta name="description" content="dotdot — alignment-free, hyperperformant interactive genomic dot plots. FASTA k-mer engine and aligner-agnostic PAF audit, entirely in your browser." />
   <title>dotdot · genomic dot plots</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Ccircle%20cx='11'%20cy='21'%20r='6'%20fill='%232a78d6'/%3E%3Ccircle%20cx='21'%20cy='11'%20r='6'%20fill='%23eb6834'/%3E%3C/svg%3E" />
   <link rel="stylesheet" href="./css/app.css" />
@@ -78,7 +78,7 @@
           <input type="file" id="file-query" accept=".fa,.fasta,.fna,.gz,.txt" multiple />
           <span class="chip" id="chip-query">= target</span>
         </div>
-        <p class="hint">Drop files anywhere — one FASTA self-plots, a second becomes the query, three or more stack on the query axis. The buttons multi-select.</p>
+        <p class="hint">Drop files onto the plot — one FASTA self-plots, a second becomes the query, three or more stack on the query axis. The buttons multi-select.</p>
         <div class="file-row" style="margin-top: 12px">
           <label class="file-btn" for="file-paf">Aligner PAF</label>
           <input type="file" id="file-paf" accept=".paf,.gz,.txt" />
@@ -245,7 +245,7 @@
           <button id="btn-fit" class="btn">Fit <kbd>R</kbd></button>
           <button id="btn-png" class="btn" disabled>PNG</button>
           <button id="btn-svg" class="btn" disabled>SVG</button>
-          <button id="btn-report" class="btn" disabled title="One-page PNG: the plot with the belongs grids, gather panel, and distributions">Report</button>
+          <button id="btn-report" class="btn" disabled title="One-page PNG: the plot and its distributions — plus the belongs grids once you open Belongs on this data, and a gather panel for whichever record you asked about">Report</button>
           <button id="btn-share" class="btn" disabled title="Copy a link to this exact view">Share view</button>
           <button class="help" data-help="share" style="align-self: center">?</button>
         </div>

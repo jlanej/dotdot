@@ -265,7 +265,8 @@ export class GlRenderer {
         this.count = 0;
         throw new Error(
           `The GPU refused a ${Math.round((store.count * BYTES_PER_INSTANCE) / 1e6)} MB segment ` +
-            'buffer — lower the segment wall (raise min match length or sampling instead).',
+            'buffer — raise min match length, restore an occurrence cap or sampling, or refine a ' +
+            'smaller window.',
         );
       }
     }

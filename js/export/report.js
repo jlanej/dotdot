@@ -242,8 +242,17 @@ export function drawGather(ctx, rect, p, th) {
   const ly = sy + RL.stripH + 4;
   ctx.font = `10px ${th.family}`;
   for (let i = 0; i < p.legend.length; i++) {
-    ctx.fillStyle = p.legendColors[i];
-    ctx.fillRect(lx, ly + 3, 9, 9);
+    // The strip leaves unexplained slices unpainted, so a solid muted chip
+    // would name a color the figure never draws — outline it, like the card.
+    if (p.legendColors[i] === th.muted) {
+      ctx.strokeStyle = th.muted;
+      ctx.setLineDash([2, 2]);
+      ctx.strokeRect(lx + 0.5, ly + 3.5, 8, 8);
+      ctx.setLineDash([]);
+    } else {
+      ctx.fillStyle = p.legendColors[i];
+      ctx.fillRect(lx, ly + 3, 9, 9);
+    }
     ctx.fillStyle = th.ink2;
     ctx.fillText(p.legend[i], lx + 13, ly + 11);
     lx += 13 + ctx.measureText(p.legend[i]).width + 16;

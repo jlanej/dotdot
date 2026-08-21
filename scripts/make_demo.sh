@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Regenerate testdata/demo/ (the "Demo: chr17 loci" dataset) from testdata/real/.
+# Regenerate testdata/demo/ (the "chr17 loci demo" dataset) from testdata/real/.
 #
 # Inputs (produced by scripts/fetch_realdata.sh):
-#   testdata/real/chr17.fa                    T2T-CHM13v2.0 chr17 (RefSeq-derived)
+#   testdata/real/chr17.fa[.fai]              T2T-CHM13v2.0 chr17 (RefSeq-derived)
 #   testdata/real/NA19240_hap{1,2}_chr17.fa   HPRC r2 NA19240 haplotype chr17s
+# fetch_realdata.sh indexes only chr17.fa, so index the haplotypes first:
+#   samtools faidx testdata/real/NA19240_hap1_chr17.fa   (and hap2)
 #
 # Outputs (only the .gz and the .paf are committed; raw .fa are gitignored):
 #   testdata/demo/target.fa[.gz]    chr17 slices with @offset= true coordinates

@@ -217,7 +217,6 @@ export function multT(mult) {
  * row 2 = forward flat, row 3 = reverse flat,
  * rows 4+5 = multiplicity ramp (identical, so the shader's
  * strand + mode*2 row arithmetic lands on it for either strand).
- * @param {'light'|'dark'} mode
  */
 /** @type {Partial<Record<'light'|'dark', ReturnType<typeof makeColormap>>>} */
 const colormapCache = {};

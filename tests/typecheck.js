@@ -1,8 +1,8 @@
 // @ts-nocheck
 /**
  * Zero-install typechecker: runs the real TypeScript compiler (fetched from a
- * CDN at dev time — nothing installs locally) over the same entry points CI
- * checks with `deno check`, straight in the browser. Approximates CI's
+ * CDN at dev time — nothing installs locally) over CI's `deno check` entry
+ * points plus the browser test suite, straight in the browser. Approximates CI's
  * strict+checkJs configuration; a clean run here means CI's typecheck will be
  * clean or very nearly so.
  */

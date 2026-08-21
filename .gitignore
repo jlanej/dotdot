@@ -6,3 +6,4 @@ testdata/*.fa
 testdata/demo/*.fa
 testdata/real/*
 !testdata/real/NA19240_vs_chm13_chr17.paf
+__pycache__/

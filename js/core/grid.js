@@ -135,7 +135,9 @@ export class SegmentGrid {
   }
 
   /**
-   * Visit each segment whose line crosses the world rect, deduplicated.
+   * Visit the segments in every cell the world rect touches, deduplicated —
+   * a broad phase: the visited set is a superset of the segments that really
+   * cross the rect, so callers needing exactness re-test the geometry.
    * @param {number} x0 @param {number} y0 @param {number} x1 @param {number} y1
    * @param {(segIndex: number) => void} visit
    */

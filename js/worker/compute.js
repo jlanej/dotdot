@@ -346,10 +346,12 @@ function computeKmer(id, tParsed, qParsed, optsIn, t0, window = null, parseNotes
     ? `repeat cutoff ${maxOccEff * stride}× (auto${budgetX > 1 ? `, ${budgetLabel}` : ''})`
     : 'repeat cutoff off';
   const samplingNote =
-    stride > 1 || qSample > 1 || maxOccEff < userCapEntries
+    stride > 1 || qSample > 1
       ? `large input: sampling 1/${stride} target k-mers, 1/${qSample} query positions; ` +
         cutoffLabel
-      : '';
+      : maxOccEff < userCapEntries
+        ? cutoffLabel
+        : '';
   const satNote =
     satBp > 0.01 * tLenEff
       ? `${Math.round((satBp / tLenEff) * 100)}% of the target is repeats above the cutoff — ` +
@@ -474,7 +476,8 @@ function computeKmer(id, tParsed, qParsed, optsIn, t0, window = null, parseNotes
 
 /**
  * ANI heatmap request: tile-pair identity by multiset containment over the
- * visible window of a self-plot — no anchors, no occurrence cap, no trap.
+ * visible window, self-plot or cross-plot — no anchors, no occurrence cap,
+ * no trap.
  * Uses the same parse cache / needData protocol as kmer requests, builds a
  * windowed index spanning both tile ranges, and picks the tile resolution
  * from the occurrence histogram so the group walk fits a work budget.
@@ -633,7 +636,7 @@ function belongsSpace(gen, tParsed, qBase) {
  * of the others (`rec` set). Value-sampled (FracMinHash) past the entry cap
  * so cross-record ratios stay unbiased — position striding would not.
  * @param {{id:number, gen?:number, target:ArrayBuffer[]|ArrayBuffer|null,
- *          query:ArrayBuffer[]|ArrayBuffer|null, opts:{k:number, rec?:number}}} req
+ *          query:ArrayBuffer[]|ArrayBuffer|null, opts:{k:number, rec?:number, win?:number}}} req
  */
 async function handleBelongs(req) {
   const t0 = performance.now();
